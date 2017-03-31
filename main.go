@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -27,6 +28,7 @@ func main() {
 // connection defaults
 const (
 	initialMaxFrameSize = 512
+	initialChannelMax   = 1
 )
 
 type Conn struct {
@@ -34,6 +36,7 @@ type Conn struct {
 	net net.Conn
 
 	maxFrameSize int
+	channelMax   int
 
 	rxBuf []byte
 	err   error
@@ -52,6 +55,7 @@ func New(addr string, opts ...Opt) (*Conn, error) {
 	conn := &Conn{
 		url:          u,
 		maxFrameSize: initialMaxFrameSize,
+		channelMax:   initialChannelMax,
 	}
 
 	for _, opt := range opts {
@@ -93,14 +97,18 @@ func (c *Conn) connect() stateFunc {
 }
 
 func (c *Conn) negotiateProto() stateFunc {
-	// TODO: technically we should be sending a protocol header first,
-	//       but Microsoft is fine with this for now
+	switch {
+	case c.saslHandlers != nil && !c.saslComplete:
+		return c.exchangeProtoHeader(ProtoSASL)
+	default:
+		return c.exchangeProtoHeader(ProtoAMQP)
+	}
+}
 
-	if c.saslHandlers != nil && !c.saslComplete {
-		_, c.err = c.net.Write([]byte{'A', 'M', 'Q', 'P', ProtoSASL, 1, 0, 0})
-		if c.err != nil {
-			return nil
-		}
+func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
+	_, c.err = c.net.Write([]byte{'A', 'M', 'Q', 'P', proto, 1, 0, 0})
+	if c.err != nil {
+		return nil
 	}
 
 	c.rxBuf = make([]byte, c.maxFrameSize)
@@ -126,10 +134,14 @@ func (c *Conn) negotiateProto() stateFunc {
 		p.revision,
 	)
 
-	switch p.protoID {
-	case ProtoAMQP:
-		// TODO
+	if proto != p.protoID {
+		c.err = fmt.Errorf("unexpected protocol header %#00x, expected %#00x", p.protoID, proto)
 		return nil
+	}
+
+	switch proto {
+	case ProtoAMQP:
+		return c.open
 	case ProtoTLS:
 		// TODO
 		return nil
@@ -139,6 +151,38 @@ func (c *Conn) negotiateProto() stateFunc {
 		c.err = fmt.Errorf("unknown protocol ID %#02x", p.protoID)
 		return nil
 	}
+}
+
+func (c *Conn) open() stateFunc {
+	n, err := c.net.Read(c.rxBuf)
+	if err != nil {
+		c.err = err
+		return nil
+	}
+
+	fh, err := parseFrameHeader(c.rxBuf[:n])
+	if err != nil {
+		c.err = err
+		return nil
+	}
+
+	if fh.frameType != FrameAMQP {
+		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
+	}
+
+	var o Open
+	err = Unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &o)
+	if err != nil {
+		c.err = err
+		return nil
+	}
+
+	fmt.Printf("Rx Open: %#v\n", o)
+
+	c.maxFrameSize = o.MaxFrameSize
+	c.channelMax = o.ChannelMax
+
+	return nil
 }
 
 func (c *Conn) protoSASL() stateFunc {
@@ -165,7 +209,7 @@ func (c *Conn) protoSASL() stateFunc {
 	}
 
 	var sm SASLMechanisms
-	err = Unmarshal(c.rxBuf[fh.dataOffsetBytes():n], &sm)
+	err = Unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &sm)
 	if err != nil {
 		c.err = err
 		return nil
@@ -183,8 +227,36 @@ func (c *Conn) protoSASL() stateFunc {
 }
 
 func (c *Conn) saslOutcome() stateFunc {
-	// TODO: implement
-	return nil
+	n, err := c.net.Read(c.rxBuf)
+	if err != nil {
+		c.err = err
+		return nil
+	}
+
+	fh, err := parseFrameHeader(c.rxBuf[:n])
+	if err != nil {
+		c.err = err
+		return nil
+	}
+
+	if fh.frameType != FrameSASL {
+		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
+	}
+
+	var so SASLOutcome
+	c.err = Unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &so)
+	if c.err != nil {
+		return nil
+	}
+
+	if so.Code != SASLCodeOK {
+		c.err = fmt.Errorf("SASL PLAIN auth failed with code %#00x: %s", so.Code, so.AdditionalData)
+		return nil
+	}
+
+	c.saslComplete = true
+
+	return c.negotiateProto
 }
 
 type frameHeader struct {
@@ -226,7 +298,7 @@ func parseFrameHeader(buf []byte) (frameHeader, error) {
 
 // ProtoIDs
 const (
-	ProtoAMQP = 0x1
+	ProtoAMQP = 0x0
 	ProtoTLS  = 0x2
 	ProtoSASL = 0x3
 )
@@ -600,16 +672,36 @@ func writeList(wr byteWriter, fields ...[]byte) error {
 	return nil
 }
 
-func Unmarshal(b []byte, i interface{}) error {
-	r := bytes.NewReader(b)
+type unmarshaler interface {
+	UnmarshalBinary(r byteReader) error
+}
 
-	if um, ok := i.(encoding.BinaryUnmarshaler); ok {
-		return um.UnmarshalBinary(b)
+func Unmarshal(r byteReader, i interface{}) error {
+	if um, ok := i.(unmarshaler); ok {
+		return um.UnmarshalBinary(r)
 	}
 
 	switch t := i.(type) {
 	case *int:
-		val, err := readInt(bytes.NewReader(b))
+		val, err := readInt(r)
+		if err != nil {
+			return err
+		}
+		*t = val
+	case *uint32:
+		val, err := readUint(r)
+		if err != nil {
+			return err
+		}
+		*t = uint32(val)
+	case *uint16:
+		val, err := readUint(r)
+		if err != nil {
+			return err
+		}
+		*t = uint16(val)
+	case *string:
+		val, err := readString(r)
 		if err != nil {
 			return err
 		}
@@ -620,7 +712,123 @@ func Unmarshal(b []byte, i interface{}) error {
 			return err
 		}
 		*t = sa
+	default:
+		return fmt.Errorf("unable to unmarshal %T", i)
 	}
+	return nil
+}
+
+/*
+<type name="open" class="composite" source="list" provides="frame">
+    <descriptor name="amqp:open:list" code="0x00000000:0x00000010"/>
+    <field name="container-id" type="string" mandatory="true"/>
+    <field name="hostname" type="string"/>
+    <field name="max-frame-size" type="uint" default="4294967295"/>
+    <field name="channel-max" type="ushort" default="65535"/>
+    <field name="idle-time-out" type="milliseconds"/>
+    <field name="outgoing-locales" type="ietf-language-tag" multiple="true"/>
+    <field name="incoming-locales" type="ietf-language-tag" multiple="true"/>
+    <field name="offered-capabilities" type="symbol" multiple="true"/>
+    <field name="desired-capabilities" type="symbol" multiple="true"/>
+    <field name="properties" type="fields"/>
+</type>
+*/
+type Open struct {
+	ContainerID         string // required
+	Hostname            string
+	MaxFrameSize        int           // default: 4294967295
+	ChannelMax          int           // default: 65535
+	IdleTimeout         time.Duration // from milliseconds
+	OutgoingLocales     []Symbol
+	IncomingLocales     []Symbol
+	OfferedCapabilities []Symbol
+	DesiredCapabilities []Symbol
+	Properties          map[string]string // TODO: implement marshal/unmarshal
+}
+
+type Milliseconds time.Duration
+
+func (m *Milliseconds) UnmarshalBinary(r byteReader) error {
+	var n uint32
+	err := Unmarshal(r, &n)
+	*m = Milliseconds(time.Duration(n) * time.Millisecond)
+	return err
+}
+
+const (
+	TypeOpen = 0x10
+)
+
+func (o *Open) UnmarshalBinary(r byteReader) error {
+	t, fields, err := readCompositeHeader(r)
+	if err != nil {
+		return err
+	}
+
+	if t != TypeOpen {
+		return errors.New("invalid header for Open")
+	}
+
+	err = Unmarshal(r, &o.ContainerID)
+	if err != nil {
+		return err
+	}
+
+	if fields > 1 {
+		err = Unmarshal(r, &o.Hostname)
+		if err != nil {
+			return err
+		}
+	}
+
+	o.MaxFrameSize = 4294967295 //default
+	if fields > 2 {
+		err = Unmarshal(r, &o.MaxFrameSize)
+		if err != nil {
+			return err
+		}
+	}
+
+	o.ChannelMax = 65535 // default
+	if fields > 3 {
+		err = Unmarshal(r, &o.ChannelMax)
+		if err != nil {
+			return err
+		}
+	}
+
+	if fields > 4 {
+		err = Unmarshal(r, (*Milliseconds)(&o.IdleTimeout))
+		if err != nil {
+			return err
+		}
+	}
+
+	if fields > 5 {
+		err = Unmarshal(r, &o.OutgoingLocales)
+		if err != nil {
+			return err
+		}
+	}
+	if fields > 6 {
+		err = Unmarshal(r, &o.IncomingLocales)
+		if err != nil {
+			return err
+		}
+	}
+	if fields > 7 {
+		err = Unmarshal(r, &o.OfferedCapabilities)
+		if err != nil {
+			return err
+		}
+	}
+	if fields > 8 {
+		err = Unmarshal(r, &o.DesiredCapabilities)
+		if err != nil {
+			return err
+		}
+	}
+
 	return nil
 }
 
@@ -628,9 +836,7 @@ type SASLMechanisms struct {
 	Mechanisms []Symbol
 }
 
-func (sm *SASLMechanisms) UnmarshalBinary(b []byte) (err error) {
-	r := bytes.NewBuffer(b)
-
+func (sm *SASLMechanisms) UnmarshalBinary(r byteReader) error {
 	t, _, err := readCompositeHeader(r)
 	if err != nil {
 		return err
@@ -640,9 +846,54 @@ func (sm *SASLMechanisms) UnmarshalBinary(b []byte) (err error) {
 		return errors.New("invalid header for SASL mechanisms")
 	}
 
-	err = Unmarshal(r.Bytes(), &sm.Mechanisms)
+	err = Unmarshal(r, &sm.Mechanisms)
 	return err
 }
+
+type SASLOutcome struct {
+	Code           SASLCode
+	AdditionalData []byte
+}
+
+func (so *SASLOutcome) UnmarshalBinary(r byteReader) error {
+	t, fields, err := readCompositeHeader(r)
+	if err != nil {
+		return err
+	}
+
+	if t != TypeSASLOutcome {
+		return errors.New("invalid header for SASL outcode")
+	}
+
+	err = Unmarshal(r, &so.Code)
+	if err != nil {
+		return err
+	}
+
+	if fields > 1 {
+		err = Unmarshal(r, &so.AdditionalData)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+type SASLCode int
+
+func (s *SASLCode) UnmarshalBinary(r byteReader) error {
+	return Unmarshal(r, (*int)(s))
+}
+
+// SASL Outcode Codes
+const (
+	SASLCodeOK SASLCode = iota
+	SASLCodeAuth
+	SASLCodeSys
+	SASLCodeSysPerm
+	SASLCodeSysTemp
+)
 
 func readCompositeHeader(r byteReader) (_ Type, fields int, _ error) {
 	byt, err := r.ReadByte()
@@ -738,6 +989,16 @@ func readSymbolArray(r byteReader) ([]Symbol, error) {
 	return strs, nil
 }
 
+func readString(r byteReader) (string, error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return "", err
+	}
+
+	vari, err := readVariableType(r, b)
+	return string(vari), err
+}
+
 func readVariableType(r byteReader, t byte) ([]byte, error) {
 	var buf []byte
 	switch t {
@@ -755,7 +1016,7 @@ func readVariableType(r byteReader, t byte) ([]byte, error) {
 		}
 		buf = make([]byte, int(n))
 	default:
-		return nil, fmt.Errorf("type code %x is not a recognized variable length type", t)
+		return nil, fmt.Errorf("type code %#00x is not a recognized variable length type", t)
 	}
 	_, err := io.ReadFull(r, buf)
 	return buf, err
@@ -892,6 +1153,37 @@ func readInt(r byteReader) (value int, _ error) {
 		var n int64
 		err := binary.Read(r, binary.BigEndian, &n)
 		return int(n), err
+	default:
+		return 0, fmt.Errorf("type code %x is not a recognized number type", b)
+	}
+}
+
+func readUint(r byteReader) (value uint, _ error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return 0, err
+	}
+
+	switch b {
+	// Unsigned
+	case Uint0, Ulong0:
+		return 0, nil
+	case Ubyte, Smalluint, Smallulong:
+		n, err := r.ReadByte()
+		return uint(n), err
+	case Ushort:
+		var n uint16
+		err := binary.Read(r, binary.BigEndian, &n)
+		return uint(n), err
+	case Uint:
+		var n uint32
+		err := binary.Read(r, binary.BigEndian, &n)
+		return uint(n), err
+	case Ulong:
+		var n uint64
+		err := binary.Read(r, binary.BigEndian, &n)
+		return uint(n), err
+
 	default:
 		return 0, fmt.Errorf("type code %x is not a recognized number type", b)
 	}
