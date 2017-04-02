@@ -115,6 +115,7 @@ type frame struct {
 }
 
 func (s *Session) Close() {
+	// TODO: send end preformative
 	s.conn.delSession <- s
 }
 
@@ -132,7 +133,7 @@ func (s *Session) begin() error {
 	wr := bufPool.New().(*bytes.Buffer)
 	wr.Reset()
 
-	err = writeFrame(wr, FrameAMQP, s.channel, begin)
+	err = writeFrame(wr, FrameTypeAMQP, s.channel, begin)
 	if err != nil {
 		return err
 	}
@@ -140,7 +141,12 @@ func (s *Session) begin() error {
 	s.conn.txFrame <- wr
 	fr := <-s.rx
 
-	if fr.header.frameType != PreformativeBegin {
+	pType, err := preformativeType(fr.payload)
+	if err != nil {
+		return err
+	}
+
+	if pType != PreformativeBegin {
 		return fmt.Errorf("unexpected begin response: %+v", fr)
 	}
 
@@ -164,7 +170,7 @@ func (c *Conn) Session() (*Session, error) {
 	}
 
 	err := s.begin()
-	if s.err != nil {
+	if err != nil {
 		s.Close()
 		return nil, err
 	}
@@ -325,7 +331,7 @@ func (c *Conn) txOpen() stateFunc {
 	wr.Reset()
 	defer bufPool.Put(wr)
 
-	writeFrame(wr, FrameAMQP, 0, open)
+	writeFrame(wr, FrameTypeAMQP, 0, open)
 
 	fmt.Printf("Writing: %# 02x\n", wr.Bytes())
 
@@ -351,7 +357,7 @@ func (c *Conn) rxOpen() stateFunc {
 		return nil
 	}
 
-	if fh.frameType != FrameAMQP {
+	if fh.frameType != FrameTypeAMQP {
 		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
 	}
 
@@ -399,7 +405,7 @@ func (c *Conn) protoSASL() stateFunc {
 		return nil
 	}
 
-	if fh.frameType != FrameSASL {
+	if fh.frameType != FrameTypeSASL {
 		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
 	}
 
@@ -434,7 +440,7 @@ func (c *Conn) saslOutcome() stateFunc {
 		return nil
 	}
 
-	if fh.frameType != FrameSASL {
+	if fh.frameType != FrameTypeSASL {
 		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
 	}
 

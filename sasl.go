@@ -68,7 +68,7 @@ func (h *saslHandlerPlain) init() stateFunc {
 	wr.Reset()
 	defer bufPool.Put(wr)
 
-	writeFrame(wr, FrameSASL, 0, saslInit)
+	writeFrame(wr, FrameTypeSASL, 0, saslInit)
 
 	fmt.Printf("Writing: %# 02x\n", wr.Bytes())
 

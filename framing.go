@@ -22,9 +22,10 @@ func (fh frameHeader) dataOffsetBytes() int {
 	return int(fh.dataOffset) * 4
 }
 
+// Frame Types
 const (
-	FrameAMQP = 0x0
-	FrameSASL = 0x1
+	FrameTypeAMQP = 0x0
+	FrameTypeSASL = 0x1
 )
 
 func parseFrameHeader(buf []byte) (frameHeader, error) {
