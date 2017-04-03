@@ -75,6 +75,68 @@ func Unmarshal(r byteReader, i interface{}) error {
 	return nil
 }
 
+func unmarshalComposite(r byteReader, typ Type, fields ...interface{}) error {
+	t, numFields, err := readCompositeHeader(r)
+	if err != nil {
+		return err
+	}
+
+	if t != typ {
+		return fmt.Errorf("invalid header for %#0x", typ)
+	}
+
+	for i := 0; i < numFields; i++ {
+		err = Unmarshal(r, fields[i])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+type field struct {
+	value interface{}
+	omit  bool
+}
+
+func marshalComposite(code Type, fields ...field) ([]byte, error) {
+	var (
+		rawFields  = make([][]byte, len(fields))
+		lastSetIdx int
+		err        error
+	)
+
+	for i, f := range fields {
+		if f.omit {
+			continue
+		}
+
+		rawFields[i], err = Marshal(f.value)
+		if err != nil {
+			return nil, err
+		}
+
+		lastSetIdx = i
+	}
+
+	for i := 0; i < lastSetIdx+1; i++ {
+		if rawFields[i] == nil {
+			rawFields[i] = []byte{Null}
+		}
+	}
+
+	buf := bufPool.New().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+
+	err = writeComposite(buf, code, rawFields[:lastSetIdx+1]...)
+	if err != nil {
+		return nil, err
+	}
+
+	return append([]byte(nil), buf.Bytes()...), nil
+}
+
 func writeSymbolArray(w byteWriter, symbols []Symbol) error {
 	ofType := Sym8
 	for _, symbol := range symbols {
@@ -377,6 +439,11 @@ func readSlice(r byteReader) (elements int, length int, _ error) {
 const (
 	Null uint8 = 0x40
 
+	// Bool
+	Bool      uint8 = 0x56 // boolean with the octet 0x00 being false and octet 0x01 being true
+	BoolTrue  uint8 = 0x40
+	BoolFalse uint8 = 0x41
+
 	// Unsigned
 	Ubyte      uint8 = 0x50 // 8-bit unsigned integer (1)
 	Ushort     uint8 = 0x60 // 16-bit unsigned integer in network byte order (2)
@@ -564,6 +631,12 @@ func Marshal(i interface{}) ([]byte, error) {
 
 	var err error
 	switch t := i.(type) {
+	case bool:
+		if t {
+			err = buf.WriteByte(BoolTrue)
+		} else {
+			err = buf.WriteByte(BoolFalse)
+		}
 	case uint32:
 		if t == 0 {
 			err = buf.WriteByte(Uint0)
@@ -592,11 +665,17 @@ func Marshal(i interface{}) ([]byte, error) {
 	return append([]byte(nil), buf.Bytes()...), err
 }
 
-type Milliseconds time.Duration
+type Milliseconds struct {
+	time.Duration
+}
+
+func (m Milliseconds) MarshalBinary() ([]byte, error) {
+	return Marshal(uint32(m.Duration.Seconds()))
+}
 
 func (m *Milliseconds) UnmarshalBinary(r byteReader) error {
 	var n uint32
 	err := Unmarshal(r, &n)
-	*m = Milliseconds(time.Duration(n) * time.Millisecond)
+	m.Duration = time.Duration(n) * time.Millisecond
 	return err
 }

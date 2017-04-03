@@ -1,10 +1,6 @@
 package amqp
 
-import (
-	"bytes"
-	"errors"
-	"time"
-)
+import "errors"
 
 // Preformative Types
 const (
@@ -18,6 +14,10 @@ const (
 	PreformativeDetach      = 0x16
 	PreformativeEnd         = 0x17
 	PreformativeClose       = 0x18
+
+	TypeSource = 0x28
+	TypeTarget = 0x29
+	TypeError  = 0x1d
 )
 
 func preformativeType(payload []byte) (uint8, error) {
@@ -50,9 +50,9 @@ func preformativeType(payload []byte) (uint8, error) {
 type Open struct {
 	ContainerID         string // required
 	Hostname            string
-	MaxFrameSize        uint32        // default: 4294967295
-	ChannelMax          uint16        // default: 65535
-	IdleTimeout         time.Duration // from milliseconds
+	MaxFrameSize        uint32       // default: 4294967295
+	ChannelMax          uint16       // default: 65535
+	IdleTimeout         Milliseconds // from milliseconds
 	OutgoingLocales     []Symbol
 	IncomingLocales     []Symbol
 	OfferedCapabilities []Symbol
@@ -61,182 +61,33 @@ type Open struct {
 }
 
 func (o *Open) MarshalBinary() ([]byte, error) {
-	containerID, err := Marshal(o.ContainerID)
-	if err != nil {
-		return nil, err
+	fields := []field{
+		{value: o.ContainerID, omit: false},
+		{value: o.Hostname, omit: o.Hostname == ""},
+		{value: o.MaxFrameSize, omit: o.MaxFrameSize == 0},
+		{value: o.ChannelMax, omit: o.ChannelMax == 0},
+		{value: o.IdleTimeout, omit: o.IdleTimeout.Duration == 0},
+		{value: o.OutgoingLocales, omit: len(o.OutgoingLocales) == 0},
+		{value: o.IncomingLocales, omit: len(o.IncomingLocales) == 0},
+		{value: o.OfferedCapabilities, omit: len(o.OfferedCapabilities) == 0},
+		{value: o.DesiredCapabilities, omit: len(o.DesiredCapabilities) == 0},
+		{value: o.Properties, omit: len(o.Properties) == 0},
 	}
-
-	fields := [][]byte{
-		containerID,
-	}
-
-	var (
-		hostname            []byte
-		maxFrameSize        []byte
-		channelMax          []byte
-		idleTimeout         []byte
-		outgoingLocales     []byte
-		incomingLocales     []byte
-		offeredCapabilities []byte
-		desiredCapabilities []byte
-	)
-
-	if o.Hostname != "" {
-		hostname, err = Marshal(o.Hostname)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if o.MaxFrameSize != 0 {
-		maxFrameSize, err = Marshal(o.MaxFrameSize)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if o.ChannelMax != 0 {
-		channelMax, err = Marshal(o.ChannelMax)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if o.IdleTimeout != 0 {
-		idleTimeout, err = Marshal(o.IdleTimeout)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if len(o.OutgoingLocales) > 0 {
-		outgoingLocales, err = Marshal(o.OutgoingLocales)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if len(o.IncomingLocales) > 0 {
-		incomingLocales, err = Marshal(o.IncomingLocales)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if len(o.OfferedCapabilities) > 0 {
-		offeredCapabilities, err = Marshal(o.OfferedCapabilities)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if len(o.DesiredCapabilities) > 0 {
-		desiredCapabilities, err = Marshal(o.DesiredCapabilities)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	optFields := [][]byte{hostname, maxFrameSize, channelMax, idleTimeout, outgoingLocales, incomingLocales, offeredCapabilities, desiredCapabilities}
-
-	var lastSetIdx int
-	for i, field := range optFields {
-		if field != nil {
-			lastSetIdx = i
-		}
-	}
-
-	for _, field := range optFields[:lastSetIdx+1] {
-		if field == nil {
-			fields = append(fields, []byte{Null})
-			continue
-		}
-		fields = append(fields, field)
-	}
-
-	buf := bufPool.New().(*bytes.Buffer)
-	buf.Reset()
-	defer bufPool.Put(buf)
-
-	err = writeComposite(buf, PerformativeOpen, fields...)
-	if err != nil {
-		return nil, err
-	}
-
-	return append([]byte(nil), buf.Bytes()...), nil
+	return marshalComposite(PerformativeOpen, fields...)
 }
 
 func (o *Open) UnmarshalBinary(r byteReader) error {
-	t, fields, err := readCompositeHeader(r)
-	if err != nil {
-		return err
-	}
-
-	if t != PerformativeOpen {
-		return errors.New("invalid header for Open")
-	}
-
-	err = Unmarshal(r, &o.ContainerID)
-	if err != nil {
-		return err
-	}
-
-	if fields > 1 {
-		err = Unmarshal(r, &o.Hostname)
-		if err != nil {
-			return err
-		}
-	}
-
-	o.MaxFrameSize = 4294967295 //default
-	if fields > 2 {
-		err = Unmarshal(r, &o.MaxFrameSize)
-		if err != nil {
-			return err
-		}
-	}
-
-	o.ChannelMax = 65535 // default
-	if fields > 3 {
-		err = Unmarshal(r, &o.ChannelMax)
-		if err != nil {
-			return err
-		}
-	}
-
-	if fields > 4 {
-		err = Unmarshal(r, (*Milliseconds)(&o.IdleTimeout))
-		if err != nil {
-			return err
-		}
-	}
-
-	if fields > 5 {
-		err = Unmarshal(r, &o.OutgoingLocales)
-		if err != nil {
-			return err
-		}
-	}
-	if fields > 6 {
-		err = Unmarshal(r, &o.IncomingLocales)
-		if err != nil {
-			return err
-		}
-	}
-	if fields > 7 {
-		err = Unmarshal(r, &o.OfferedCapabilities)
-		if err != nil {
-			return err
-		}
-	}
-	if fields > 8 {
-		err = Unmarshal(r, &o.DesiredCapabilities)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return unmarshalComposite(r, PerformativeOpen,
+		&o.ContainerID,
+		&o.Hostname,
+		&o.MaxFrameSize,
+		&o.ChannelMax,
+		&o.IdleTimeout,
+		&o.OutgoingLocales,
+		&o.IncomingLocales,
+		&o.OfferedCapabilities,
+		&o.DesiredCapabilities,
+	)
 }
 
 /*
@@ -291,152 +142,28 @@ type Begin struct {
 }
 
 func (b *Begin) MarshalBinary() ([]byte, error) {
-	var (
-		remoteChannel       []byte
-		nextOutgoingID      []byte
-		incomingWindow      []byte
-		outgoingWindow      []byte
-		handleMax           []byte
-		offeredCapabilities []byte
-		desiredCapabilities []byte
-
-		err error
-	)
-
-	if b.RemoteChannel != 0 {
-		remoteChannel, err = Marshal(b.RemoteChannel)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		remoteChannel = []byte{Null}
+	fields := []field{
+		{value: b.RemoteChannel, omit: b.RemoteChannel == 0},
+		{value: b.NextOutgoingID, omit: false},
+		{value: b.IncomingWindow, omit: false},
+		{value: b.OutgoingWindow, omit: false},
+		{value: b.HandleMax, omit: b.HandleMax == 0},
+		{value: b.OfferedCapabilities, omit: len(b.OfferedCapabilities) == 0},
+		{value: b.DesiredCapabilities, omit: len(b.DesiredCapabilities) == 0},
 	}
-
-	nextOutgoingID, err = Marshal(b.NextOutgoingID)
-	if err != nil {
-		return nil, err
-	}
-
-	incomingWindow, err = Marshal(b.IncomingWindow)
-	if err != nil {
-		return nil, err
-	}
-
-	outgoingWindow, err = Marshal(b.OutgoingWindow)
-	if err != nil {
-		return nil, err
-	}
-
-	fields := [][]byte{
-		remoteChannel,
-		nextOutgoingID,
-		incomingWindow,
-		outgoingWindow,
-	}
-
-	if b.HandleMax != 0 {
-		handleMax, err = Marshal(b.HandleMax)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if len(b.OfferedCapabilities) > 0 {
-		offeredCapabilities, err = Marshal(b.OfferedCapabilities)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	if len(b.DesiredCapabilities) > 0 {
-		desiredCapabilities, err = Marshal(b.DesiredCapabilities)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	optFields := [][]byte{handleMax, offeredCapabilities, desiredCapabilities}
-
-	var lastSetIdx int
-	for i, field := range optFields {
-		if field != nil {
-			lastSetIdx = i
-		}
-	}
-
-	for _, field := range optFields[:lastSetIdx+1] {
-		if field == nil {
-			fields = append(fields, []byte{Null})
-			continue
-		}
-		fields = append(fields, field)
-	}
-
-	buf := bufPool.New().(*bytes.Buffer)
-	buf.Reset()
-	defer bufPool.Put(buf)
-
-	err = writeComposite(buf, PreformativeBegin, fields...)
-	if err != nil {
-		return nil, err
-	}
-
-	return append([]byte(nil), buf.Bytes()...), nil
+	return marshalComposite(PreformativeBegin, fields...)
 }
 
 func (b *Begin) UnmarshalBinary(r byteReader) error {
-	t, fields, err := readCompositeHeader(r)
-	if err != nil {
-		return err
-	}
-
-	if t != PreformativeBegin {
-		return errors.New("invalid header for Begin")
-	}
-
-	err = Unmarshal(r, &b.RemoteChannel)
-	if err != nil {
-		return err
-	}
-
-	err = Unmarshal(r, &b.NextOutgoingID)
-	if err != nil {
-		return err
-	}
-
-	err = Unmarshal(r, &b.IncomingWindow)
-	if err != nil {
-		return err
-	}
-
-	err = Unmarshal(r, &b.OutgoingWindow)
-	if err != nil {
-		return err
-	}
-
-	b.HandleMax = 4294967295 //default
-	if fields > 4 {
-		err = Unmarshal(r, &b.HandleMax)
-		if err != nil {
-			return err
-		}
-	}
-
-	if fields > 5 {
-		err = Unmarshal(r, &b.OfferedCapabilities)
-		if err != nil {
-			return err
-		}
-	}
-
-	if fields > 6 {
-		err = Unmarshal(r, &b.DesiredCapabilities)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return unmarshalComposite(r, PreformativeBegin,
+		&b.RemoteChannel,
+		&b.NextOutgoingID,
+		&b.IncomingWindow,
+		&b.OutgoingWindow,
+		&b.HandleMax,
+		&b.OfferedCapabilities,
+		&b.DesiredCapabilities,
+	)
 }
 
 /*
@@ -520,13 +247,13 @@ type Attach struct {
 	//
 	// If no source is specified on an outgoing link, then there is no source currently
 	// attached to the link. A link with no source will never produce outgoing messages.
-	Source interface{}
+	Source *Source
 
 	// the target for messages
 	//
 	// If no target is specified on an incoming link, then there is no target currently
 	// attached to the link. A link with no target will never permit incoming messages.
-	Target interface{}
+	Target *Target
 
 	// unsettled delivery state
 	//
@@ -589,6 +316,334 @@ type Attach struct {
 	Properties map[string]interface{}
 }
 
+func (a *Attach) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: a.Name, omit: false},
+		{value: a.Handle, omit: false},
+		{value: a.Role, omit: false},
+		{value: a.SenderSettleMode, omit: a.SenderSettleMode == 2},
+		{value: a.ReceiverSettleMode, omit: a.ReceiverSettleMode == 0},
+		{value: a.Source, omit: a.Source == nil},
+		{value: a.Target, omit: a.Target == nil},
+		{value: a.Unsettled, omit: len(a.Unsettled) == 0},
+		{value: a.IncompleteUnsettled, omit: !a.IncompleteUnsettled},
+		{value: a.InitialDeliveryCount, omit: a.InitialDeliveryCount == 0},
+		{value: a.MaxMessageSize, omit: a.MaxMessageSize == 0},
+		{value: a.OfferedCapabilities, omit: len(a.OfferedCapabilities) == 0},
+		{value: a.DesiredCapabilities, omit: len(a.DesiredCapabilities) == 0},
+		{value: a.Properties, omit: len(a.Properties) == 0},
+	}
+	return marshalComposite(PreformativeAttach, fields...)
+}
+
+func (a *Attach) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, PreformativeAttach,
+		&a.Name,
+		&a.Handle,
+		&a.Role,
+		&a.SenderSettleMode,
+		&a.ReceiverSettleMode,
+		&a.Source,
+		&a.Target,
+		&a.Unsettled,
+		&a.IncompleteUnsettled,
+		&a.InitialDeliveryCount,
+		&a.MaxMessageSize,
+		&a.OfferedCapabilities,
+		&a.DesiredCapabilities,
+		&a.Properties,
+	)
+}
+
+/*
+<type name="source" class="composite" source="list" provides="source">
+    <descriptor name="amqp:source:list" code="0x00000000:0x00000028"/>
+    <field name="address" type="*" requires="address"/>
+    <field name="durable" type="terminus-durability" default="none"/>
+    <field name="expiry-policy" type="terminus-expiry-policy" default="session-end"/>
+    <field name="timeout" type="seconds" default="0"/>
+    <field name="dynamic" type="boolean" default="false"/>
+    <field name="dynamic-node-properties" type="node-properties"/>
+    <field name="distribution-mode" type="symbol" requires="distribution-mode"/>
+    <field name="filter" type="filter-set"/>
+    <field name="default-outcome" type="*" requires="outcome"/>
+    <field name="outcomes" type="symbol" multiple="true"/>
+    <field name="capabilities" type="symbol" multiple="true"/>
+</type>
+*/
+type Source struct {
+	// the address of the source
+	//
+	// The address of the source MUST NOT be set when sent on a attach frame sent by
+	// the receiving link endpoint where the dynamic flag is set to true (that is where
+	// the receiver is requesting the sender to create an addressable node).
+	//
+	// The address of the source MUST be set when sent on a attach frame sent by the
+	// sending link endpoint where the dynamic flag is set to true (that is where the
+	// sender has created an addressable node at the request of the receiver and is now
+	// communicating the address of that created node). The generated name of the address
+	// SHOULD include the link name and the container-id of the remote container to allow
+	// for ease of identification.
+	Address string
+
+	// indicates the durability of the terminus
+	//
+	// Indicates what state of the terminus will be retained durably: the state of durable
+	// messages, only existence and configuration of the terminus, or no state at all.
+	//
+	// 0: none
+	// 1: configuration
+	// 2: unsettled-state
+	Durable uint32
+
+	// the expiry policy of the source
+	//
+	// link-detach: The expiry timer starts when terminus is detached.
+	// session-end: The expiry timer starts when the most recently associated session is
+	//              ended.
+	// connection-close: The expiry timer starts when most recently associated connection
+	//                   is closed.
+	// never: The terminus never expires.
+	ExpiryPolicy Symbol
+
+	// duration that an expiring source will be retained
+	//
+	// The source starts expiring as indicated by the expiry-policy.
+	Timeout uint32 // seconds
+
+	// request dynamic creation of a remote node
+	//
+	// When set to true by the receiving link endpoint, this field constitutes a request
+	// for the sending peer to dynamically create a node at the source. In this case the
+	// address field MUST NOT be set.
+	//
+	// When set to true by the sending link endpoint this field indicates creation of a
+	// dynamically created node. In this case the address field will contain the address
+	// of the created node. The generated address SHOULD include the link name and other
+	// available information on the initiator of the request (such as the remote
+	// container-id) in some recognizable form for ease of traceability.
+	Dynamic bool
+
+	// properties of the dynamically created node
+	//
+	// If the dynamic field is not set to true this field MUST be left unset.
+	//
+	// When set by the receiving link endpoint, this field contains the desired
+	// properties of the node the receiver wishes to be created. When set by the
+	// sending link endpoint this field contains the actual properties of the
+	// dynamically created node. See subsection 3.5.9 for standard node properties.
+	// http://www.amqp.org/specification/1.0/node-properties
+	//
+	// lifetime-policy: The lifetime of a dynamically generated node.
+	//					Definitionally, the lifetime will never be less than the lifetime
+	//					of the link which caused its creation, however it is possible to
+	//					extend the lifetime of dynamically created node using a lifetime
+	//					policy. The value of this entry MUST be of a type which provides
+	//					the lifetime-policy archetype. The following standard
+	//					lifetime-policies are defined below: delete-on-close,
+	//					delete-on-no-links, delete-on-no-messages or
+	//					delete-on-no-links-or-messages.
+	// supported-dist-modes: The distribution modes that the node supports.
+	//					The value of this entry MUST be one or more symbols which are valid
+	//					distribution-modes. That is, the value MUST be of the same type as
+	//					would be valid in a field defined with the following attributes:
+	//						type="symbol" multiple="true" requires="distribution-mode"
+	DynamicNodeProperties map[Symbol]interface{}
+
+	// the distribution mode of the link
+	//
+	// This field MUST be set by the sending end of the link if the endpoint supports more
+	// than one distribution-mode. This field MAY be set by the receiving end of the link
+	// to indicate a preference when a node supports multiple distribution modes.
+	DistributionMode Symbol
+
+	// a set of predicates to filter the messages admitted onto the link
+	//
+	// The receiving endpoint sets its desired filter, the sending endpoint sets the filter
+	// actually in place (including any filters defaulted at the node). The receiving
+	// endpoint MUST check that the filter in place meets its needs and take responsibility
+	// for detaching if it does not.
+	Filter map[Symbol]interface{}
+
+	// default outcome for unsettled transfers
+	//
+	// Indicates the outcome to be used for transfers that have not reached a terminal
+	// state at the receiver when the transfer is settled, including when the source
+	// is destroyed. The value MUST be a valid outcome (e.g., released or rejected).
+	DefaultOutcome interface{}
+
+	// descriptors for the outcomes that can be chosen on this link
+	//
+	// The values in this field are the symbolic descriptors of the outcomes that can
+	// be chosen on this link. This field MAY be empty, indicating that the default-outcome
+	// will be assumed for all message transfers (if the default-outcome is not set, and no
+	// outcomes are provided, then the accepted outcome MUST be supported by the source).
+	//
+	// When present, the values MUST be a symbolic descriptor of a valid outcome,
+	// e.g., "amqp:accepted:list".
+	Outcomes []Symbol
+
+	// the extension capabilities the sender supports/desires
+	//
+	// http://www.amqp.org/specification/1.0/source-capabilities
+	Capabilities []Symbol
+}
+
+func (s *Source) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: s.Address, omit: s.Address == ""},
+		{value: s.Durable, omit: s.Durable == 0},
+		{value: s.ExpiryPolicy, omit: s.ExpiryPolicy == ""},
+		{value: s.Timeout, omit: s.Timeout == 0},
+		{value: s.Dynamic, omit: !s.Dynamic},
+		{value: s.DynamicNodeProperties, omit: len(s.DynamicNodeProperties) == 0},
+		{value: s.DistributionMode, omit: s.DistributionMode == ""},
+		{value: s.Filter, omit: len(s.Filter) == 0},
+		{value: s.DefaultOutcome, omit: s.DefaultOutcome == nil},
+		{value: s.Outcomes, omit: len(s.Outcomes) == 0},
+		{value: s.Capabilities, omit: len(s.Capabilities) == 0},
+	}
+	return marshalComposite(TypeSource, fields...)
+}
+
+func (s *Source) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, TypeSource,
+		&s.Address,
+		&s.Durable,
+		&s.ExpiryPolicy,
+		&s.Timeout,
+		&s.Dynamic,
+		&s.DynamicNodeProperties,
+		&s.DistributionMode,
+		&s.Filter,
+		&s.DefaultOutcome,
+		&s.Outcomes,
+		&s.Capabilities,
+	)
+}
+
+/*
+<type name="target" class="composite" source="list" provides="target">
+    <descriptor name="amqp:target:list" code="0x00000000:0x00000029"/>
+    <field name="address" type="*" requires="address"/>
+    <field name="durable" type="terminus-durability" default="none"/>
+    <field name="expiry-policy" type="terminus-expiry-policy" default="session-end"/>
+    <field name="timeout" type="seconds" default="0"/>
+    <field name="dynamic" type="boolean" default="false"/>
+    <field name="dynamic-node-properties" type="node-properties"/>
+    <field name="capabilities" type="symbol" multiple="true"/>
+</type>
+*/
+type Target struct {
+	// the address of the target
+	//
+	// The address of the target MUST NOT be set when sent on a attach frame sent by
+	// the sending link endpoint where the dynamic flag is set to true (that is where
+	// the sender is requesting the receiver to create an addressable node).
+	//
+	// The address of the source MUST be set when sent on a attach frame sent by the
+	// receiving link endpoint where the dynamic flag is set to true (that is where
+	// the receiver has created an addressable node at the request of the sender and
+	// is now communicating the address of that created node). The generated name of
+	// the address SHOULD include the link name and the container-id of the remote
+	// container to allow for ease of identification.
+	Address string
+
+	// indicates the durability of the terminus
+	//
+	// Indicates what state of the terminus will be retained durably: the state of durable
+	// messages, only existence and configuration of the terminus, or no state at all.
+	//
+	// 0: none
+	// 1: configuration
+	// 2: unsettled-state
+	Durable uint32
+
+	// the expiry policy of the target
+	//
+	// link-detach: The expiry timer starts when terminus is detached.
+	// session-end: The expiry timer starts when the most recently associated session is
+	//              ended.
+	// connection-close: The expiry timer starts when most recently associated connection
+	//                   is closed.
+	// never: The terminus never expires.
+	ExpiryPolicy Symbol
+
+	// duration that an expiring target will be retained
+	//
+	// The target starts expiring as indicated by the expiry-policy.
+	Timeout uint32 // seconds
+
+	// request dynamic creation of a remote node
+	//
+	// When set to true by the sending link endpoint, this field constitutes a request
+	// for the receiving peer to dynamically create a node at the target. In this case
+	// the address field MUST NOT be set.
+	//
+	// When set to true by the receiving link endpoint this field indicates creation of
+	// a dynamically created node. In this case the address field will contain the
+	// address of the created node. The generated address SHOULD include the link name
+	// and other available information on the initiator of the request (such as the
+	// remote container-id) in some recognizable form for ease of traceability.
+	Dynamic bool
+
+	// properties of the dynamically created node
+	//
+	// If the dynamic field is not set to true this field MUST be left unset.
+	//
+	// When set by the sending link endpoint, this field contains the desired
+	// properties of the node the sender wishes to be created. When set by the
+	// receiving link endpoint this field contains the actual properties of the
+	// dynamically created node. See subsection 3.5.9 for standard node properties.
+	// http://www.amqp.org/specification/1.0/node-properties
+	//
+	// lifetime-policy: The lifetime of a dynamically generated node.
+	//					Definitionally, the lifetime will never be less than the lifetime
+	//					of the link which caused its creation, however it is possible to
+	//					extend the lifetime of dynamically created node using a lifetime
+	//					policy. The value of this entry MUST be of a type which provides
+	//					the lifetime-policy archetype. The following standard
+	//					lifetime-policies are defined below: delete-on-close,
+	//					delete-on-no-links, delete-on-no-messages or
+	//					delete-on-no-links-or-messages.
+	// supported-dist-modes: The distribution modes that the node supports.
+	//					The value of this entry MUST be one or more symbols which are valid
+	//					distribution-modes. That is, the value MUST be of the same type as
+	//					would be valid in a field defined with the following attributes:
+	//						type="symbol" multiple="true" requires="distribution-mode"
+	DynamicNodeProperties map[Symbol]interface{}
+
+	// the extension capabilities the sender supports/desires
+	//
+	// http://www.amqp.org/specification/1.0/target-capabilities
+	Capabilities []Symbol
+}
+
+func (t *Target) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: t.Address, omit: t.Address == ""},
+		{value: t.Durable, omit: t.Durable == 0},
+		{value: t.ExpiryPolicy, omit: t.ExpiryPolicy == ""},
+		{value: t.Timeout, omit: t.Timeout == 0},
+		{value: t.Dynamic, omit: !t.Dynamic},
+		{value: t.DynamicNodeProperties, omit: len(t.DynamicNodeProperties) == 0},
+		{value: t.Capabilities, omit: len(t.Capabilities) == 0},
+	}
+	return marshalComposite(TypeSource, fields...)
+}
+
+func (t *Target) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, TypeTarget,
+		&t.Address,
+		&t.Durable,
+		&t.ExpiryPolicy,
+		&t.Timeout,
+		&t.Dynamic,
+		&t.DynamicNodeProperties,
+		&t.Capabilities,
+	)
+}
+
 /*
 <type name="flow" class="composite" source="list" provides="frame">
     <descriptor name="amqp:flow:list" code="0x00000000:0x00000013"/>
@@ -609,7 +664,7 @@ type Flow struct {
 	// Identifies the expected transfer-id of the next incoming transfer frame.
 	// This value MUST be set if the peer has received the begin frame for the
 	// session, and MUST NOT be set if it has not. See subsection 2.5.6 for more details.
-	NextIncomingID uint32 // sequence number
+	NextIncomingID *uint32 // sequence number
 
 	// Defines the maximum number of incoming transfer frames that the endpoint
 	// can currently receive. See subsection 2.5.6 for more details.
@@ -631,7 +686,7 @@ type Flow struct {
 	// If set to a handle that is not currently associated with an attached link,
 	// the recipient MUST respond by ending the session with an unattached-handle
 	// session error.
-	Handle uint32
+	Handle *uint32
 
 	// The delivery-count is initialized by the sender when a link endpoint is created,
 	// and is incremented whenever a message is sent. Only the sender MAY independently
@@ -650,7 +705,7 @@ type Flow struct {
 	// this field MUST be set to the last known value of the corresponding sending endpoint.
 	// In the event that the receiving link endpoint has not yet seen the initial attach
 	// frame from the sender this field MUST NOT be set.
-	DeliveryCount uint32 // sequence number
+	DeliveryCount *uint32 // sequence number
 
 	// the current maximum number of messages that can be received
 	//
@@ -660,7 +715,7 @@ type Flow struct {
 	// See subsection 2.6.7 for more details.
 	//
 	// When the handle field is not set, this field MUST NOT be set.
-	LinkCredit uint32
+	LinkCredit *uint32
 
 	// the number of available messages
 	//
@@ -669,7 +724,7 @@ type Flow struct {
 	// from the sender. See subsection 2.6.7 for more details.
 	//
 	// When the handle field is not set, this field MUST NOT be set.
-	Available uint32
+	Available *uint32
 
 	// indicates drain mode
 	//
@@ -704,6 +759,39 @@ type Flow struct {
 	Properties map[string]interface{}
 }
 
+func (f *Flow) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: f.NextIncomingID, omit: f.NextIncomingID == nil},
+		{value: f.IncomingWindow, omit: false},
+		{value: f.NextOutgoingID, omit: false},
+		{value: f.OutgoingWindow, omit: false},
+		{value: f.Handle, omit: f.Handle == nil},
+		{value: f.DeliveryCount, omit: f.DeliveryCount == nil},
+		{value: f.LinkCredit, omit: f.LinkCredit == nil},
+		{value: f.Available, omit: f.Available == nil},
+		{value: f.Drain, omit: !f.Drain},
+		{value: f.Echo, omit: !f.Echo},
+		{value: f.Properties, omit: len(f.Properties) == 0},
+	}
+	return marshalComposite(PreformativeFlow, fields...)
+}
+
+func (f *Flow) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, PreformativeFlow,
+		f.NextIncomingID,
+		&f.IncomingWindow,
+		&f.NextOutgoingID,
+		&f.OutgoingWindow,
+		f.Handle,
+		f.DeliveryCount,
+		f.LinkCredit,
+		f.Available,
+		&f.Drain,
+		&f.Echo,
+		&f.Properties,
+	)
+}
+
 /*
 <type name="transfer" class="composite" source="list" provides="frame">
     <descriptor name="amqp:transfer:list" code="0x00000000:0x00000014"/>
@@ -728,7 +816,7 @@ type Transfer struct {
 	// delivery. On continuation transfers the delivery-id MAY be omitted. It is
 	// an error if the delivery-id on a continuation transfer differs from the
 	// delivery-id on the first transfer of a delivery.
-	DeliveryID uint32 // sequence number
+	DeliveryID *uint32 // sequence number
 
 	// Uniquely identifies the delivery attempt for a given message on this link.
 	// This field MUST be specified for the first transfer of a multi-transfer
@@ -745,7 +833,7 @@ type Transfer struct {
 	// The upper three octets of a message format code identify a particular message
 	// format. The lowest octet indicates the version of said message format. Any given
 	// version of a format is forwards compatible with all higher versions.
-	MessageFormat uint32
+	MessageFormat *uint32
 
 	// If not set on the first (or only) transfer for a (multi-transfer) delivery,
 	// then the settled flag MUST be interpreted as being false. For subsequent
@@ -793,7 +881,7 @@ type Transfer struct {
 	// 1: second - The receiver will only settle after sending the disposition to
 	//             the sender and receiving a disposition indicating settlement of
 	//             the delivery from the sender.
-	ReceiverSettleMode uint8
+	ReceiverSettleMode *uint8
 
 	// the state of the delivery at the sender
 	//
@@ -808,7 +896,7 @@ type Transfer struct {
 	// referring to the delivery) indicates that the delivery has attained a terminal
 	// state, then no future transfer or disposition sent by the sender can alter that
 	// terminal state.
-	State interface{}
+	State interface{} // TODO: add delivery states
 
 	// indicates a resumed delivery
 	//
@@ -856,6 +944,37 @@ type Transfer struct {
 	Batchable bool
 }
 
+func (t *Transfer) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: t.DeliveryID, omit: t.DeliveryID == nil},
+		{value: t.DeliveryTag, omit: len(t.DeliveryTag) == 0},
+		{value: t.MessageFormat, omit: t.MessageFormat == nil},
+		{value: t.Settled, omit: !t.Settled},
+		{value: t.More, omit: !t.More},
+		{value: t.ReceiverSettleMode, omit: t.ReceiverSettleMode == nil},
+		{value: t.State, omit: t.State == nil},
+		{value: t.Resume, omit: !t.Resume},
+		{value: t.Aborted, omit: !t.Aborted},
+		{value: t.Batchable, omit: !t.Batchable},
+	}
+	return marshalComposite(PreformativeFlow, fields...)
+}
+
+func (t *Transfer) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, PreformativeTransfer,
+		t.DeliveryID,
+		&t.DeliveryTag,
+		t.MessageFormat,
+		&t.Settled,
+		&t.More,
+		t.ReceiverSettleMode,
+		&t.State,
+		&t.Resume,
+		&t.Aborted,
+		&t.Batchable,
+	)
+}
+
 /*
 <type name="disposition" class="composite" source="list" provides="frame">
     <descriptor name="amqp:disposition:list" code="0x00000000:0x00000015"/>
@@ -883,7 +1002,7 @@ type Disposition struct {
 	//
 	// Identifies the upper bound of delivery-ids for the deliveries in this set.
 	// If not set, this is taken to be the same as first.
-	Last uint32 // sequence number
+	Last *uint32 // sequence number
 
 	// indicates deliveries are settled
 	//
@@ -905,6 +1024,29 @@ type Disposition struct {
 	Batchable bool
 }
 
+func (d *Disposition) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: d.Role, omit: false},
+		{value: d.First, omit: false},
+		{value: d.Last, omit: d.Last == nil},
+		{value: d.Settled, omit: !d.Settled},
+		{value: d.State, omit: d.State == nil},
+		{value: d.Batchable, omit: !d.Batchable},
+	}
+	return marshalComposite(PreformativeDisposition, fields...)
+}
+
+func (d *Disposition) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, PreformativeDisposition,
+		&d.Role,
+		&d.First,
+		d.Last,
+		&d.Settled,
+		&d.State,
+		&d.Batchable,
+	)
+}
+
 /*
 <type name="detach" class="composite" source="list" provides="frame">
     <descriptor name="amqp:detach:list" code="0x00000000:0x00000016"/>
@@ -913,7 +1055,7 @@ type Disposition struct {
     <field name="error" type="error"/>
 </type>
 */
-type Detch struct {
+type Detach struct {
 	// the local handle of the link to be detached
 	Handle uint32 //required
 
@@ -924,7 +1066,24 @@ type Detch struct {
 	//
 	// If set, this field indicates that the link is being detached due to an error
 	// condition. The value of the field SHOULD contain details on the cause of the error.
-	Error Error
+	Error *Error
+}
+
+func (d *Detach) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: d.Handle, omit: false},
+		{value: d.Closed, omit: !d.Closed},
+		{value: d.Error, omit: d.Error == nil},
+	}
+	return marshalComposite(PreformativeDetach, fields...)
+}
+
+func (d *Detach) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, PreformativeDetach,
+		&d.Handle,
+		&d.Closed,
+		d.Error,
+	)
 }
 
 /*
@@ -951,6 +1110,23 @@ type Error struct {
 	Info map[Symbol]interface{}
 }
 
+func (e *Error) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: e.Condition, omit: false},
+		{value: e.Description, omit: e.Description == ""},
+		{value: e.Info, omit: len(e.Info) == 0},
+	}
+	return marshalComposite(TypeError, fields...)
+}
+
+func (e *Error) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, TypeError,
+		&e.Condition,
+		&e.Description,
+		&e.Info,
+	)
+}
+
 /*
 <type name="end" class="composite" source="list" provides="frame">
     <descriptor name="amqp:end:list" code="0x00000000:0x00000017"/>
@@ -962,7 +1138,20 @@ type End struct {
 	//
 	// If set, this field indicates that the session is being ended due to an error
 	// condition. The value of the field SHOULD contain details on the cause of the error.
-	Error Error
+	Error *Error
+}
+
+func (e *End) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: e.Error, omit: e.Error == nil},
+	}
+	return marshalComposite(PreformativeEnd, fields...)
+}
+
+func (e *End) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, PreformativeEnd,
+		e.Error,
+	)
 }
 
 /*
@@ -971,3 +1160,23 @@ type End struct {
     <field name="error" type="error"/>
 </type>
 */
+type Close struct {
+	// error causing the close
+	//
+	// If set, this field indicates that the session is being closed due to an error
+	// condition. The value of the field SHOULD contain details on the cause of the error.
+	Error *Error
+}
+
+func (c *Close) MarshalBinary() ([]byte, error) {
+	fields := []field{
+		{value: c.Error, omit: c.Error == nil},
+	}
+	return marshalComposite(PreformativeClose, fields...)
+}
+
+func (c *Close) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, PreformativeClose,
+		c.Error,
+	)
+}
