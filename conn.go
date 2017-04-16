@@ -3,8 +3,11 @@ package amqp
 import (
 	"bytes"
 	"fmt"
+	"log"
 	"net"
 	"net/url"
+
+	"github.com/pkg/errors"
 )
 
 // connection defaults
@@ -15,6 +18,13 @@ const (
 
 type Opt func(*Conn) error
 
+func OptHostname(hostname string) Opt {
+	return func(c *Conn) error {
+		c.hostname = hostname
+		return nil
+	}
+}
+
 type stateFunc func() stateFunc
 
 type Conn struct {
@@ -22,6 +32,7 @@ type Conn struct {
 
 	maxFrameSize uint32
 	channelMax   uint16
+	hostname     string
 
 	rxBuf []byte
 	err   error
@@ -107,6 +118,8 @@ type Session struct {
 	conn          *Conn
 	err           error
 	rx            chan *frame
+
+	newLink chan *link
 }
 
 type frame struct {
@@ -163,6 +176,53 @@ func (s *Session) begin() error {
 	return nil
 }
 
+type Receiver struct {
+	link *link
+}
+
+func (s *Session) Receiver(source string) (*Receiver, error) {
+	link := <-s.newLink
+	attach, err := Marshal(&Attach{
+		Name:   "ASHJDJKHJA-ASDHJ-ASDHGJH-ASDSAD78Y",
+		Handle: link.handle,
+		Role:   true,
+		Source: &Source{
+			Address:      source,
+			ExpiryPolicy: "link-attach",
+		},
+		Target: &Target{
+			Address:      "",
+			ExpiryPolicy: "link-attach",
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	wr := bufPool.New().(*bytes.Buffer)
+	wr.Reset()
+
+	err = writeFrame(wr, FrameTypeAMQP, s.channel, attach)
+	if err != nil {
+		return nil, err
+	}
+
+	s.conn.txFrame <- wr
+	fr := <-link.rx
+
+	resp, ok := fr.(*Attach)
+	if !ok {
+		return nil, fmt.Errorf("unexpected attach response: %+v", fr)
+	}
+
+	fmt.Printf("Attach Resp: %+v\n", resp)
+	fmt.Printf("Attach Source: %+v\n", resp.Source)
+	fmt.Printf("Attach Target: %+v\n", resp.Target)
+
+	r := &Receiver{link: link}
+	return r, nil
+}
+
 func (c *Conn) Session() (*Session, error) {
 	s := <-c.newSession
 	if s.err != nil {
@@ -175,7 +235,56 @@ func (c *Conn) Session() (*Session, error) {
 		return nil, err
 	}
 
+	s.newLink = make(chan *link)
+
+	go s.startMux()
+
 	return s, nil
+}
+
+type link struct {
+	handle uint32
+	rx     chan interface{}
+}
+
+func (s *Session) startMux() {
+	links := make(map[uint32]*link)
+	nextLink := &link{rx: make(chan interface{})}
+	for {
+		select {
+		case s.newLink <- nextLink:
+			fmt.Println("Got new link request")
+			links[nextLink.handle] = nextLink
+			// TODO: handle max session/wrapping
+			nextLink = &link{handle: nextLink.handle + 1, rx: make(chan interface{})}
+		case fr := <-s.rx:
+			go func() {
+				pType, err := preformativeType(fr.payload)
+				if err != nil {
+					log.Println("error:", err)
+					return
+				}
+
+				switch pType {
+				case PreformativeAttach:
+					var attach Attach
+					err = Unmarshal(bytes.NewReader(fr.payload), &attach)
+					if err != nil {
+						log.Println("error:", err)
+						return
+					}
+					link, ok := links[attach.Handle]
+					if ok {
+						link.rx <- &attach
+					}
+					// TODO: error
+				default:
+					// TODO: error
+					fmt.Printf("frame: %#v\n", fr)
+				}
+			}()
+		}
+	}
 }
 
 func (c *Conn) startMux() {
@@ -316,11 +425,10 @@ func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
 
 func (c *Conn) txOpen() stateFunc {
 	open, err := Marshal(&Open{
-		ContainerID:         "gopher",
-		Hostname:            "myhostname",
-		MaxFrameSize:        c.maxFrameSize,
-		ChannelMax:          c.channelMax,
-		OfferedCapabilities: []Symbol{"mycap"},
+		ContainerID:  "gopher",
+		Hostname:     c.hostname,
+		MaxFrameSize: c.maxFrameSize,
+		ChannelMax:   c.channelMax,
 	})
 	if err != nil {
 		c.err = err
@@ -337,7 +445,7 @@ func (c *Conn) txOpen() stateFunc {
 
 	_, err = c.net.Write(wr.Bytes())
 	if err != nil {
-		c.err = err
+		c.err = errors.Wrapf(err, "writing")
 		return nil
 	}
 
@@ -347,13 +455,13 @@ func (c *Conn) txOpen() stateFunc {
 func (c *Conn) rxOpen() stateFunc {
 	n, err := c.net.Read(c.rxBuf)
 	if err != nil {
-		c.err = err
+		c.err = errors.Wrapf(err, "reading")
 		return nil
 	}
 
 	fh, err := parseFrameHeader(c.rxBuf[:n])
 	if err != nil {
-		c.err = err
+		c.err = errors.Wrapf(err, "parsing frame header")
 		return nil
 	}
 
@@ -364,7 +472,7 @@ func (c *Conn) rxOpen() stateFunc {
 	var o Open
 	err = Unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &o)
 	if err != nil {
-		c.err = err
+		c.err = errors.Wrapf(err, "unmarshaling")
 		return nil
 	}
 

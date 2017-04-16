@@ -96,39 +96,11 @@ type SASLInit struct {
 }
 
 func (si *SASLInit) MarshalBinary() ([]byte, error) {
-	mechanism, err := Marshal(si.Mechanism)
-	if err != nil {
-		return nil, err
-	}
-
-	initResponse, err := Marshal(si.InitialResponse)
-	if err != nil {
-		return nil, err
-	}
-
-	fields := [][]byte{
-		mechanism,
-		initResponse,
-	}
-
-	if si.Hostname != "" {
-		hostname, err := Marshal(si.Hostname)
-		if err != nil {
-			return nil, err
-		}
-		fields = append(fields, hostname)
-	}
-
-	buf := bufPool.New().(*bytes.Buffer)
-	buf.Reset()
-	defer bufPool.Put(buf)
-
-	err = writeComposite(buf, TypeSASLInit, fields...)
-	if err != nil {
-		return nil, err
-	}
-
-	return append([]byte(nil), buf.Bytes()...), nil
+	return marshalComposite(TypeSASLInit, []field{
+		{value: si.Mechanism, omit: false},
+		{value: si.InitialResponse, omit: len(si.InitialResponse) == 0},
+		{value: si.Hostname, omit: len(si.Hostname) == 0},
+	}...)
 }
 
 func SASLInitPlain(username, password, hostname string) ([]byte, error) {
@@ -190,26 +162,8 @@ type SASLOutcome struct {
 }
 
 func (so *SASLOutcome) UnmarshalBinary(r byteReader) error {
-	t, fields, err := readCompositeHeader(r)
-	if err != nil {
-		return err
-	}
-
-	if t != TypeSASLOutcome {
-		return errors.New("invalid header for SASL outcode")
-	}
-
-	err = Unmarshal(r, &so.Code)
-	if err != nil {
-		return err
-	}
-
-	if fields > 1 {
-		err = Unmarshal(r, &so.AdditionalData)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return unmarshalComposite(r, TypeSASLOutcome,
+		&so.Code,
+		&so.AdditionalData,
+	)
 }

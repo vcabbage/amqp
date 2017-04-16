@@ -4,13 +4,15 @@ import (
 	"bytes"
 	"encoding"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/pkg/errors"
 )
 
 type byteReader interface {
@@ -57,6 +59,15 @@ func Unmarshal(r byteReader, i interface{}) error {
 			return err
 		}
 		*t = uint16(val)
+	case *uint8:
+		val, err := readUint(r)
+		if err == errNull {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		*t = uint8(val)
 	case *string:
 		val, err := readString(r)
 		if err != nil {
@@ -65,11 +76,47 @@ func Unmarshal(r byteReader, i interface{}) error {
 		*t = val
 	case *[]Symbol:
 		sa, err := readSymbolArray(r)
+		if err == errNull {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
 		*t = sa
+	case *Symbol:
+		s, err := readString(r)
+		if err == errNull {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		*t = Symbol(s)
+	case *[]byte:
+		val, err := readBinary(r)
+		if err != nil {
+			return err
+		}
+		*t = val
+	case *bool:
+		b, err := readBool(r)
+		if err == errNull {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		*t = b
 	default:
+		v := reflect.ValueOf(i)         // **struct
+		indirect := reflect.Indirect(v) // *struct
+		if um, ok := indirect.Interface().(unmarshaler); ok {
+			if indirect.IsNil() { // *struct == nil
+				indirect.Set(reflect.New(reflect.TypeOf(um).Elem()))
+			}
+			return indirect.Interface().(unmarshaler).UnmarshalBinary(r)
+		}
+
 		return fmt.Errorf("unable to unmarshal %T", i)
 	}
 	return nil
@@ -78,17 +125,17 @@ func Unmarshal(r byteReader, i interface{}) error {
 func unmarshalComposite(r byteReader, typ Type, fields ...interface{}) error {
 	t, numFields, err := readCompositeHeader(r)
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "reading composite header")
 	}
 
 	if t != typ {
-		return fmt.Errorf("invalid header for %#0x", typ)
+		return fmt.Errorf("invalid header %#0x for %#0x", t, typ)
 	}
 
 	for i := 0; i < numFields; i++ {
 		err = Unmarshal(r, fields[i])
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "unmarshaling field %d", i)
 		}
 	}
 	return nil
@@ -376,9 +423,21 @@ func readString(r byteReader) (string, error) {
 	return string(vari), err
 }
 
+func readBinary(r byteReader) ([]byte, error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+
+	vari, err := readVariableType(r, b)
+	return vari, err
+}
+
 func readVariableType(r byteReader, t byte) ([]byte, error) {
 	var buf []byte
 	switch t {
+	case Null:
+		return nil, nil
 	case Vbin8, Str8, Sym8:
 		n, err := r.ReadByte()
 		if err != nil {
@@ -406,6 +465,8 @@ func readSlice(r byteReader) (elements int, length int, _ error) {
 	}
 
 	switch b {
+	case Null:
+		return 0, 0, errNull
 	case List0:
 		return 0, 0, nil
 	case List8, Array8:
@@ -441,8 +502,8 @@ const (
 
 	// Bool
 	Bool      uint8 = 0x56 // boolean with the octet 0x00 being false and octet 0x01 being true
-	BoolTrue  uint8 = 0x40
-	BoolFalse uint8 = 0x41
+	BoolTrue  uint8 = 0x41
+	BoolFalse uint8 = 0x42
 
 	// Unsigned
 	Ubyte      uint8 = 0x50 // 8-bit unsigned integer (1)
@@ -540,6 +601,32 @@ func readInt(r byteReader) (value int, _ error) {
 	}
 }
 
+func readBool(r byteReader) (bool, error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return false, err
+	}
+
+	switch b {
+	case Null:
+		return false, errNull
+	case Bool:
+		b, err = r.ReadByte()
+		if err != nil {
+			return false, err
+		}
+		return b != 0, nil
+	case BoolTrue:
+		return true, nil
+	case BoolFalse:
+		return false, nil
+	default:
+		return false, fmt.Errorf("type code %x is not a recognized bool type", b)
+	}
+}
+
+var errNull = errors.New("error is null")
+
 func readUint(r byteReader) (value uint, _ error) {
 	b, err := r.ReadByte()
 	if err != nil {
@@ -547,7 +634,8 @@ func readUint(r byteReader) (value uint, _ error) {
 	}
 
 	switch b {
-	// Unsigned
+	case Null:
+		return 0, errNull
 	case Uint0, Ulong0:
 		return 0, nil
 	case Ubyte, Smalluint, Smallulong:
@@ -575,6 +663,10 @@ func readCompositeHeader(r byteReader) (_ Type, fields int, _ error) {
 	byt, err := r.ReadByte()
 	if err != nil {
 		return 0, 0, err
+	}
+
+	if byt == Null {
+		return 0, 0, errNull
 	}
 
 	if byt != 0 {
@@ -637,6 +729,16 @@ func Marshal(i interface{}) ([]byte, error) {
 		} else {
 			err = buf.WriteByte(BoolFalse)
 		}
+	case uint64:
+		if t == 0 {
+			err = buf.WriteByte(Ulong0)
+			break
+		}
+		err = buf.WriteByte(Ulong)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Write(buf, binary.BigEndian, t)
 	case uint32:
 		if t == 0 {
 			err = buf.WriteByte(Uint0)
@@ -653,6 +755,8 @@ func Marshal(i interface{}) ([]byte, error) {
 			return nil, err
 		}
 		err = binary.Write(buf, binary.BigEndian, t)
+	case uint8:
+		_, err = buf.Write([]byte{Ubyte, t})
 	case []Symbol:
 		err = writeSymbolArray(buf, t)
 	case string:
@@ -678,4 +782,66 @@ func (m *Milliseconds) UnmarshalBinary(r byteReader) error {
 	err := Unmarshal(r, &n)
 	m.Duration = time.Duration(n) * time.Millisecond
 	return err
+}
+
+func writeMapHeader(wr byteWriter, elements int) error {
+	if elements < math.MaxUint8 {
+		err := wr.WriteByte(Map8)
+		if err != nil {
+			return err
+		}
+		return wr.WriteByte(uint8(elements))
+	}
+
+	err := wr.WriteByte(Map32)
+	if err != nil {
+		return err
+	}
+	return binary.Write(wr, binary.BigEndian, uint32(elements))
+}
+
+func writeMapElement(wr byteWriter, key, value interface{}) error {
+	keyBytes, err := Marshal(key)
+	if err != nil {
+		return err
+	}
+	valueBytes, err := Marshal(value)
+	if err != nil {
+		return err
+	}
+	_, err = wr.Write(keyBytes)
+	if err != nil {
+		return err
+	}
+	_, err = wr.Write(valueBytes)
+	return err
+}
+
+func readMapHeader(r byteReader) (int, error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return 0, err
+	}
+
+	switch b {
+	case Null:
+		return 0, errNull
+	case Map8:
+		n, err := r.ReadByte()
+		return int(n), err
+	case Map32:
+		var n uint32
+		err = binary.Read(r, binary.BigEndian, &n)
+		return int(n), err
+	default:
+		return 0, fmt.Errorf("invalid map type %x", b)
+	}
+}
+
+func readMapElement(r byteReader, key, value interface{}) error {
+	err := Unmarshal(r, key)
+	if err != nil {
+		return err
+	}
+	return Unmarshal(r, value)
 }

@@ -57,7 +57,7 @@ type Open struct {
 	IncomingLocales     []Symbol
 	OfferedCapabilities []Symbol
 	DesiredCapabilities []Symbol
-	Properties          map[string]string // TODO: implement marshal/unmarshal
+	Properties          Properties // TODO: implement marshal/unmarshal
 }
 
 func (o *Open) MarshalBinary() ([]byte, error) {
@@ -87,7 +87,29 @@ func (o *Open) UnmarshalBinary(r byteReader) error {
 		&o.IncomingLocales,
 		&o.OfferedCapabilities,
 		&o.DesiredCapabilities,
+		&o.Properties,
 	)
+}
+
+type Properties map[string]string
+
+func (p *Properties) UnmarshalBinary(r byteReader) error {
+	n, err := readMapHeader(r)
+	if err == errNull {
+		return nil
+	}
+
+	m := make(Properties)
+	for i := 0; i < n; i++ {
+		var key, value string
+		err = readMapElement(r, &key, &value)
+		if err != nil {
+			return err
+		}
+		m[key] = value
+	}
+	*p = m
+	return nil
 }
 
 /*
@@ -138,7 +160,7 @@ type Begin struct {
 
 	// session properties
 	// http://www.amqp.org/specification/1.0/session-properties
-	Properties map[string]interface{}
+	Properties Properties
 }
 
 func (b *Begin) MarshalBinary() ([]byte, error) {
@@ -163,6 +185,7 @@ func (b *Begin) UnmarshalBinary(r byteReader) error {
 		&b.HandleMax,
 		&b.OfferedCapabilities,
 		&b.DesiredCapabilities,
+		&b.Properties,
 	)
 }
 
@@ -189,7 +212,7 @@ type Attach struct {
 	// the name of the link
 	//
 	// This name uniquely identifies the link from the container of the source
-	//to the container of the target node, e.g., if the container of the source
+	// to the container of the target node, e.g., if the container of the source
 	// node is A, and the container of the target node is B, the link MAY be
 	// globally identified by the (ordered) tuple (A,B,<name>).
 	Name string // required
@@ -271,7 +294,7 @@ type Attach struct {
 	// The unsettled map MUST NOT contain null valued keys.
 	//
 	// When reattaching (as opposed to resuming), the unsettled map MUST be null.
-	Unsettled map[string]uint
+	Unsettled Unsettled
 
 	// If set to true this field indicates that the unsettled map provided is not complete.
 	// When the map is incomplete the recipient of the map cannot take the absence of a
@@ -314,6 +337,39 @@ type Attach struct {
 	// link properties
 	// http://www.amqp.org/specification/1.0/link-properties
 	Properties map[string]interface{}
+}
+
+type DeliveryState interface{}
+
+type Unsettled map[string]DeliveryState
+
+func (u *Unsettled) UnmarshalBinary(r byteReader) error {
+	n, err := readMapHeader(r)
+	if err == errNull {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	if n == 0 {
+		return nil
+	}
+
+	m := make(Unsettled)
+	for i := 0; i < n; i++ {
+		var (
+			key   string
+			value DeliveryState
+		)
+		err = readMapElement(r, &key, value)
+		if err != nil {
+			return err
+		}
+		m[key] = value
+	}
+	*u = m
+	return nil
 }
 
 func (a *Attach) MarshalBinary() ([]byte, error) {
@@ -629,7 +685,7 @@ func (t *Target) MarshalBinary() ([]byte, error) {
 		{value: t.DynamicNodeProperties, omit: len(t.DynamicNodeProperties) == 0},
 		{value: t.Capabilities, omit: len(t.Capabilities) == 0},
 	}
-	return marshalComposite(TypeSource, fields...)
+	return marshalComposite(TypeTarget, fields...)
 }
 
 func (t *Target) UnmarshalBinary(r byteReader) error {
@@ -756,7 +812,7 @@ type Flow struct {
 
 	// link state properties
 	// http://www.amqp.org/specification/1.0/link-state-properties
-	Properties map[string]interface{}
+	Properties Properties
 }
 
 func (f *Flow) MarshalBinary() ([]byte, error) {
