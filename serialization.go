@@ -18,6 +18,7 @@ import (
 type byteReader interface {
 	io.Reader
 	io.ByteReader
+	UnreadByte() error
 }
 
 type byteWriter interface {
@@ -43,18 +44,36 @@ func Unmarshal(r byteReader, i interface{}) error {
 	switch t := i.(type) {
 	case *int:
 		val, err := readInt(r)
+		if err == errNull {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
 		*t = val
+	case *uint64:
+		val, err := readUint(r)
+		if err == errNull {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		*t = uint64(val)
 	case *uint32:
 		val, err := readUint(r)
+		if err == errNull {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
 		*t = uint32(val)
 	case *uint16:
 		val, err := readUint(r)
+		if err == errNull {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -70,6 +89,9 @@ func Unmarshal(r byteReader, i interface{}) error {
 		*t = uint8(val)
 	case *string:
 		val, err := readString(r)
+		if err == errNull {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -107,15 +129,24 @@ func Unmarshal(r byteReader, i interface{}) error {
 			return err
 		}
 		*t = b
+	case *interface{}:
+		v, err := readAny(r)
+		if err != nil {
+			return err
+		}
+		*t = v
 	default:
 		v := reflect.ValueOf(i)         // **struct
 		indirect := reflect.Indirect(v) // *struct
-		if um, ok := indirect.Interface().(unmarshaler); ok {
+		if indirect.Kind() == reflect.Ptr {
 			if indirect.IsNil() { // *struct == nil
-				indirect.Set(reflect.New(reflect.TypeOf(um).Elem()))
+				indirect.Set(reflect.New(indirect.Type().Elem()))
 			}
-			return indirect.Interface().(unmarshaler).UnmarshalBinary(r)
+			return Unmarshal(r, indirect.Interface())
 		}
+		// if um, ok := indirect.Interface().(unmarshaler); ok {
+		// 	return indirect.Interface().(unmarshaler).UnmarshalBinary(r)
+		// }
 
 		return fmt.Errorf("unable to unmarshal %T", i)
 	}
@@ -124,6 +155,9 @@ func Unmarshal(r byteReader, i interface{}) error {
 
 func unmarshalComposite(r byteReader, typ Type, fields ...interface{}) error {
 	t, numFields, err := readCompositeHeader(r)
+	if err == errNull {
+		return nil
+	}
 	if err != nil {
 		return errors.Wrapf(err, "reading composite header")
 	}
@@ -496,6 +530,41 @@ func readSlice(r byteReader) (elements int, length int, _ error) {
 	}
 }
 
+func readAny(r byteReader) (interface{}, error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+
+	if b == Null {
+		return nil, nil
+	}
+
+	err = r.UnreadByte()
+	if err != nil {
+		return nil, err
+	}
+
+	switch b {
+	case Bool, BoolTrue, BoolFalse:
+		return readBool(r)
+	case Ubyte, Ushort, Uint, Smalluint, Uint0, Ulong, Smallulong, Ulong0:
+		return readUint(r)
+	case Byte, Short, Int, Smallint, Long, Smalllong:
+		return readInt(r)
+	case Float, Double, Decimal32, Decimal64, Decimal128, Char, Timestamp, UUID,
+		List0, List8, List32, Map8, Map32, Array8, Array32:
+		return nil, errors.Errorf("%0x not implemented", b)
+	case Vbin8, Vbin32:
+		return readBinary(r)
+	case Str8, Str32, Sym8, Sym32:
+		return readString(r)
+	default:
+		return nil, errors.Errorf("unknown type %0x", b)
+	}
+
+}
+
 // Type codes
 const (
 	Null uint8 = 0x40
@@ -627,7 +696,7 @@ func readBool(r byteReader) (bool, error) {
 
 var errNull = errors.New("error is null")
 
-func readUint(r byteReader) (value uint, _ error) {
+func readUint(r byteReader) (value uint64, _ error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return 0, err
@@ -640,19 +709,19 @@ func readUint(r byteReader) (value uint, _ error) {
 		return 0, nil
 	case Ubyte, Smalluint, Smallulong:
 		n, err := r.ReadByte()
-		return uint(n), err
+		return uint64(n), err
 	case Ushort:
 		var n uint16
 		err := binary.Read(r, binary.BigEndian, &n)
-		return uint(n), err
+		return uint64(n), err
 	case Uint:
 		var n uint32
 		err := binary.Read(r, binary.BigEndian, &n)
-		return uint(n), err
+		return uint64(n), err
 	case Ulong:
 		var n uint64
 		err := binary.Read(r, binary.BigEndian, &n)
-		return uint(n), err
+		return n, err
 
 	default:
 		return 0, fmt.Errorf("type code %x is not a recognized number type", b)
@@ -749,6 +818,20 @@ func Marshal(i interface{}) ([]byte, error) {
 			return nil, err
 		}
 		err = binary.Write(buf, binary.BigEndian, t)
+	case *uint32:
+		if t == nil {
+			err = buf.WriteByte(Null)
+			break
+		}
+		if *t == 0 {
+			err = buf.WriteByte(Uint0)
+			break
+		}
+		err = buf.WriteByte(Uint)
+		if err != nil {
+			return nil, err
+		}
+		err = binary.Write(buf, binary.BigEndian, *t)
 	case uint16:
 		err = buf.WriteByte(Ushort)
 		if err != nil {
@@ -817,31 +900,74 @@ func writeMapElement(wr byteWriter, key, value interface{}) error {
 	return err
 }
 
-func readMapHeader(r byteReader) (int, error) {
-	b, err := r.ReadByte()
-	if err != nil {
-		return 0, err
-	}
-
-	switch b {
-	case Null:
-		return 0, errNull
-	case Map8:
-		n, err := r.ReadByte()
-		return int(n), err
-	case Map32:
-		var n uint32
-		err = binary.Read(r, binary.BigEndian, &n)
-		return int(n), err
-	default:
-		return 0, fmt.Errorf("invalid map type %x", b)
-	}
+type limitByteReader struct {
+	byteReader
+	limit int
+	read  int
 }
 
-func readMapElement(r byteReader, key, value interface{}) error {
-	err := Unmarshal(r, key)
+var errLimitReached = errors.New("limit reached")
+
+func (r *limitByteReader) Read(p []byte) (int, error) {
+	if r.read >= r.limit {
+		return 0, errLimitReached
+	}
+	n, err := r.byteReader.Read(p)
+	r.read += n
+	return n, err
+}
+
+func (r *limitByteReader) limitReached() bool {
+	return r.read >= r.limit
+}
+
+type mapReader struct {
+	r     *limitByteReader
+	count int // elements (2 * # of pairs)
+}
+
+func (mr *mapReader) next(key, value interface{}) error {
+	err := Unmarshal(mr.r, key)
 	if err != nil {
 		return err
 	}
-	return Unmarshal(r, value)
+	return Unmarshal(mr.r, value)
+}
+
+func newMapReader(r byteReader) (*mapReader, error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+
+	var n int
+	switch b {
+	case Null:
+		return nil, errNull
+	case Map8:
+		bn, err := r.ReadByte()
+		if err != nil {
+			return nil, err
+		}
+		n = int(bn)
+	case Map32:
+		var n32 uint32
+		err = binary.Read(r, binary.BigEndian, &n32)
+		if err != nil {
+			return nil, err
+		}
+		n = int(n32)
+	default:
+		return nil, fmt.Errorf("invalid map type %x", b)
+	}
+
+	b, err = r.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+
+	return &mapReader{
+		r:     &limitByteReader{byteReader: r, limit: n},
+		count: int(b),
+	}, nil
 }

@@ -1,6 +1,9 @@
 package amqp
 
-import "errors"
+import (
+	"errors"
+	"io/ioutil"
+)
 
 // Preformative Types
 const (
@@ -57,7 +60,7 @@ type Open struct {
 	IncomingLocales     []Symbol
 	OfferedCapabilities []Symbol
 	DesiredCapabilities []Symbol
-	Properties          Properties // TODO: implement marshal/unmarshal
+	Properties          Fields // TODO: implement marshal/unmarshal
 }
 
 func (o *Open) MarshalBinary() ([]byte, error) {
@@ -91,24 +94,32 @@ func (o *Open) UnmarshalBinary(r byteReader) error {
 	)
 }
 
-type Properties map[string]string
+type Fields map[Symbol]interface{}
 
-func (p *Properties) UnmarshalBinary(r byteReader) error {
-	n, err := readMapHeader(r)
+func (f *Fields) UnmarshalBinary(r byteReader) error {
+	mr, err := newMapReader(r)
 	if err == errNull {
 		return nil
 	}
+	if err != nil {
+		return err
+	}
 
-	m := make(Properties)
-	for i := 0; i < n; i++ {
-		var key, value string
-		err = readMapElement(r, &key, &value)
+	pairs := mr.count / 2
+
+	m := make(Fields, pairs)
+	for i := 0; i < pairs; i += 2 {
+		var (
+			key   Symbol
+			value interface{}
+		)
+		err = mr.next(&key, &value)
 		if err != nil {
 			return err
 		}
 		m[key] = value
 	}
-	*p = m
+	*f = m
 	return nil
 }
 
@@ -160,7 +171,7 @@ type Begin struct {
 
 	// session properties
 	// http://www.amqp.org/specification/1.0/session-properties
-	Properties Properties
+	Properties Fields
 }
 
 func (b *Begin) MarshalBinary() ([]byte, error) {
@@ -336,7 +347,7 @@ type Attach struct {
 
 	// link properties
 	// http://www.amqp.org/specification/1.0/link-properties
-	Properties map[string]interface{}
+	Properties Fields
 }
 
 type DeliveryState interface{}
@@ -344,7 +355,7 @@ type DeliveryState interface{}
 type Unsettled map[string]DeliveryState
 
 func (u *Unsettled) UnmarshalBinary(r byteReader) error {
-	n, err := readMapHeader(r)
+	mr, err := newMapReader(r)
 	if err == errNull {
 		return nil
 	}
@@ -352,17 +363,15 @@ func (u *Unsettled) UnmarshalBinary(r byteReader) error {
 		return err
 	}
 
-	if n == 0 {
-		return nil
-	}
+	pairs := mr.count / 2
 
-	m := make(Unsettled)
-	for i := 0; i < n; i++ {
+	m := make(Unsettled, pairs)
+	for i := 0; i < pairs; i += 2 {
 		var (
 			key   string
 			value DeliveryState
 		)
-		err = readMapElement(r, &key, value)
+		err = mr.next(&key, &value)
 		if err != nil {
 			return err
 		}
@@ -504,7 +513,7 @@ type Source struct {
 	//					distribution-modes. That is, the value MUST be of the same type as
 	//					would be valid in a field defined with the following attributes:
 	//						type="symbol" multiple="true" requires="distribution-mode"
-	DynamicNodeProperties map[Symbol]interface{}
+	DynamicNodeProperties Fields // TODO: implement custom type with validation
 
 	// the distribution mode of the link
 	//
@@ -519,7 +528,7 @@ type Source struct {
 	// actually in place (including any filters defaulted at the node). The receiving
 	// endpoint MUST check that the filter in place meets its needs and take responsibility
 	// for detaching if it does not.
-	Filter map[Symbol]interface{}
+	Filter Fields // TODO: implement custom type with validation
 
 	// default outcome for unsettled transfers
 	//
@@ -667,7 +676,7 @@ type Target struct {
 	//					distribution-modes. That is, the value MUST be of the same type as
 	//					would be valid in a field defined with the following attributes:
 	//						type="symbol" multiple="true" requires="distribution-mode"
-	DynamicNodeProperties map[Symbol]interface{}
+	DynamicNodeProperties Fields // TODO: implement custom type with validation
 
 	// the extension capabilities the sender supports/desires
 	//
@@ -812,7 +821,7 @@ type Flow struct {
 
 	// link state properties
 	// http://www.amqp.org/specification/1.0/link-state-properties
-	Properties Properties
+	Properties Fields
 }
 
 func (f *Flow) MarshalBinary() ([]byte, error) {
@@ -998,6 +1007,8 @@ type Transfer struct {
 	// The batchable value does not form part of the transfer state, and is not retained
 	// if a link is suspended and subsequently resumed.
 	Batchable bool
+
+	Payload []byte
 }
 
 func (t *Transfer) MarshalBinary() ([]byte, error) {
@@ -1017,18 +1028,25 @@ func (t *Transfer) MarshalBinary() ([]byte, error) {
 }
 
 func (t *Transfer) UnmarshalBinary(r byteReader) error {
-	return unmarshalComposite(r, PreformativeTransfer,
-		t.DeliveryID,
+	err := unmarshalComposite(r, PreformativeTransfer,
+		&t.Handle,
+		&t.DeliveryID,
 		&t.DeliveryTag,
-		t.MessageFormat,
+		&t.MessageFormat,
 		&t.Settled,
 		&t.More,
-		t.ReceiverSettleMode,
+		&t.ReceiverSettleMode,
 		&t.State,
 		&t.Resume,
 		&t.Aborted,
 		&t.Batchable,
 	)
+	if err != nil {
+		return err
+	}
+
+	t.Payload, err = ioutil.ReadAll(r)
+	return err
 }
 
 /*

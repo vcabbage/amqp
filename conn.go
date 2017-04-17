@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/url"
+	"time"
 
 	"github.com/pkg/errors"
 )
@@ -33,6 +34,7 @@ type Conn struct {
 	maxFrameSize uint32
 	channelMax   uint16
 	hostname     string
+	idleTimeout  time.Duration
 
 	rxBuf []byte
 	err   error
@@ -75,6 +77,7 @@ func New(conn net.Conn, opts ...Opt) (*Conn, error) {
 		net:          conn,
 		maxFrameSize: initialMaxFrameSize,
 		channelMax:   initialChannelMax,
+		idleTimeout:  1 * time.Minute,
 		readErr:      make(chan error),
 		rxFrame:      make(chan []byte),
 		txFrame:      make(chan *bytes.Buffer),
@@ -136,7 +139,6 @@ func (s *Session) begin() error {
 	begin, err := Marshal(&Begin{
 		NextOutgoingID: 0,
 		IncomingWindow: 1,
-		OutgoingWindow: 1,
 	})
 
 	if err != nil {
@@ -180,19 +182,54 @@ type Receiver struct {
 	link *link
 }
 
-func (s *Session) Receiver(source string) (*Receiver, error) {
+type link struct {
+	handle     uint32
+	sourceAddr string
+	linkCredit uint32
+	rx         chan interface{}
+}
+
+func newLink(handle uint32) *link {
+	return &link{
+		handle:     handle,
+		linkCredit: 1,
+		rx:         make(chan interface{}),
+	}
+}
+
+type LinkOption func(*link) error
+
+func LinkSource(source string) LinkOption {
+	return func(l *link) error {
+		l.sourceAddr = source
+		return nil
+	}
+}
+
+func LinkCredit(credit uint32) LinkOption {
+	return func(l *link) error {
+		l.linkCredit = credit
+		return nil
+	}
+}
+
+func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
 	link := <-s.newLink
+
+	for _, o := range opts {
+		err := o(link)
+		if err != nil {
+			// TODO: release link
+			return nil, err
+		}
+	}
+
 	attach, err := Marshal(&Attach{
 		Name:   "ASHJDJKHJA-ASDHJ-ASDHGJH-ASDSAD78Y",
 		Handle: link.handle,
 		Role:   true,
 		Source: &Source{
-			Address:      source,
-			ExpiryPolicy: "link-attach",
-		},
-		Target: &Target{
-			Address:      "",
-			ExpiryPolicy: "link-attach",
+			Address: link.sourceAddr,
 		},
 	})
 	if err != nil {
@@ -201,13 +238,12 @@ func (s *Session) Receiver(source string) (*Receiver, error) {
 
 	wr := bufPool.New().(*bytes.Buffer)
 	wr.Reset()
-
 	err = writeFrame(wr, FrameTypeAMQP, s.channel, attach)
 	if err != nil {
 		return nil, err
 	}
-
 	s.conn.txFrame <- wr
+
 	fr := <-link.rx
 
 	resp, ok := fr.(*Attach)
@@ -218,6 +254,32 @@ func (s *Session) Receiver(source string) (*Receiver, error) {
 	fmt.Printf("Attach Resp: %+v\n", resp)
 	fmt.Printf("Attach Source: %+v\n", resp.Source)
 	fmt.Printf("Attach Target: %+v\n", resp.Target)
+
+	flow, err := Marshal(&Flow{
+		IncomingWindow: 2147483647,
+		NextOutgoingID: 0,
+		OutgoingWindow: 0,
+		Handle:         &link.handle,
+		DeliveryCount:  &resp.InitialDeliveryCount,
+		LinkCredit:     &link.linkCredit,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	wr = bufPool.New().(*bytes.Buffer)
+	wr.Reset()
+	err = writeFrame(wr, FrameTypeAMQP, s.channel, flow)
+	if err != nil {
+		return nil, err
+	}
+	s.conn.txFrame <- wr
+
+	fr = <-link.rx
+	transfer := fr.(*Transfer)
+	fmt.Printf("Flow Resp: %+v\n", transfer)
+
+	fmt.Println(string(transfer.Payload))
 
 	r := &Receiver{link: link}
 	return r, nil
@@ -242,21 +304,16 @@ func (c *Conn) Session() (*Session, error) {
 	return s, nil
 }
 
-type link struct {
-	handle uint32
-	rx     chan interface{}
-}
-
 func (s *Session) startMux() {
 	links := make(map[uint32]*link)
-	nextLink := &link{rx: make(chan interface{})}
+	nextLink := newLink(0)
 	for {
 		select {
 		case s.newLink <- nextLink:
 			fmt.Println("Got new link request")
 			links[nextLink.handle] = nextLink
 			// TODO: handle max session/wrapping
-			nextLink = &link{handle: nextLink.handle + 1, rx: make(chan interface{})}
+			nextLink = newLink(nextLink.handle + 1)
 		case fr := <-s.rx:
 			go func() {
 				pType, err := preformativeType(fr.payload)
@@ -278,6 +335,17 @@ func (s *Session) startMux() {
 						link.rx <- &attach
 					}
 					// TODO: error
+				case PreformativeTransfer:
+					var transfer Transfer
+					err = Unmarshal(bytes.NewReader(fr.payload), &transfer)
+					if err != nil {
+						log.Println("error:", err)
+						return
+					}
+					link, ok := links[transfer.Handle]
+					if ok {
+						link.rx <- &transfer
+					}
 				default:
 					// TODO: error
 					fmt.Printf("frame: %#v\n", fr)
@@ -294,6 +362,11 @@ func (c *Conn) startMux() {
 
 	// map channel to session
 	sessions := make(map[uint16]*Session)
+
+	keepalive := time.NewTicker(c.idleTimeout / 2)
+	var buf bytes.Buffer
+	writeFrame(&buf, FrameTypeAMQP, 0, nil)
+	keepaliveFrame := buf.Bytes()
 
 	fmt.Println("Starting mux")
 
@@ -336,6 +409,9 @@ func (c *Conn) startMux() {
 			fmt.Printf("Writing: %# 02x\n", fr)
 			_, c.err = c.net.Write(fr.Bytes())
 			bufPool.Put(fr)
+		case <-keepalive.C:
+			fmt.Printf("Writing: %# 02x\n", keepaliveFrame)
+			_, c.err = c.net.Write(keepaliveFrame)
 		}
 	}
 }
@@ -477,6 +553,10 @@ func (c *Conn) rxOpen() stateFunc {
 	}
 
 	fmt.Printf("Rx Open: %#v\n", o)
+
+	if o.IdleTimeout.Duration > 0 {
+		c.idleTimeout = o.IdleTimeout.Duration
+	}
 
 	if o.MaxFrameSize < c.maxFrameSize {
 		c.maxFrameSize = o.MaxFrameSize
