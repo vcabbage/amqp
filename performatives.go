@@ -108,7 +108,7 @@ func (f *Fields) UnmarshalBinary(r byteReader) error {
 	pairs := mr.count / 2
 
 	m := make(Fields, pairs)
-	for i := 0; i < pairs; i += 2 {
+	for i := 0; i < pairs; i++ {
 		var (
 			key   Symbol
 			value interface{}
@@ -366,7 +366,7 @@ func (u *Unsettled) UnmarshalBinary(r byteReader) error {
 	pairs := mr.count / 2
 
 	m := make(Unsettled, pairs)
-	for i := 0; i < pairs; i += 2 {
+	for i := 0; i < pairs; i++ {
 		var (
 			key   string
 			value DeliveryState

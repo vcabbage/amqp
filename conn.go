@@ -123,6 +123,7 @@ type Session struct {
 	rx            chan *frame
 
 	newLink chan *link
+	delLink chan *link
 }
 
 type frame struct {
@@ -178,10 +179,6 @@ func (s *Session) begin() error {
 	return nil
 }
 
-type Receiver struct {
-	link *link
-}
-
 type link struct {
 	handle     uint32
 	sourceAddr string
@@ -211,6 +208,13 @@ func LinkCredit(credit uint32) LinkOption {
 		l.linkCredit = credit
 		return nil
 	}
+}
+
+type Receiver struct {
+	link    *link
+	session *Session
+
+	buf *bytes.Buffer
 }
 
 func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
@@ -275,14 +279,39 @@ func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
 	}
 	s.conn.txFrame <- wr
 
-	fr = <-link.rx
-	transfer := fr.(*Transfer)
-	fmt.Printf("Flow Resp: %+v\n", transfer)
+	r := &Receiver{
+		link:    link,
+		session: s,
+		buf:     bufPool.New().(*bytes.Buffer),
+	}
+	r.buf.Reset()
 
-	fmt.Println(string(transfer.Payload))
-
-	r := &Receiver{link: link}
 	return r, nil
+}
+
+func (r *Receiver) Receive() (*Message, error) {
+	r.buf.Reset()
+	for {
+		fr := <-r.link.rx
+		transfer := fr.(*Transfer)
+		fmt.Printf("Transfer frame: %+v\n", transfer)
+		r.buf.Write(transfer.Payload)
+		if !transfer.More {
+			break
+		}
+	}
+
+	var msg Message
+	err := Unmarshal(r.buf, &msg)
+
+	return &msg, err
+}
+
+func (r *Receiver) Close() error {
+	bufPool.Put(r.buf)
+	r.buf = nil
+	r.session.delLink <- r.link
+	return nil
 }
 
 func (c *Conn) Session() (*Session, error) {
@@ -298,6 +327,7 @@ func (c *Conn) Session() (*Session, error) {
 	}
 
 	s.newLink = make(chan *link)
+	s.delLink = make(chan *link)
 
 	go s.startMux()
 
@@ -314,6 +344,9 @@ func (s *Session) startMux() {
 			links[nextLink.handle] = nextLink
 			// TODO: handle max session/wrapping
 			nextLink = newLink(nextLink.handle + 1)
+		case link := <-s.delLink:
+			fmt.Println("Got link deletion request")
+			delete(links, link.handle)
 		case fr := <-s.rx:
 			go func() {
 				pType, err := preformativeType(fr.payload)

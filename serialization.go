@@ -129,6 +129,15 @@ func Unmarshal(r byteReader, i interface{}) error {
 			return err
 		}
 		*t = b
+	case *time.Time:
+		ts, err := readTimestamp(r)
+		if err == errNull {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		*t = ts
 	case *interface{}:
 		v, err := readAny(r)
 		if err != nil {
@@ -163,7 +172,7 @@ func unmarshalComposite(r byteReader, typ Type, fields ...interface{}) error {
 	}
 
 	if t != typ {
-		return fmt.Errorf("invalid header %#0x for %#0x", t, typ)
+		return errors.Errorf("invalid header %#0x for %#0x", t, typ)
 	}
 
 	for i := 0; i < numFields; i++ {
@@ -173,6 +182,30 @@ func unmarshalComposite(r byteReader, typ Type, fields ...interface{}) error {
 		}
 	}
 	return nil
+}
+
+func readCompositeHeader(r byteReader) (_ Type, fields int, _ error) {
+	byt, err := r.ReadByte()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	if byt == Null {
+		return 0, 0, errNull
+	}
+
+	if byt != 0 {
+		return 0, 0, errors.Errorf("invalid composite header %0x", byt)
+	}
+
+	v, err := readInt(r)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	fields, _, err = readSlice(r)
+
+	return Type(v), fields, err
 }
 
 type field struct {
@@ -486,7 +519,7 @@ func readVariableType(r byteReader, t byte) ([]byte, error) {
 		}
 		buf = make([]byte, int(n))
 	default:
-		return nil, fmt.Errorf("type code %#00x is not a recognized variable length type", t)
+		return nil, errors.Errorf("type code %#00x is not a recognized variable length type", t)
 	}
 	_, err := io.ReadFull(r, buf)
 	return buf, err
@@ -526,7 +559,7 @@ func readSlice(r byteReader) (elements int, length int, _ error) {
 		}
 		return int(elems), int(l), nil
 	default:
-		return 0, 0, fmt.Errorf("type code %x is not a recognized list type", b)
+		return 0, 0, errors.Errorf("type code %x is not a recognized list type", b)
 	}
 }
 
@@ -552,17 +585,35 @@ func readAny(r byteReader) (interface{}, error) {
 		return readUint(r)
 	case Byte, Short, Int, Smallint, Long, Smalllong:
 		return readInt(r)
-	case Float, Double, Decimal32, Decimal64, Decimal128, Char, Timestamp, UUID,
+	case Float, Double, Decimal32, Decimal64, Decimal128, Char, UUID,
 		List0, List8, List32, Map8, Map32, Array8, Array32:
 		return nil, errors.Errorf("%0x not implemented", b)
 	case Vbin8, Vbin32:
 		return readBinary(r)
 	case Str8, Str32, Sym8, Sym32:
 		return readString(r)
+	case Timestamp:
+		return readTimestamp(r)
 	default:
 		return nil, errors.Errorf("unknown type %0x", b)
 	}
+}
 
+func readTimestamp(r byteReader) (time.Time, error) {
+	typ, err := r.ReadByte()
+	if err != nil {
+		return time.Time{}, err
+	}
+	if typ == Null {
+		return time.Time{}, errNull
+	}
+	if typ != Timestamp {
+		return time.Time{}, errors.Errorf("invaild type for timestamp %0x", typ)
+	}
+	var n uint64
+	err = binary.Read(r, binary.BigEndian, &n)
+	rem := n % 1000
+	return time.Unix(int64(n)/1000, int64(rem)*1000000).UTC(), err
 }
 
 // Type codes
@@ -666,7 +717,7 @@ func readInt(r byteReader) (value int, _ error) {
 		err := binary.Read(r, binary.BigEndian, &n)
 		return int(n), err
 	default:
-		return 0, fmt.Errorf("type code %x is not a recognized number type", b)
+		return 0, errors.Errorf("type code %x is not a recognized number type", b)
 	}
 }
 
@@ -724,32 +775,8 @@ func readUint(r byteReader) (value uint64, _ error) {
 		return n, err
 
 	default:
-		return 0, fmt.Errorf("type code %x is not a recognized number type", b)
+		return 0, errors.Errorf("type code %x is not a recognized number type", b)
 	}
-}
-
-func readCompositeHeader(r byteReader) (_ Type, fields int, _ error) {
-	byt, err := r.ReadByte()
-	if err != nil {
-		return 0, 0, err
-	}
-
-	if byt == Null {
-		return 0, 0, errNull
-	}
-
-	if byt != 0 {
-		return 0, 0, errors.New("invalid composite header")
-	}
-
-	v, err := readInt(r)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	fields, _, err = readSlice(r)
-
-	return Type(v), fields, err
 }
 
 type Symbol string
