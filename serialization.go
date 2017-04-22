@@ -216,7 +216,7 @@ type field struct {
 func marshalComposite(code Type, fields ...field) ([]byte, error) {
 	var (
 		rawFields  = make([][]byte, len(fields))
-		lastSetIdx int
+		lastSetIdx = -1
 		err        error
 	)
 

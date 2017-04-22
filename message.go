@@ -28,6 +28,9 @@ type Message struct {
 	ApplicationProperties Map    // TODO: implement custom type with validation
 	ApplicationData       []byte // TODO: this could be amqp-sequence or amqp-value rather than data
 	Footer                Map    // TODO: implement custom type with validation
+
+	r          *Receiver
+	deliveryID uint32
 }
 
 type Map map[string]interface{}
@@ -257,5 +260,158 @@ func (p *Properties) UnmarshalBinary(r byteReader) error {
 		&p.GroupID,
 		&p.GroupSequence,
 		&p.ReplyToGroupID,
+	)
+}
+
+const (
+	TypeStateReceived = 0x23
+	TypeStateAccepted = 0x24
+	TypeStateRejected = 0x25
+	TypeStateReleased = 0x26
+	TypeStateModified = 0x27
+)
+
+/*
+<type name="received" class="composite" source="list" provides="delivery-state">
+    <descriptor name="amqp:received:list" code="0x00000000:0x00000023"/>
+    <field name="section-number" type="uint" mandatory="true"/>
+    <field name="section-offset" type="ulong" mandatory="true"/>
+</type>
+*/
+type StateReceived struct {
+	// When sent by the sender this indicates the first section of the message
+	// (with section-number 0 being the first section) for which data can be resent.
+	// Data from sections prior to the given section cannot be retransmitted for
+	// this delivery.
+	//
+	// When sent by the receiver this indicates the first section of the message
+	// for which all data might not yet have been received.
+	SectionNumber uint32
+
+	// When sent by the sender this indicates the first byte of the encoded section
+	// data of the section given by section-number for which data can be resent
+	// (with section-offset 0 being the first byte). Bytes from the same section
+	// prior to the given offset section cannot be retransmitted for this delivery.
+	//
+	// When sent by the receiver this indicates the first byte of the given section
+	// which has not yet been received. Note that if a receiver has received all of
+	// section number X (which contains N bytes of data), but none of section number
+	// X + 1, then it can indicate this by sending either Received(section-number=X,
+	// section-offset=N) or Received(section-number=X+1, section-offset=0). The state
+	// Received(section-number=0, section-offset=0) indicates that no message data
+	// at all has been transferred.
+	SectionOffset uint64
+}
+
+func (sr *StateReceived) MarshalBinary() ([]byte, error) {
+	return marshalComposite(TypeStateReceived, []field{
+		{value: sr.SectionNumber, omit: false},
+		{value: sr.SectionOffset, omit: false},
+	}...)
+}
+
+func (sr *StateReceived) UnmarshaleBinary(r byteReader) error {
+	return unmarshalComposite(r, TypeStateReceived,
+		&sr.SectionNumber,
+		&sr.SectionOffset,
+	)
+}
+
+/*
+<type name="accepted" class="composite" source="list" provides="delivery-state, outcome">
+    <descriptor name="amqp:accepted:list" code="0x00000000:0x00000024"/>
+</type>
+*/
+type StateAccepted struct{}
+
+func (sa *StateAccepted) MarshalBinary() ([]byte, error) {
+	return marshalComposite(TypeStateAccepted)
+}
+
+func (sa *StateReceived) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, TypeStateAccepted)
+}
+
+/*
+<type name="rejected" class="composite" source="list" provides="delivery-state, outcome">
+    <descriptor name="amqp:rejected:list" code="0x00000000:0x00000025"/>
+    <field name="error" type="error"/>
+</type>
+*/
+type StateRejected struct {
+	Error interface{}
+}
+
+func (sr *StateRejected) MarshalBinary() ([]byte, error) {
+	return marshalComposite(TypeStateRejected,
+		field{value: sr.Error, omit: sr.Error == nil},
+	)
+}
+
+func (sr *StateRejected) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, TypeStateRejected,
+		&sr.Error,
+	)
+}
+
+/*
+<type name="released" class="composite" source="list" provides="delivery-state, outcome">
+    <descriptor name="amqp:released:list" code="0x00000000:0x00000026"/>
+</type>
+*/
+type StateReleased struct{}
+
+func (sr *StateReleased) MarshalBinary() ([]byte, error) {
+	return marshalComposite(TypeStateReleased)
+}
+
+func (sr *StateReleased) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, TypeStateReleased)
+}
+
+/*
+<type name="modified" class="composite" source="list" provides="delivery-state, outcome">
+    <descriptor name="amqp:modified:list" code="0x00000000:0x00000027"/>
+    <field name="delivery-failed" type="boolean"/>
+    <field name="undeliverable-here" type="boolean"/>
+    <field name="message-annotations" type="fields"/>
+</type>
+*/
+type StateModified struct {
+	// count the transfer as an unsuccessful delivery attempt
+	//
+	// If the delivery-failed flag is set, any messages modified
+	// MUST have their delivery-count incremented.
+	DeliveryFailed bool
+
+	// prevent redelivery
+	//
+	// If the undeliverable-here is set, then any messages released MUST NOT
+	// be redelivered to the modifying link endpoint.
+	UndeliverableHere bool
+
+	// message attributes
+	// Map containing attributes to combine with the existing message-annotations
+	// held in the message's header section. Where the existing message-annotations
+	// of the message contain an entry with the same key as an entry in this field,
+	// the value in this field associated with that key replaces the one in the
+	// existing headers; where the existing message-annotations has no such value,
+	// the value in this map is added.
+	MessageAnnotations Fields
+}
+
+func (sm *StateModified) MarshalBinary() ([]byte, error) {
+	return marshalComposite(TypeStateModified, []field{
+		{value: sm.DeliveryFailed, omit: !sm.DeliveryFailed},
+		{value: sm.UndeliverableHere, omit: !sm.UndeliverableHere},
+		{value: sm.MessageAnnotations, omit: sm.MessageAnnotations == nil},
+	}...)
+}
+
+func (sm *StateModified) UnmarshalBinary(r byteReader) error {
+	return unmarshalComposite(r, TypeStateModified,
+		&sm.DeliveryFailed,
+		&sm.UndeliverableHere,
+		&sm.MessageAnnotations,
 	)
 }

@@ -3,6 +3,7 @@ package amqp
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/url"
@@ -184,6 +185,9 @@ type link struct {
 	sourceAddr string
 	linkCredit uint32
 	rx         chan interface{}
+
+	creditUsed          uint32
+	senderDeliveryCount uint32
 }
 
 func newLink(handle uint32) *link {
@@ -227,6 +231,7 @@ func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
 			return nil, err
 		}
 	}
+	link.creditUsed = link.linkCredit
 
 	attach, err := Marshal(&Attach{
 		Name:   "ASHJDJKHJA-ASDHJ-ASDHGJH-ASDSAD78Y",
@@ -259,52 +264,114 @@ func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
 	fmt.Printf("Attach Source: %+v\n", resp.Source)
 	fmt.Printf("Attach Target: %+v\n", resp.Target)
 
-	flow, err := Marshal(&Flow{
-		IncomingWindow: 2147483647,
-		NextOutgoingID: 0,
-		OutgoingWindow: 0,
-		Handle:         &link.handle,
-		DeliveryCount:  &resp.InitialDeliveryCount,
-		LinkCredit:     &link.linkCredit,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	wr = bufPool.New().(*bytes.Buffer)
-	wr.Reset()
-	err = writeFrame(wr, FrameTypeAMQP, s.channel, flow)
-	if err != nil {
-		return nil, err
-	}
-	s.conn.txFrame <- wr
+	link.senderDeliveryCount = resp.InitialDeliveryCount
 
 	r := &Receiver{
 		link:    link,
 		session: s,
 		buf:     bufPool.New().(*bytes.Buffer),
 	}
-	r.buf.Reset()
 
 	return r, nil
 }
 
+func (r *Receiver) sendFlow() error {
+	newLinkCredit := r.link.linkCredit - (r.link.linkCredit - r.link.creditUsed)
+	r.link.senderDeliveryCount += r.link.creditUsed
+	flow, err := Marshal(&Flow{
+		IncomingWindow: 2147483647,
+		NextOutgoingID: 0,
+		OutgoingWindow: 0,
+		Handle:         &r.link.handle,
+		DeliveryCount:  &r.link.senderDeliveryCount,
+		LinkCredit:     &newLinkCredit,
+	})
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("WRITING FLOW: %+v\n", flow)
+
+	wr := bufPool.New().(*bytes.Buffer)
+	wr.Reset()
+	err = writeFrame(wr, FrameTypeAMQP, r.session.channel, flow)
+	if err != nil {
+		return err
+	}
+	r.session.conn.txFrame <- wr
+	r.link.creditUsed = 0
+	return nil
+}
+
+func (m *Message) sendDisposition(state interface{}) error {
+	disp, err := Marshal(&Disposition{
+		Role:    true,
+		First:   m.deliveryID,
+		Settled: true,
+		State:   state,
+	})
+	if err != nil {
+		return err
+	}
+
+	wr := bufPool.New().(*bytes.Buffer)
+	wr.Reset()
+	err = writeFrame(wr, FrameTypeAMQP, m.r.session.channel, disp)
+	if err != nil {
+		return err
+	}
+	m.r.session.conn.txFrame <- wr
+	return nil
+}
+
+// Accept notifies the server that the message has been
+// accepted and does not require redelivery.
+func (m *Message) Accept() error {
+	return m.sendDisposition(&StateAccepted{})
+}
+
+// Reject notifies the server that the message is invalid
+func (m *Message) Reject() error {
+	return m.sendDisposition(&StateRejected{})
+}
+
+func (m *Message) Release() error {
+	return m.sendDisposition(&StateReleased{})
+}
+
 func (r *Receiver) Receive() (*Message, error) {
 	r.buf.Reset()
+
+	msg := &Message{r: r}
+
+	first := true
 	for {
+		if r.link.creditUsed > r.link.linkCredit/2 {
+			if err := r.sendFlow(); err != nil {
+				return nil, err
+			}
+		}
+
 		fr := <-r.link.rx
 		transfer := fr.(*Transfer)
+		r.link.creditUsed++
 		fmt.Printf("Transfer frame: %+v\n", transfer)
+		if first && transfer.DeliveryID != nil {
+			msg.deliveryID = *transfer.DeliveryID
+			first = false
+		}
 		r.buf.Write(transfer.Payload)
 		if !transfer.More {
 			break
 		}
 	}
 
-	var msg Message
-	err := Unmarshal(r.buf, &msg)
+	err := Unmarshal(r.buf, msg)
+	if err != nil {
+		return msg, err
+	}
 
-	return &msg, err
+	return msg, err
 }
 
 func (r *Receiver) Close() error {
@@ -400,9 +467,11 @@ func (c *Conn) startMux() {
 	var buf bytes.Buffer
 	writeFrame(&buf, FrameTypeAMQP, 0, nil)
 	keepaliveFrame := buf.Bytes()
+	buf.Reset()
 
 	fmt.Println("Starting mux")
 
+outer:
 	for {
 		if c.err != nil {
 			panic(c.err) // TODO: graceful close
@@ -414,19 +483,40 @@ func (c *Conn) startMux() {
 			c.err = err
 
 		case rawFrame := <-c.rxFrame:
-			fmt.Println("Got rxFrame")
-			frameHeader, err := parseFrameHeader(rawFrame)
+			_, err := buf.Write(rawFrame)
 			if err != nil {
 				c.err = err
 				continue
 			}
+			fmt.Println("Got rxFrame")
+			for buf.Len() > 8 { // 8 = min size for header
+				frameHeader, err := parseFrameHeader(buf.Bytes())
+				if err != nil {
+					c.err = err
+					continue outer
+				}
 
-			ch, ok := sessions[frameHeader.channel]
-			if !ok {
-				fmt.Printf("unexpected frame header: %+v", frameHeader)
-				continue
+				ch, ok := sessions[frameHeader.channel]
+				if !ok {
+					c.err = errors.Errorf("unexpected frame header: %+v", frameHeader)
+					continue outer
+				}
+
+				fmt.Printf("%+v, %d\n\n", frameHeader, buf.Len())
+
+				if buf.Len() < int(frameHeader.size) {
+					continue outer
+				}
+
+				payload := make([]byte, frameHeader.size)
+				_, err = io.ReadFull(&buf, payload)
+				if err != nil {
+					c.err = err
+					continue outer
+				}
+
+				ch.rx <- &frame{header: frameHeader, payload: payload[8:]}
 			}
-			ch.rx <- &frame{header: frameHeader, payload: rawFrame[frameHeader.dataOffsetBytes():]}
 
 		case c.newSession <- nextSession:
 			fmt.Println("Got new session request")
