@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"net/url"
 	"time"
@@ -116,85 +115,60 @@ func (c *Conn) ChannelMax() int {
 	return int(c.channelMax)
 }
 
-type Session struct {
-	channel       uint16
-	remoteChannel uint16
-	conn          *Conn
-	err           error
-	rx            chan *frame
+func (c *Conn) Session() (*Session, error) {
+	s := <-c.newSession
+	if s.err != nil {
+		return nil, s.err
+	}
 
-	newLink chan *link
-	delLink chan *link
-}
-
-type frame struct {
-	header  frameHeader
-	payload []byte
-}
-
-func (s *Session) Close() {
-	// TODO: send end preformative
-	s.conn.delSession <- s
-}
-
-func (s *Session) begin() error {
-	begin, err := Marshal(&Begin{
+	err := s.txFrame(&Begin{
 		NextOutgoingID: 0,
 		IncomingWindow: 1,
 	})
-
 	if err != nil {
-		return err
+		s.Close()
+		return nil, err
 	}
 
-	wr := bufPool.New().(*bytes.Buffer)
-	wr.Reset()
-
-	err = writeFrame(wr, FrameTypeAMQP, s.channel, begin)
-	if err != nil {
-		return err
-	}
-
-	s.conn.txFrame <- wr
 	fr := <-s.rx
-
-	pType, err := preformativeType(fr.payload)
-	if err != nil {
-		return err
+	begin, ok := fr.preformative.(*Begin)
+	if !ok {
+		s.Close()
+		return nil, fmt.Errorf("unexpected begin response: %+v", fr)
 	}
 
-	if pType != PreformativeBegin {
-		return fmt.Errorf("unexpected begin response: %+v", fr)
-	}
-
-	var resp Begin
-	err = Unmarshal(bytes.NewReader(fr.payload), &resp)
-	if err != nil {
-		return err
-	}
-
-	fmt.Printf("Begin Resp: %+v", resp)
+	fmt.Printf("Begin Resp: %+v", begin)
 	// TODO: record negotiated settings
-	s.remoteChannel = fr.header.channel
+	s.remoteChannel = fr.channel
+	s.newLink = make(chan *link)
+	s.delLink = make(chan *link)
 
-	return nil
+	go s.startMux()
+
+	return s, nil
 }
 
 type link struct {
 	handle     uint32
 	sourceAddr string
 	linkCredit uint32
-	rx         chan interface{}
+	rx         chan Preformative
+	session    *Session
 
 	creditUsed          uint32
 	senderDeliveryCount uint32
 }
 
-func newLink(handle uint32) *link {
+func (l *link) close() {
+	l.session.delLink <- l
+}
+
+func newLink(s *Session, handle uint32) *link {
 	return &link{
 		handle:     handle,
 		linkCredit: 1,
-		rx:         make(chan interface{}),
+		rx:         make(chan Preformative),
+		session:    s,
 	}
 }
 
@@ -215,70 +189,15 @@ func LinkCredit(credit uint32) LinkOption {
 }
 
 type Receiver struct {
-	link    *link
-	session *Session
+	link *link
 
 	buf *bytes.Buffer
-}
-
-func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
-	link := <-s.newLink
-
-	for _, o := range opts {
-		err := o(link)
-		if err != nil {
-			// TODO: release link
-			return nil, err
-		}
-	}
-	link.creditUsed = link.linkCredit
-
-	attach, err := Marshal(&Attach{
-		Name:   "ASHJDJKHJA-ASDHJ-ASDHGJH-ASDSAD78Y",
-		Handle: link.handle,
-		Role:   true,
-		Source: &Source{
-			Address: link.sourceAddr,
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	wr := bufPool.New().(*bytes.Buffer)
-	wr.Reset()
-	err = writeFrame(wr, FrameTypeAMQP, s.channel, attach)
-	if err != nil {
-		return nil, err
-	}
-	s.conn.txFrame <- wr
-
-	fr := <-link.rx
-
-	resp, ok := fr.(*Attach)
-	if !ok {
-		return nil, fmt.Errorf("unexpected attach response: %+v", fr)
-	}
-
-	fmt.Printf("Attach Resp: %+v\n", resp)
-	fmt.Printf("Attach Source: %+v\n", resp.Source)
-	fmt.Printf("Attach Target: %+v\n", resp.Target)
-
-	link.senderDeliveryCount = resp.InitialDeliveryCount
-
-	r := &Receiver{
-		link:    link,
-		session: s,
-		buf:     bufPool.New().(*bytes.Buffer),
-	}
-
-	return r, nil
 }
 
 func (r *Receiver) sendFlow() error {
 	newLinkCredit := r.link.linkCredit - (r.link.linkCredit - r.link.creditUsed)
 	r.link.senderDeliveryCount += r.link.creditUsed
-	flow, err := Marshal(&Flow{
+	err := r.link.session.txFrame(&Flow{
 		IncomingWindow: 2147483647,
 		NextOutgoingID: 0,
 		OutgoingWindow: 0,
@@ -290,59 +209,14 @@ func (r *Receiver) sendFlow() error {
 		return err
 	}
 
-	fmt.Printf("WRITING FLOW: %+v\n", flow)
-
-	wr := bufPool.New().(*bytes.Buffer)
-	wr.Reset()
-	err = writeFrame(wr, FrameTypeAMQP, r.session.channel, flow)
-	if err != nil {
-		return err
-	}
-	r.session.conn.txFrame <- wr
 	r.link.creditUsed = 0
 	return nil
-}
-
-func (m *Message) sendDisposition(state interface{}) error {
-	disp, err := Marshal(&Disposition{
-		Role:    true,
-		First:   m.deliveryID,
-		Settled: true,
-		State:   state,
-	})
-	if err != nil {
-		return err
-	}
-
-	wr := bufPool.New().(*bytes.Buffer)
-	wr.Reset()
-	err = writeFrame(wr, FrameTypeAMQP, m.r.session.channel, disp)
-	if err != nil {
-		return err
-	}
-	m.r.session.conn.txFrame <- wr
-	return nil
-}
-
-// Accept notifies the server that the message has been
-// accepted and does not require redelivery.
-func (m *Message) Accept() error {
-	return m.sendDisposition(&StateAccepted{})
-}
-
-// Reject notifies the server that the message is invalid
-func (m *Message) Reject() error {
-	return m.sendDisposition(&StateRejected{})
-}
-
-func (m *Message) Release() error {
-	return m.sendDisposition(&StateReleased{})
 }
 
 func (r *Receiver) Receive() (*Message, error) {
 	r.buf.Reset()
 
-	msg := &Message{r: r}
+	msg := &Message{link: r.link}
 
 	first := true
 	for {
@@ -355,11 +229,12 @@ func (r *Receiver) Receive() (*Message, error) {
 		fr := <-r.link.rx
 		transfer := fr.(*Transfer)
 		r.link.creditUsed++
-		fmt.Printf("Transfer frame: %+v\n", transfer)
+
 		if first && transfer.DeliveryID != nil {
 			msg.deliveryID = *transfer.DeliveryID
 			first = false
 		}
+
 		r.buf.Write(transfer.Payload)
 		if !transfer.More {
 			break
@@ -367,98 +242,59 @@ func (r *Receiver) Receive() (*Message, error) {
 	}
 
 	err := Unmarshal(r.buf, msg)
-	if err != nil {
-		return msg, err
-	}
-
 	return msg, err
 }
 
 func (r *Receiver) Close() error {
+	r.link.close()
 	bufPool.Put(r.buf)
 	r.buf = nil
-	r.session.delLink <- r.link
 	return nil
 }
 
-func (c *Conn) Session() (*Session, error) {
-	s := <-c.newSession
-	if s.err != nil {
-		return nil, s.err
-	}
-
-	err := s.begin()
+func parseFrame(payload []byte) (Preformative, error) {
+	pType, err := preformativeType(payload)
 	if err != nil {
-		s.Close()
 		return nil, err
 	}
 
-	s.newLink = make(chan *link)
-	s.delLink = make(chan *link)
+	var t Preformative
+	switch pType {
+	case PreformativeOpen:
+		t = &Open{}
+	case PreformativeBegin:
+		t = &Begin{}
+	case PreformativeAttach:
+		t = &Attach{}
+	case PreformativeFlow:
+		t = &Flow{}
+	case PreformativeTransfer:
+		t = &Transfer{}
+	case PreformativeDisposition:
+		t = &Disposition{}
+	case PreformativeDetach:
+		t = &Detach{}
+	case PreformativeEnd:
+		t = &End{}
+	case PreformativeClose:
+		t = &Close{}
+	default:
+		return nil, errors.Errorf("unknown preformative type %0x", pType)
+	}
 
-	go s.startMux()
-
-	return s, nil
+	err = Unmarshal(bytes.NewReader(payload), t)
+	return t, err
 }
 
-func (s *Session) startMux() {
-	links := make(map[uint32]*link)
-	nextLink := newLink(0)
-	for {
-		select {
-		case s.newLink <- nextLink:
-			fmt.Println("Got new link request")
-			links[nextLink.handle] = nextLink
-			// TODO: handle max session/wrapping
-			nextLink = newLink(nextLink.handle + 1)
-		case link := <-s.delLink:
-			fmt.Println("Got link deletion request")
-			delete(links, link.handle)
-		case fr := <-s.rx:
-			go func() {
-				pType, err := preformativeType(fr.payload)
-				if err != nil {
-					log.Println("error:", err)
-					return
-				}
-
-				switch pType {
-				case PreformativeAttach:
-					var attach Attach
-					err = Unmarshal(bytes.NewReader(fr.payload), &attach)
-					if err != nil {
-						log.Println("error:", err)
-						return
-					}
-					link, ok := links[attach.Handle]
-					if ok {
-						link.rx <- &attach
-					}
-					// TODO: error
-				case PreformativeTransfer:
-					var transfer Transfer
-					err = Unmarshal(bytes.NewReader(fr.payload), &transfer)
-					if err != nil {
-						log.Println("error:", err)
-						return
-					}
-					link, ok := links[transfer.Handle]
-					if ok {
-						link.rx <- &transfer
-					}
-				default:
-					// TODO: error
-					fmt.Printf("frame: %#v\n", fr)
-				}
-			}()
-		}
-	}
+type frame struct {
+	channel      uint16
+	preformative Preformative
 }
 
 func (c *Conn) startMux() {
 	go c.connReader()
 
-	nextSession := &Session{conn: c, rx: make(chan *frame)}
+	nextSession := &Session{conn: c, rx: make(chan frame)}
 
 	// map channel to session
 	sessions := make(map[uint16]*Session)
@@ -483,12 +319,13 @@ outer:
 			c.err = err
 
 		case rawFrame := <-c.rxFrame:
+			fmt.Println("Got rxFrame")
 			_, err := buf.Write(rawFrame)
 			if err != nil {
 				c.err = err
 				continue
 			}
-			fmt.Println("Got rxFrame")
+
 			for buf.Len() > 8 { // 8 = min size for header
 				frameHeader, err := parseFrameHeader(buf.Bytes())
 				if err != nil {
@@ -502,8 +339,6 @@ outer:
 					continue outer
 				}
 
-				fmt.Printf("%+v, %d\n\n", frameHeader, buf.Len())
-
 				if buf.Len() < int(frameHeader.size) {
 					continue outer
 				}
@@ -515,14 +350,20 @@ outer:
 					continue outer
 				}
 
-				ch.rx <- &frame{header: frameHeader, payload: payload[8:]}
+				preformative, err := parseFrame(payload[8:])
+				if err != nil {
+					c.err = err
+					continue outer
+				}
+
+				ch.rx <- frame{channel: frameHeader.channel, preformative: preformative}
 			}
 
 		case c.newSession <- nextSession:
 			fmt.Println("Got new session request")
 			sessions[nextSession.channel] = nextSession
 			// TODO: handle max session/wrapping
-			nextSession = &Session{conn: c, channel: nextSession.channel + 1, rx: make(chan *frame)}
+			nextSession = &Session{conn: c, channel: nextSession.channel + 1, rx: make(chan frame)}
 
 		case s := <-c.delSession:
 			fmt.Println("Got delete session request")
@@ -532,6 +373,7 @@ outer:
 			fmt.Printf("Writing: %# 02x\n", fr)
 			_, c.err = c.net.Write(fr.Bytes())
 			bufPool.Put(fr)
+
 		case <-keepalive.C:
 			fmt.Printf("Writing: %# 02x\n", keepaliveFrame)
 			_, c.err = c.net.Write(keepaliveFrame)
@@ -622,29 +464,33 @@ func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
 	}
 }
 
+func (c *Conn) txPreformative(p Preformative) error {
+	data, err := Marshal(p)
+	if err != nil {
+		return err
+	}
+
+	wr := bufPool.New().(*bytes.Buffer)
+	defer bufPool.Put(wr)
+	wr.Reset()
+
+	err = writeFrame(wr, FrameTypeAMQP, 0, data)
+	if err != nil {
+		return err
+	}
+
+	_, err = c.net.Write(wr.Bytes())
+	return err
+}
+
 func (c *Conn) txOpen() stateFunc {
-	open, err := Marshal(&Open{
+	c.err = c.txPreformative(&Open{
 		ContainerID:  "gopher",
 		Hostname:     c.hostname,
 		MaxFrameSize: c.maxFrameSize,
 		ChannelMax:   c.channelMax,
 	})
-	if err != nil {
-		c.err = err
-		return nil
-	}
-
-	wr := bufPool.New().(*bytes.Buffer)
-	wr.Reset()
-	defer bufPool.Put(wr)
-
-	writeFrame(wr, FrameTypeAMQP, 0, open)
-
-	fmt.Printf("Writing: %# 02x\n", wr.Bytes())
-
-	_, err = c.net.Write(wr.Bytes())
-	if err != nil {
-		c.err = errors.Wrapf(err, "writing")
+	if c.err != nil {
 		return nil
 	}
 

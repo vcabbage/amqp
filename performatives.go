@@ -5,10 +5,14 @@ import (
 	"io/ioutil"
 )
 
+type Preformative interface {
+	link() (handle uint32, ok bool)
+}
+
 // Preformative Types
 const (
-	PerformativeEmpty       = 0xff // used to indicate empty payload, not part of spec
-	PerformativeOpen        = 0x10
+	PreformativeEmpty       = 0xff // used to indicate empty payload, not part of spec
+	PreformativeOpen        = 0x10
 	PreformativeBegin       = 0x11
 	PreformativeAttach      = 0x12
 	PreformativeFlow        = 0x13
@@ -25,7 +29,7 @@ const (
 
 func preformativeType(payload []byte) (uint8, error) {
 	if len(payload) == 0 {
-		return PerformativeEmpty, nil
+		return PreformativeEmpty, nil
 	}
 
 	if len(payload) < 3 || payload[0] != 0 || payload[1] != Smallulong {
@@ -63,6 +67,10 @@ type Open struct {
 	Properties          Fields // TODO: implement marshal/unmarshal
 }
 
+func (o *Open) link() (uint32, bool) {
+	return 0, false
+}
+
 func (o *Open) MarshalBinary() ([]byte, error) {
 	fields := []field{
 		{value: o.ContainerID, omit: false},
@@ -76,11 +84,11 @@ func (o *Open) MarshalBinary() ([]byte, error) {
 		{value: o.DesiredCapabilities, omit: len(o.DesiredCapabilities) == 0},
 		{value: o.Properties, omit: len(o.Properties) == 0},
 	}
-	return marshalComposite(PerformativeOpen, fields...)
+	return marshalComposite(PreformativeOpen, fields...)
 }
 
 func (o *Open) UnmarshalBinary(r byteReader) error {
-	return unmarshalComposite(r, PerformativeOpen,
+	return unmarshalComposite(r, PreformativeOpen,
 		&o.ContainerID,
 		&o.Hostname,
 		&o.MaxFrameSize,
@@ -172,6 +180,10 @@ type Begin struct {
 	// session properties
 	// http://www.amqp.org/specification/1.0/session-properties
 	Properties Fields
+}
+
+func (b *Begin) link() (uint32, bool) {
+	return 0, false
 }
 
 func (b *Begin) MarshalBinary() ([]byte, error) {
@@ -348,6 +360,10 @@ type Attach struct {
 	// link properties
 	// http://www.amqp.org/specification/1.0/link-properties
 	Properties Fields
+}
+
+func (a *Attach) link() (uint32, bool) {
+	return a.Handle, true
 }
 
 type DeliveryState interface{}
@@ -824,6 +840,13 @@ type Flow struct {
 	Properties Fields
 }
 
+func (f *Flow) link() (uint32, bool) {
+	if f.Handle == nil {
+		return 0, false
+	}
+	return *f.Handle, true
+}
+
 func (f *Flow) MarshalBinary() ([]byte, error) {
 	fields := []field{
 		{value: f.NextIncomingID, omit: f.NextIncomingID == nil},
@@ -847,10 +870,10 @@ func (f *Flow) UnmarshalBinary(r byteReader) error {
 		&f.IncomingWindow,
 		&f.NextOutgoingID,
 		&f.OutgoingWindow,
-		f.Handle,
-		f.DeliveryCount,
-		f.LinkCredit,
-		f.Available,
+		&f.Handle,
+		&f.DeliveryCount,
+		&f.LinkCredit,
+		&f.Available,
 		&f.Drain,
 		&f.Echo,
 		&f.Properties,
@@ -1011,6 +1034,10 @@ type Transfer struct {
 	Payload []byte
 }
 
+func (t *Transfer) link() (uint32, bool) {
+	return t.Handle, true
+}
+
 func (t *Transfer) MarshalBinary() ([]byte, error) {
 	fields := []field{
 		{value: t.DeliveryID, omit: t.DeliveryID == nil},
@@ -1098,6 +1125,10 @@ type Disposition struct {
 	Batchable bool
 }
 
+func (*Disposition) link() (uint32, bool) {
+	return 0, false
+}
+
 func (d *Disposition) MarshalBinary() ([]byte, error) {
 	fields := []field{
 		{value: d.Role, omit: false},
@@ -1114,7 +1145,7 @@ func (d *Disposition) UnmarshalBinary(r byteReader) error {
 	return unmarshalComposite(r, PreformativeDisposition,
 		&d.Role,
 		&d.First,
-		d.Last,
+		&d.Last,
 		&d.Settled,
 		&d.State,
 		&d.Batchable,
@@ -1143,6 +1174,10 @@ type Detach struct {
 	Error *Error
 }
 
+func (d *Detach) link() (uint32, bool) {
+	return d.Handle, true
+}
+
 func (d *Detach) MarshalBinary() ([]byte, error) {
 	fields := []field{
 		{value: d.Handle, omit: false},
@@ -1156,7 +1191,7 @@ func (d *Detach) UnmarshalBinary(r byteReader) error {
 	return unmarshalComposite(r, PreformativeDetach,
 		&d.Handle,
 		&d.Closed,
-		d.Error,
+		&d.Error,
 	)
 }
 
@@ -1215,6 +1250,10 @@ type End struct {
 	Error *Error
 }
 
+func (*End) link() (uint32, bool) {
+	return 0, false
+}
+
 func (e *End) MarshalBinary() ([]byte, error) {
 	fields := []field{
 		{value: e.Error, omit: e.Error == nil},
@@ -1240,6 +1279,10 @@ type Close struct {
 	// If set, this field indicates that the session is being closed due to an error
 	// condition. The value of the field SHOULD contain details on the cause of the error.
 	Error *Error
+}
+
+func (*Close) link() (uint32, bool) {
+	return 0, false
 }
 
 func (c *Close) MarshalBinary() ([]byte, error) {

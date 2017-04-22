@@ -29,8 +29,32 @@ type Message struct {
 	ApplicationData       []byte // TODO: this could be amqp-sequence or amqp-value rather than data
 	Footer                Map    // TODO: implement custom type with validation
 
-	r          *Receiver
+	link       *link
 	deliveryID uint32
+}
+
+func (m *Message) sendDisposition(state interface{}) error {
+	return m.link.session.txFrame(&Disposition{
+		Role:    true,
+		First:   m.deliveryID,
+		Settled: true,
+		State:   state,
+	})
+}
+
+// Accept notifies the server that the message has been
+// accepted and does not require redelivery.
+func (m *Message) Accept() error {
+	return m.sendDisposition(&StateAccepted{})
+}
+
+// Reject notifies the server that the message is invalid
+func (m *Message) Reject() error {
+	return m.sendDisposition(&StateRejected{})
+}
+
+func (m *Message) Release() error {
+	return m.sendDisposition(&StateReleased{})
 }
 
 type Map map[string]interface{}
