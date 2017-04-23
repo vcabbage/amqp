@@ -30,7 +30,7 @@ type link struct {
 
 func (l *link) close() {
 	if !l.closed {
-		l.session.txFrame(&Detach{
+		l.session.txFrame(&performativeDetach{
 			Handle: l.handle,
 			Closed: true,
 		})
@@ -40,7 +40,7 @@ func (l *link) close() {
 			for {
 				// TODO: timeout
 				fr := <-l.rx
-				if fr, ok := fr.(*Detach); ok && fr.Closed {
+				if fr, ok := fr.(*performativeDetach); ok && fr.Closed {
 					break
 				}
 			}
@@ -84,7 +84,7 @@ type Receiver struct {
 func (r *Receiver) sendFlow() {
 	newLinkCredit := r.link.linkCredit - (r.link.linkCredit - r.link.creditUsed)
 	r.link.senderDeliveryCount += r.link.creditUsed
-	r.link.session.txFrame(&Flow{
+	r.link.session.txFrame(&flow{
 		IncomingWindow: 2147483647,
 		NextOutgoingID: 0,
 		OutgoingWindow: 0,
@@ -109,7 +109,7 @@ outer:
 
 		fr := <-r.link.rx
 		switch fr := fr.(type) {
-		case *Transfer:
+		case *performativeTransfer:
 			r.link.creditUsed++
 
 			if first && fr.DeliveryID != nil {
@@ -121,7 +121,7 @@ outer:
 			if !fr.More {
 				break outer
 			}
-		case *Detach:
+		case *performativeDetach:
 			if !fr.Closed {
 				log.Panicf("non-closing detach not supported: %+v", fr)
 			}
@@ -133,7 +133,7 @@ outer:
 		}
 	}
 
-	err := Unmarshal(r.buf, msg)
+	err := unmarshal(r.buf, msg)
 	return msg, err
 }
 

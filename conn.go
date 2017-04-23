@@ -151,19 +151,19 @@ func (c *Conn) ChannelMax() int {
 	return int(c.channelMax)
 }
 
-func (c *Conn) Session() (*Session, error) {
+func (c *Conn) NewSession() (*Session, error) {
 	s := <-c.newSession
 	if s.err != nil {
 		return nil, s.err
 	}
 
-	s.txFrame(&Begin{
+	s.txFrame(&performativeBegin{
 		NextOutgoingID: 0,
 		IncomingWindow: 1,
 	})
 
 	fr := <-s.rx
-	begin, ok := fr.preformative.(*Begin)
+	begin, ok := fr.preformative.(*performativeBegin)
 	if !ok {
 		s.Close()
 		return nil, fmt.Errorf("unexpected begin response: %+v", fr)
@@ -189,28 +189,28 @@ func parseFrame(payload []byte) (Preformative, error) {
 	var t Preformative
 	switch pType {
 	case PreformativeOpen:
-		t = &Open{}
+		t = &performativeOpen{}
 	case PreformativeBegin:
-		t = &Begin{}
+		t = &performativeBegin{}
 	case PreformativeAttach:
-		t = &Attach{}
+		t = &performativeAttach{}
 	case PreformativeFlow:
-		t = &Flow{}
+		t = &flow{}
 	case PreformativeTransfer:
-		t = &Transfer{}
+		t = &performativeTransfer{}
 	case PreformativeDisposition:
-		t = &Disposition{}
+		t = &performativeDisposition{}
 	case PreformativeDetach:
-		t = &Detach{}
+		t = &performativeDetach{}
 	case PreformativeEnd:
-		t = &End{}
+		t = &performativeEnd{}
 	case PreformativeClose:
-		t = &Close{}
+		t = &performativeClose{}
 	default:
 		return nil, errors.Errorf("unknown preformative type %0x", pType)
 	}
 
-	err = Unmarshal(bytes.NewReader(payload), t)
+	err = unmarshal(bytes.NewReader(payload), t)
 	return t, err
 }
 
@@ -404,7 +404,7 @@ func (c *Conn) protoTLS() stateFunc {
 }
 
 func (c *Conn) txPreformative(fr frame) error {
-	data, err := Marshal(fr.preformative)
+	data, err := marshal(fr.preformative)
 	if err != nil {
 		return err
 	}
@@ -424,7 +424,7 @@ func (c *Conn) txPreformative(fr frame) error {
 
 func (c *Conn) txOpen() stateFunc {
 	c.err = c.txPreformative(frame{
-		preformative: &Open{
+		preformative: &performativeOpen{
 			ContainerID:  "gopher",
 			Hostname:     c.hostname,
 			MaxFrameSize: c.maxFrameSize,
@@ -456,8 +456,8 @@ func (c *Conn) rxOpen() stateFunc {
 		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
 	}
 
-	var o Open
-	err = Unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &o)
+	var o performativeOpen
+	err = unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &o)
 	if err != nil {
 		c.err = errors.Wrapf(err, "unmarshaling")
 		return nil
@@ -508,8 +508,8 @@ func (c *Conn) protoSASL() stateFunc {
 		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
 	}
 
-	var sm SASLMechanisms
-	err = Unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &sm)
+	var sm saslMechanisms
+	err = unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &sm)
 	if err != nil {
 		c.err = err
 		return nil
@@ -543,8 +543,8 @@ func (c *Conn) saslOutcome() stateFunc {
 		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
 	}
 
-	var so SASLOutcome
-	c.err = Unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &so)
+	var so saslOutcome
+	c.err = unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &so)
 	if c.err != nil {
 		return nil
 	}

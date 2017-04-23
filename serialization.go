@@ -2,7 +2,6 @@ package amqp
 
 import (
 	"bytes"
-	"encoding"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -33,12 +32,12 @@ var bufPool = sync.Pool{
 }
 
 type unmarshaler interface {
-	UnmarshalBinary(r byteReader) error
+	unmarshal(r byteReader) error
 }
 
-func Unmarshal(r byteReader, i interface{}) error {
+func unmarshal(r byteReader, i interface{}) error {
 	if um, ok := i.(unmarshaler); ok {
-		return um.UnmarshalBinary(r)
+		return um.unmarshal(r)
 	}
 
 	switch t := i.(type) {
@@ -151,7 +150,7 @@ func Unmarshal(r byteReader, i interface{}) error {
 			if indirect.IsNil() { // *struct == nil
 				indirect.Set(reflect.New(indirect.Type().Elem()))
 			}
-			return Unmarshal(r, indirect.Interface())
+			return unmarshal(r, indirect.Interface())
 		}
 		// if um, ok := indirect.Interface().(unmarshaler); ok {
 		// 	return indirect.Interface().(unmarshaler).UnmarshalBinary(r)
@@ -162,7 +161,7 @@ func Unmarshal(r byteReader, i interface{}) error {
 	return nil
 }
 
-func unmarshalComposite(r byteReader, typ Type, fields ...interface{}) error {
+func unmarshalComposite(r byteReader, typ amqpType, fields ...interface{}) error {
 	t, numFields, err := readCompositeHeader(r)
 	if err == errNull {
 		return nil
@@ -176,7 +175,7 @@ func unmarshalComposite(r byteReader, typ Type, fields ...interface{}) error {
 	}
 
 	for i := 0; i < numFields; i++ {
-		err = Unmarshal(r, fields[i])
+		err = unmarshal(r, fields[i])
 		if err != nil {
 			return errors.Wrapf(err, "unmarshaling field %d", i)
 		}
@@ -184,7 +183,7 @@ func unmarshalComposite(r byteReader, typ Type, fields ...interface{}) error {
 	return nil
 }
 
-func readCompositeHeader(r byteReader) (_ Type, fields int, _ error) {
+func readCompositeHeader(r byteReader) (_ amqpType, fields int, _ error) {
 	byt, err := r.ReadByte()
 	if err != nil {
 		return 0, 0, err
@@ -205,7 +204,7 @@ func readCompositeHeader(r byteReader) (_ Type, fields int, _ error) {
 
 	fields, _, err = readSlice(r)
 
-	return Type(v), fields, err
+	return amqpType(v), fields, err
 }
 
 type field struct {
@@ -213,7 +212,7 @@ type field struct {
 	omit  bool
 }
 
-func marshalComposite(code Type, fields ...field) ([]byte, error) {
+func marshalComposite(code amqpType, fields ...field) ([]byte, error) {
 	var (
 		rawFields  = make([][]byte, len(fields))
 		lastSetIdx = -1
@@ -225,7 +224,7 @@ func marshalComposite(code Type, fields ...field) ([]byte, error) {
 			continue
 		}
 
-		rawFields[i], err = Marshal(f.value)
+		rawFields[i], err = marshal(f.value)
 		if err != nil {
 			return nil, err
 		}
@@ -350,7 +349,7 @@ func writeBinary(wr byteWriter, bin []byte) error {
 	}
 }
 
-func writeComposite(wr byteWriter, code Type, fields ...[]byte) error {
+func writeComposite(wr byteWriter, code amqpType, fields ...[]byte) error {
 	_, err := wr.Write([]byte{0x0, Smallulong, uint8(code)})
 	if err != nil {
 		return err
@@ -781,7 +780,7 @@ func readUint(r byteReader) (value uint64, _ error) {
 
 type Symbol string
 
-func (s Symbol) MarshalBinary() ([]byte, error) {
+func (s Symbol) marshal() ([]byte, error) {
 	l := len(s)
 
 	buf := bufPool.New().(*bytes.Buffer)
@@ -808,9 +807,13 @@ func (s Symbol) MarshalBinary() ([]byte, error) {
 	return append([]byte(nil), buf.Bytes()...), err
 }
 
-func Marshal(i interface{}) ([]byte, error) {
-	if bm, ok := i.(encoding.BinaryMarshaler); ok {
-		return bm.MarshalBinary()
+type marshaler interface {
+	marshal() ([]byte, error)
+}
+
+func marshal(i interface{}) ([]byte, error) {
+	if bm, ok := i.(marshaler); ok {
+		return bm.marshal()
 	}
 
 	buf := bufPool.New().(*bytes.Buffer)
@@ -883,13 +886,13 @@ type Milliseconds struct {
 	time.Duration
 }
 
-func (m Milliseconds) MarshalBinary() ([]byte, error) {
-	return Marshal(uint32(m.Duration.Seconds()))
+func (m Milliseconds) marshal() ([]byte, error) {
+	return marshal(uint32(m.Duration.Seconds()))
 }
 
-func (m *Milliseconds) UnmarshalBinary(r byteReader) error {
+func (m *Milliseconds) unmarshal(r byteReader) error {
 	var n uint32
-	err := Unmarshal(r, &n)
+	err := unmarshal(r, &n)
 	m.Duration = time.Duration(n) * time.Millisecond
 	return err
 }
@@ -911,11 +914,11 @@ func writeMapHeader(wr byteWriter, elements int) error {
 }
 
 func writeMapElement(wr byteWriter, key, value interface{}) error {
-	keyBytes, err := Marshal(key)
+	keyBytes, err := marshal(key)
 	if err != nil {
 		return err
 	}
-	valueBytes, err := Marshal(value)
+	valueBytes, err := marshal(value)
 	if err != nil {
 		return err
 	}
@@ -954,11 +957,11 @@ type mapReader struct {
 }
 
 func (mr *mapReader) next(key, value interface{}) error {
-	err := Unmarshal(mr.r, key)
+	err := unmarshal(mr.r, key)
 	if err != nil {
 		return err
 	}
-	return Unmarshal(mr.r, value)
+	return unmarshal(mr.r, value)
 }
 
 func newMapReader(r byteReader) (*mapReader, error) {

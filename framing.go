@@ -3,6 +3,7 @@ package amqp
 import (
 	"encoding/binary"
 	"fmt"
+	"io"
 )
 
 type frameHeader struct {
@@ -88,7 +89,7 @@ func parseProto(buf []byte) (proto, error) {
 	extended header (opt)
 	body (opt)
 */
-func writeFrame(wr byteWriter, frameType byte, channel uint16, data []byte) error {
+func writeFrame(wr io.Writer, frameType byte, channel uint16, data []byte) error {
 	err := binary.Write(wr, binary.BigEndian, uint32(len(data)+8)) // SIZE
 	if err != nil {
 		return err

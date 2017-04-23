@@ -37,7 +37,7 @@ func randString() string { // TODO: random string gen off SO, replace
 	return string(b)
 }
 
-func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
+func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	link := <-s.newLink
 
 	for _, o := range opts {
@@ -49,17 +49,17 @@ func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
 	}
 	link.creditUsed = link.linkCredit
 
-	s.txFrame(&Attach{
+	s.txFrame(&performativeAttach{
 		Name:   randString(),
 		Handle: link.handle,
 		Role:   true,
-		Source: &Source{
+		Source: &source{
 			Address: link.sourceAddr,
 		},
 	})
 
 	fr := <-link.rx
-	resp, ok := fr.(*Attach)
+	resp, ok := fr.(*performativeAttach)
 	if !ok {
 		return nil, fmt.Errorf("unexpected attach response: %+v", fr)
 	}

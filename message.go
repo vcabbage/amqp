@@ -9,15 +9,15 @@ import (
 )
 
 const (
-	TypeMessageHeader         = 0x70
-	TypeDeliveryAnnotations   = 0x71
-	TypeMessageAnnotations    = 0x72
-	TypeMessageProperties     = 0x73
-	TypeApplicationProperties = 0x74
-	TypeApplicationData       = 0x75
-	TypeAMQPSequence          = 0x76
-	TypeAMQPValue             = 0x77
-	TypeFooter                = 0x78
+	typeMessageHeader         = 0x70
+	typeDeliveryAnnotations   = 0x71
+	typeMessageAnnotations    = 0x72
+	typeMessageProperties     = 0x73
+	typeApplicationProperties = 0x74
+	typeApplicationData       = 0x75
+	typeAMQPSequence          = 0x76
+	typeAMQPValue             = 0x77
+	typeFooter                = 0x78
 )
 
 type Message struct {
@@ -34,7 +34,7 @@ type Message struct {
 }
 
 func (m *Message) sendDisposition(state interface{}) {
-	m.link.session.txFrame(&Disposition{
+	m.link.session.txFrame(&performativeDisposition{
 		Role:    true,
 		First:   m.deliveryID,
 		Settled: true,
@@ -59,7 +59,7 @@ func (m *Message) Release() {
 
 type Map map[string]interface{}
 
-func (mm *Map) UnmarshalBinary(r byteReader) error {
+func (m *Map) unmarshal(r byteReader) error {
 	mr, err := newMapReader(r)
 	if err == errNull {
 		return nil
@@ -70,7 +70,7 @@ func (mm *Map) UnmarshalBinary(r byteReader) error {
 
 	pairs := mr.count / 2
 
-	m := make(Map, pairs)
+	mm := make(Map, pairs)
 	for i := 0; i < pairs; i++ {
 		var (
 			key   string
@@ -80,13 +80,13 @@ func (mm *Map) UnmarshalBinary(r byteReader) error {
 		if err != nil {
 			return err
 		}
-		m[key] = value
+		mm[key] = value
 	}
-	*mm = m
+	*m = mm
 	return nil
 }
 
-// func (h *Header) MarshalBinary() ([]byte, error) {
+// func (h *Header) marshal() ([]byte, error) {
 // 	return marshalComposite(TypeMessageHeader, []field{
 // 		{value: h.Durable, omit: !h.Durable},
 // 		{value: h.Priority, omit: h.Priority == 4},
@@ -122,7 +122,7 @@ func consumeBytes(r io.ByteReader, n int) error {
 	return nil
 }
 
-func (m *Message) UnmarshalBinary(r byteReader) error {
+func (m *Message) unmarshal(r byteReader) error {
 	byter, ok := r.(interface {
 		Bytes() []byte
 	})
@@ -141,35 +141,35 @@ func (m *Message) UnmarshalBinary(r byteReader) error {
 		}
 
 		switch typ {
-		case TypeMessageHeader:
-			err = Unmarshal(r, &m.Header)
-		case TypeDeliveryAnnotations:
+		case typeMessageHeader:
+			err = unmarshal(r, &m.Header)
+		case typeDeliveryAnnotations:
 			if err = consumeBytes(r, 3); err != nil {
 				return err
 			}
-			err = Unmarshal(r, &m.DeliveryAnnotations)
-		case TypeMessageAnnotations:
+			err = unmarshal(r, &m.DeliveryAnnotations)
+		case typeMessageAnnotations:
 			if err = consumeBytes(r, 3); err != nil {
 				return err
 			}
-			err = Unmarshal(r, &m.MessageAnnotations)
-		case TypeMessageProperties:
-			err = Unmarshal(r, &m.Properties)
-		case TypeApplicationProperties:
+			err = unmarshal(r, &m.MessageAnnotations)
+		case typeMessageProperties:
+			err = unmarshal(r, &m.Properties)
+		case typeApplicationProperties:
 			if err = consumeBytes(r, 3); err != nil {
 				return err
 			}
-			err = Unmarshal(r, &m.ApplicationProperties)
-		case TypeApplicationData:
+			err = unmarshal(r, &m.ApplicationProperties)
+		case typeApplicationData:
 			if err = consumeBytes(r, 3); err != nil {
 				return err
 			}
-			err = Unmarshal(r, &m.ApplicationData)
-		case TypeFooter:
+			err = unmarshal(r, &m.ApplicationData)
+		case typeFooter:
 			if err = consumeBytes(r, 3); err != nil {
 				return err
 			}
-			err = Unmarshal(r, &m.Footer)
+			err = unmarshal(r, &m.Footer)
 		default:
 			return errors.Errorf("unknown message section %x", typ)
 		}
@@ -198,8 +198,8 @@ type Header struct {
 	DeliveryCount uint32
 }
 
-func (h *Header) MarshalBinary() ([]byte, error) {
-	return marshalComposite(TypeMessageHeader, []field{
+func (h *Header) marshal() ([]byte, error) {
+	return marshalComposite(typeMessageHeader, []field{
 		{value: h.Durable, omit: !h.Durable},
 		{value: h.Priority, omit: h.Priority == 4},
 		{value: h.TTL, omit: h.TTL.Duration == 0},
@@ -208,8 +208,8 @@ func (h *Header) MarshalBinary() ([]byte, error) {
 	}...)
 }
 
-func (h *Header) UnmarshalBinary(r byteReader) error {
-	return unmarshalComposite(r, TypeMessageHeader,
+func (h *Header) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typeMessageHeader,
 		&h.Durable,
 		&h.Priority,
 		&h.TTL,
@@ -252,8 +252,8 @@ type Properties struct {
 	ReplyToGroupID     string
 }
 
-func (p *Properties) MarshalBinary() ([]byte, error) {
-	return marshalComposite(TypeMessageProperties, []field{
+func (p *Properties) marshal() ([]byte, error) {
+	return marshalComposite(typeMessageProperties, []field{
 		{value: p.MessageID, omit: p.MessageID != nil},
 		{value: p.UserID, omit: len(p.UserID) == 0},
 		{value: p.To, omit: p.To == ""},
@@ -269,8 +269,8 @@ func (p *Properties) MarshalBinary() ([]byte, error) {
 	}...)
 }
 
-func (p *Properties) UnmarshalBinary(r byteReader) error {
-	return unmarshalComposite(r, TypeMessageProperties,
+func (p *Properties) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typeMessageProperties,
 		&p.MessageID,
 		&p.UserID,
 		&p.To,
@@ -327,14 +327,14 @@ type StateReceived struct {
 	SectionOffset uint64
 }
 
-func (sr *StateReceived) MarshalBinary() ([]byte, error) {
+func (sr *StateReceived) marshal() ([]byte, error) {
 	return marshalComposite(TypeStateReceived, []field{
 		{value: sr.SectionNumber, omit: false},
 		{value: sr.SectionOffset, omit: false},
 	}...)
 }
 
-func (sr *StateReceived) UnmarshaleBinary(r byteReader) error {
+func (sr *StateReceived) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, TypeStateReceived,
 		&sr.SectionNumber,
 		&sr.SectionOffset,
@@ -348,11 +348,11 @@ func (sr *StateReceived) UnmarshaleBinary(r byteReader) error {
 */
 type StateAccepted struct{}
 
-func (sa *StateAccepted) MarshalBinary() ([]byte, error) {
+func (sa *StateAccepted) marshal() ([]byte, error) {
 	return marshalComposite(TypeStateAccepted)
 }
 
-func (sa *StateReceived) UnmarshalBinary(r byteReader) error {
+func (sa *StateAccepted) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, TypeStateAccepted)
 }
 
@@ -366,13 +366,13 @@ type StateRejected struct {
 	Error interface{}
 }
 
-func (sr *StateRejected) MarshalBinary() ([]byte, error) {
+func (sr *StateRejected) marshal() ([]byte, error) {
 	return marshalComposite(TypeStateRejected,
 		field{value: sr.Error, omit: sr.Error == nil},
 	)
 }
 
-func (sr *StateRejected) UnmarshalBinary(r byteReader) error {
+func (sr *StateRejected) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, TypeStateRejected,
 		&sr.Error,
 	)
@@ -385,11 +385,11 @@ func (sr *StateRejected) UnmarshalBinary(r byteReader) error {
 */
 type StateReleased struct{}
 
-func (sr *StateReleased) MarshalBinary() ([]byte, error) {
+func (sr *StateReleased) marshal() ([]byte, error) {
 	return marshalComposite(TypeStateReleased)
 }
 
-func (sr *StateReleased) UnmarshalBinary(r byteReader) error {
+func (sr *StateReleased) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, TypeStateReleased)
 }
 
@@ -424,7 +424,7 @@ type StateModified struct {
 	MessageAnnotations Fields
 }
 
-func (sm *StateModified) MarshalBinary() ([]byte, error) {
+func (sm *StateModified) marshal() ([]byte, error) {
 	return marshalComposite(TypeStateModified, []field{
 		{value: sm.DeliveryFailed, omit: !sm.DeliveryFailed},
 		{value: sm.UndeliverableHere, omit: !sm.UndeliverableHere},
@@ -432,7 +432,7 @@ func (sm *StateModified) MarshalBinary() ([]byte, error) {
 	}...)
 }
 
-func (sm *StateModified) UnmarshalBinary(r byteReader) error {
+func (sm *StateModified) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, TypeStateModified,
 		&sm.DeliveryFailed,
 		&sm.UndeliverableHere,

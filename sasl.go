@@ -7,33 +7,33 @@ import (
 
 // SASL Codes
 const (
-	CodeSASLOK      SASLCode = iota // Connection authentication succeeded.
+	CodeSASLOK      saslCode = iota // Connection authentication succeeded.
 	CodeSASLAuth                    // Connection authentication failed due to an unspecified problem with the supplied credentials.
 	CodeSASLSys                     // Connection authentication failed due to a system error.
 	CodeSASLSysPerm                 // Connection authentication failed due to a system error that is unlikely to be corrected without intervention.
 	CodeSASLSysTemp                 // Connection authentication failed due to a transient system error.
 )
 
-type Type uint8
+type amqpType uint8
 
 // Composite Types
 const (
-	TypeSASLMechanism Type = 0x40
-	TypeSASLInit      Type = 0x41
-	TypeSASLChallenge Type = 0x42
-	TypeSASLResponse  Type = 0x43
-	TypeSASLOutcome   Type = 0x44
+	typeSASLMechanism amqpType = 0x40
+	typeSASLInit      amqpType = 0x41
+	typeSASLChallenge amqpType = 0x42
+	typeSASLResponse  amqpType = 0x43
+	typeSASLOutcome   amqpType = 0x44
 )
 
 // SASL Mechanisms
 const (
-	SASLMechanismPLAIN Symbol = "PLAIN"
+	saslMechanismPLAIN Symbol = "PLAIN"
 )
 
-type SASLCode int
+type saslCode int
 
-func (s *SASLCode) UnmarshalBinary(r byteReader) error {
-	return Unmarshal(r, (*int)(s))
+func (s *saslCode) unmarshal(r byteReader) error {
+	return unmarshal(r, (*int)(s))
 }
 
 func ConnSASLPlain(username, password string) ConnOpt {
@@ -41,7 +41,7 @@ func ConnSASLPlain(username, password string) ConnOpt {
 		if c.saslHandlers == nil {
 			c.saslHandlers = make(map[Symbol]stateFunc)
 		}
-		c.saslHandlers[SASLMechanismPLAIN] = (&saslHandlerPlain{
+		c.saslHandlers[saslMechanismPLAIN] = (&saslHandlerPlain{
 			c:        c,
 			username: username,
 			password: password,
@@ -57,7 +57,7 @@ type saslHandlerPlain struct {
 }
 
 func (h *saslHandlerPlain) init() stateFunc {
-	saslInit, err := Marshal(&SASLInit{
+	saslInit, err := marshal(&saslInit{
 		Mechanism:       "PLAIN",
 		InitialResponse: []byte("\x00" + h.username + "\x00" + h.password),
 		Hostname:        "",
@@ -92,14 +92,14 @@ func (h *saslHandlerPlain) init() stateFunc {
     <field name="hostname" type="string"/>
 </type>
 */
-type SASLInit struct {
+type saslInit struct {
 	Mechanism       Symbol
 	InitialResponse []byte
 	Hostname        string
 }
 
-func (si *SASLInit) MarshalBinary() ([]byte, error) {
-	return marshalComposite(TypeSASLInit, []field{
+func (si *saslInit) marshal() ([]byte, error) {
+	return marshalComposite(typeSASLInit, []field{
 		{value: si.Mechanism, omit: false},
 		{value: si.InitialResponse, omit: len(si.InitialResponse) == 0},
 		{value: si.Hostname, omit: len(si.Hostname) == 0},
@@ -133,23 +133,23 @@ b3 - sym32
 49 - "I"
 4e - "N"
 */
-type SASLMechanisms struct {
+type saslMechanisms struct {
 	Mechanisms []Symbol
 }
 
-func (sm *SASLMechanisms) UnmarshalBinary(r byteReader) error {
-	return unmarshalComposite(r, TypeSASLMechanism,
+func (sm *saslMechanisms) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typeSASLMechanism,
 		&sm.Mechanisms,
 	)
 }
 
-type SASLOutcome struct {
-	Code           SASLCode
+type saslOutcome struct {
+	Code           saslCode
 	AdditionalData []byte
 }
 
-func (so *SASLOutcome) UnmarshalBinary(r byteReader) error {
-	return unmarshalComposite(r, TypeSASLOutcome,
+func (so *saslOutcome) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typeSASLOutcome,
 		&so.Code,
 		&so.AdditionalData,
 	)
