@@ -27,7 +27,7 @@ func ConnHostname(hostname string) ConnOpt {
 	}
 }
 
-func ConnNegotiateTLS(enable bool) ConnOpt {
+func ConnTLS(enable bool) ConnOpt {
 	return func(c *Conn) error {
 		c.tlsNegotiation = enable
 		return nil
@@ -97,7 +97,7 @@ func Dial(addr string, opts ...ConnOpt) (*Conn, error) {
 
 	opts = append([]ConnOpt{
 		ConnHostname(host),
-		ConnNegotiateTLS(u.Scheme == "amqps"),
+		ConnTLS(u.Scheme == "amqps"),
 	}, opts...)
 
 	c, err := New(conn, opts...)
@@ -171,9 +171,7 @@ func (c *Conn) NewSession() (*Session, error) {
 
 	fmt.Printf("Begin Resp: %+v", begin)
 	// TODO: record negotiated settings
-	s.remoteChannel = fr.channel
-	s.newLink = make(chan *link)
-	s.delLink = make(chan *link)
+	s.remoteChannel = begin.RemoteChannel
 
 	go s.startMux()
 
@@ -219,19 +217,17 @@ type frame struct {
 	preformative preformative
 }
 
+var keepaliveFrame = []byte{0x00, 0x00, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00}
+
 func (c *Conn) startMux() {
 	go c.connReader()
 
-	nextSession := &Session{conn: c, rx: make(chan frame)}
+	nextSession := newSession(c, 0)
 
 	// map channel to session
 	sessions := make(map[uint16]*Session)
 
 	keepalive := time.NewTicker(c.idleTimeout / 2)
-	var buf bytes.Buffer
-	writeFrame(&buf, frameTypeAMQP, 0, nil)
-	keepaliveFrame := buf.Bytes()
-	buf.Reset()
 
 	fmt.Println("Starting mux")
 
@@ -258,7 +254,7 @@ outer:
 			fmt.Println("Got new session request")
 			sessions[nextSession.channel] = nextSession
 			// TODO: handle max session/wrapping
-			nextSession = &Session{conn: c, channel: nextSession.channel + 1, rx: make(chan frame)}
+			nextSession = newSession(c, nextSession.channel+1)
 
 		case s := <-c.delSession:
 			fmt.Println("Got delete session request")
@@ -396,7 +392,10 @@ func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
 
 func (c *Conn) protoTLS() stateFunc {
 	if c.tlsConfig == nil {
-		c.tlsConfig = &tls.Config{ServerName: c.hostname}
+		c.tlsConfig = &tls.Config{}
+	}
+	if c.tlsConfig.ServerName == "" && !c.tlsConfig.InsecureSkipVerify {
+		c.tlsConfig.ServerName = c.hostname
 	}
 	c.net = tls.Client(c.net, c.tlsConfig)
 	c.tlsComplete = true
@@ -425,7 +424,7 @@ func (c *Conn) txPreformative(fr frame) error {
 func (c *Conn) txOpen() stateFunc {
 	c.err = c.txPreformative(frame{
 		preformative: &performativeOpen{
-			ContainerID:  "gopher",
+			ContainerID:  randString(),
 			Hostname:     c.hostname,
 			MaxFrameSize: c.maxFrameSize,
 			ChannelMax:   c.channelMax,

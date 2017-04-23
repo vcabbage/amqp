@@ -18,6 +18,16 @@ type Session struct {
 	delLink chan *link
 }
 
+func newSession(c *Conn, channel uint16) *Session {
+	return &Session{
+		conn:    c,
+		channel: channel,
+		rx:      make(chan frame),
+		newLink: make(chan *link),
+		delLink: make(chan *link),
+	}
+}
+
 func (s *Session) Close() {
 	// s.txFrame(&)
 	// TODO: send end preformative
