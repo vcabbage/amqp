@@ -2,6 +2,7 @@ package amqp
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -26,10 +27,18 @@ func OptHostname(hostname string) Opt {
 	}
 }
 
+func OptTLS(enable bool) Opt {
+	return func(c *Conn) error {
+		c.needTLS = enable
+		return nil
+	}
+}
+
 type stateFunc func() stateFunc
 
 type Conn struct {
-	net net.Conn
+	net     net.Conn
+	needTLS bool
 
 	maxFrameSize uint32
 	channelMax   uint16
@@ -57,19 +66,34 @@ func Dial(addr string, opts ...Opt) (*Conn, error) {
 		return nil, err
 	}
 
-	var conn net.Conn
+	host, port, err := net.SplitHostPort(u.Host)
+	if err != nil {
+		host = u.Host
+		port = "5672"
+	}
+
 	switch u.Scheme {
-	case "amqp", "":
-		conn, err = net.Dial("tcp", u.Host)
+	case "amqp", "amqps", "":
 	default:
 		return nil, fmt.Errorf("unsupported scheme %q", u.Scheme)
 	}
 
+	conn, err := net.Dial("tcp", host+":"+port)
 	if err != nil {
 		return nil, err
 	}
 
-	return New(conn, opts...)
+	opts = append([]Opt{
+		OptHostname(host),
+		OptTLS(u.Scheme == "amqps"),
+	}, opts...)
+
+	c, err := New(conn, opts...)
+	if err != nil {
+		return nil, err
+	}
+
+	return c, err
 }
 
 func New(conn net.Conn, opts ...Opt) (*Conn, error) {
@@ -295,6 +319,8 @@ On connection open, we'll need to handle 4 possible scenarios:
 */
 func (c *Conn) negotiateProto() stateFunc {
 	switch {
+	case c.needTLS:
+		return c.exchangeProtoHeader(ProtoTLS)
 	case c.saslHandlers != nil && !c.saslComplete:
 		return c.exchangeProtoHeader(ProtoSASL)
 	default:
@@ -347,14 +373,19 @@ func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
 	case ProtoAMQP:
 		return c.txOpen
 	case ProtoTLS:
-		// TODO
-		return nil
+		return c.protoTLS
 	case ProtoSASL:
 		return c.protoSASL
 	default:
 		c.err = fmt.Errorf("unknown protocol ID %#02x", p.protoID)
 		return nil
 	}
+}
+
+func (c *Conn) protoTLS() stateFunc {
+	c.net = tls.Client(c.net, &tls.Config{ServerName: c.hostname})
+	c.needTLS = false
+	return c.negotiateProto
 }
 
 func (c *Conn) txPreformative(fr frame) error {
