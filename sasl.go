@@ -2,7 +2,6 @@ package amqp
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 )
 
@@ -37,7 +36,7 @@ func (s *SASLCode) UnmarshalBinary(r byteReader) error {
 	return Unmarshal(r, (*int)(s))
 }
 
-func OptSASLPlain(username, password string) Opt {
+func ConnSASLPlain(username, password string) ConnOpt {
 	return func(c *Conn) error {
 		if c.saslHandlers == nil {
 			c.saslHandlers = make(map[Symbol]stateFunc)
@@ -58,7 +57,11 @@ type saslHandlerPlain struct {
 }
 
 func (h *saslHandlerPlain) init() stateFunc {
-	saslInit, err := SASLInitPlain(h.username, h.password, "")
+	saslInit, err := Marshal(&SASLInit{
+		Mechanism:       "PLAIN",
+		InitialResponse: []byte("\x00" + h.username + "\x00" + h.password),
+		Hostname:        "",
+	})
 	if err != nil {
 		h.c.err = err
 		return nil
@@ -103,14 +106,6 @@ func (si *SASLInit) MarshalBinary() ([]byte, error) {
 	}...)
 }
 
-func SASLInitPlain(username, password, hostname string) ([]byte, error) {
-	return Marshal(&SASLInit{
-		Mechanism:       "PLAIN",
-		InitialResponse: []byte("\x00" + username + "\x00" + password),
-		Hostname:        hostname,
-	})
-}
-
 /*
 SASLMechanisms Frame
 
@@ -143,17 +138,9 @@ type SASLMechanisms struct {
 }
 
 func (sm *SASLMechanisms) UnmarshalBinary(r byteReader) error {
-	t, _, err := readCompositeHeader(r)
-	if err != nil {
-		return err
-	}
-
-	if t != TypeSASLMechanism {
-		return errors.New("invalid header for SASL mechanisms")
-	}
-
-	err = Unmarshal(r, &sm.Mechanisms)
-	return err
+	return unmarshalComposite(r, TypeSASLMechanism,
+		&sm.Mechanisms,
+	)
 }
 
 type SASLOutcome struct {

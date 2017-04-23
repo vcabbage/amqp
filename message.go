@@ -48,7 +48,7 @@ func (m *Message) Accept() {
 	m.sendDisposition(&StateAccepted{})
 }
 
-// Reject notifies the server that the message is invalid
+// Reject notifies the server that the message is invalid.
 func (m *Message) Reject() {
 	m.sendDisposition(&StateRejected{})
 }

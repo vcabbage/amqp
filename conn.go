@@ -18,18 +18,26 @@ const (
 	initialChannelMax   = 1
 )
 
-type Opt func(*Conn) error
+type ConnOpt func(*Conn) error
 
-func OptHostname(hostname string) Opt {
+func ConnHostname(hostname string) ConnOpt {
 	return func(c *Conn) error {
 		c.hostname = hostname
 		return nil
 	}
 }
 
-func OptTLS(enable bool) Opt {
+func ConnNegotiateTLS(enable bool) ConnOpt {
 	return func(c *Conn) error {
-		c.needTLS = enable
+		c.tlsNegotiation = enable
+		return nil
+	}
+}
+
+func ConnTLSConfig(tc *tls.Config) ConnOpt {
+	return func(c *Conn) error {
+		c.tlsConfig = tc
+		c.tlsNegotiation = true
 		return nil
 	}
 }
@@ -37,8 +45,12 @@ func OptTLS(enable bool) Opt {
 type stateFunc func() stateFunc
 
 type Conn struct {
-	net     net.Conn
-	needTLS bool
+	net net.Conn
+
+	// TLS
+	tlsNegotiation bool
+	tlsComplete    bool
+	tlsConfig      *tls.Config
 
 	maxFrameSize uint32
 	channelMax   uint16
@@ -60,7 +72,7 @@ type Conn struct {
 	delSession chan *Session
 }
 
-func Dial(addr string, opts ...Opt) (*Conn, error) {
+func Dial(addr string, opts ...ConnOpt) (*Conn, error) {
 	u, err := url.Parse(addr)
 	if err != nil {
 		return nil, err
@@ -83,9 +95,9 @@ func Dial(addr string, opts ...Opt) (*Conn, error) {
 		return nil, err
 	}
 
-	opts = append([]Opt{
-		OptHostname(host),
-		OptTLS(u.Scheme == "amqps"),
+	opts = append([]ConnOpt{
+		ConnHostname(host),
+		ConnNegotiateTLS(u.Scheme == "amqps"),
 	}, opts...)
 
 	c, err := New(conn, opts...)
@@ -96,7 +108,7 @@ func Dial(addr string, opts ...Opt) (*Conn, error) {
 	return c, err
 }
 
-func New(conn net.Conn, opts ...Opt) (*Conn, error) {
+func New(conn net.Conn, opts ...ConnOpt) (*Conn, error) {
 	c := &Conn{
 		net:          conn,
 		maxFrameSize: initialMaxFrameSize,
@@ -319,7 +331,7 @@ On connection open, we'll need to handle 4 possible scenarios:
 */
 func (c *Conn) negotiateProto() stateFunc {
 	switch {
-	case c.needTLS:
+	case c.tlsNegotiation && !c.tlsComplete:
 		return c.exchangeProtoHeader(ProtoTLS)
 	case c.saslHandlers != nil && !c.saslComplete:
 		return c.exchangeProtoHeader(ProtoSASL)
@@ -383,8 +395,11 @@ func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
 }
 
 func (c *Conn) protoTLS() stateFunc {
-	c.net = tls.Client(c.net, &tls.Config{ServerName: c.hostname})
-	c.needTLS = false
+	if c.tlsConfig == nil {
+		c.tlsConfig = &tls.Config{ServerName: c.hostname}
+	}
+	c.net = tls.Client(c.net, c.tlsConfig)
+	c.tlsComplete = true
 	return c.negotiateProto
 }
 
