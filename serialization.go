@@ -137,6 +137,12 @@ func unmarshal(r byteReader, i interface{}) error {
 			return err
 		}
 		*t = ts
+	case *map[interface{}]interface{}:
+		return (*mapAnyAny)(t).unmarshal(r)
+	case *map[string]interface{}:
+		return (*mapStringAny)(t).unmarshal(r)
+	case *map[Symbol]interface{}:
+		return (*mapSymbolAny)(t).unmarshal(r)
 	case *interface{}:
 		v, err := readAny(r)
 		if err != nil {
@@ -158,6 +164,93 @@ func unmarshal(r byteReader, i interface{}) error {
 
 		return fmt.Errorf("unable to unmarshal %T", i)
 	}
+	return nil
+}
+
+type mapAnyAny map[interface{}]interface{}
+
+func (m *mapAnyAny) unmarshal(r byteReader) error {
+	mr, err := newMapReader(r)
+	if err == errNull {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	pairs := mr.count / 2
+
+	mm := make(mapAnyAny, pairs)
+	for i := 0; i < pairs; i++ {
+		var (
+			key   interface{}
+			value interface{}
+		)
+		err = mr.next(&key, &value)
+		if err != nil {
+			return err
+		}
+		mm[key] = value
+	}
+	*m = mm
+	return nil
+}
+
+type mapStringAny map[string]interface{}
+
+func (m *mapStringAny) unmarshal(r byteReader) error {
+	mr, err := newMapReader(r)
+	if err == errNull {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	pairs := mr.count / 2
+
+	mm := make(mapStringAny, pairs)
+	for i := 0; i < pairs; i++ {
+		var (
+			key   string
+			value interface{}
+		)
+		err = mr.next(&key, &value)
+		if err != nil {
+			return err
+		}
+		mm[key] = value
+	}
+	*m = mm
+	return nil
+}
+
+type mapSymbolAny map[Symbol]interface{}
+
+func (f *mapSymbolAny) unmarshal(r byteReader) error {
+	mr, err := newMapReader(r)
+	if err == errNull {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	pairs := mr.count / 2
+
+	m := make(mapSymbolAny, pairs)
+	for i := 0; i < pairs; i++ {
+		var (
+			key   Symbol
+			value interface{}
+		)
+		err = mr.next(&key, &value)
+		if err != nil {
+			return err
+		}
+		m[key] = value
+	}
+	*f = m
 	return nil
 }
 

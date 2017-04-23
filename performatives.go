@@ -65,7 +65,7 @@ type performativeOpen struct {
 	IncomingLocales     []Symbol
 	OfferedCapabilities []Symbol
 	DesiredCapabilities []Symbol
-	Properties          Fields // TODO: implement marshal/unmarshal
+	Properties          map[Symbol]interface{}
 }
 
 func (o *performativeOpen) link() (uint32, bool) {
@@ -101,35 +101,6 @@ func (o *performativeOpen) unmarshal(r byteReader) error {
 		&o.DesiredCapabilities,
 		&o.Properties,
 	)
-}
-
-type Fields map[Symbol]interface{}
-
-func (f *Fields) unmarshal(r byteReader) error {
-	mr, err := newMapReader(r)
-	if err == errNull {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
-	pairs := mr.count / 2
-
-	m := make(Fields, pairs)
-	for i := 0; i < pairs; i++ {
-		var (
-			key   Symbol
-			value interface{}
-		)
-		err = mr.next(&key, &value)
-		if err != nil {
-			return err
-		}
-		m[key] = value
-	}
-	*f = m
-	return nil
 }
 
 /*
@@ -180,7 +151,7 @@ type performativeBegin struct {
 
 	// session properties
 	// http://www.amqp.org/specification/1.0/session-properties
-	Properties Fields
+	Properties map[Symbol]interface{}
 }
 
 func (b *performativeBegin) link() (uint32, bool) {
@@ -360,42 +331,11 @@ type performativeAttach struct {
 
 	// link properties
 	// http://www.amqp.org/specification/1.0/link-properties
-	Properties Fields
+	Properties map[Symbol]interface{}
 }
 
 func (a *performativeAttach) link() (uint32, bool) {
 	return a.Handle, true
-}
-
-type DeliveryState interface{}
-
-type Unsettled map[string]DeliveryState
-
-func (u *Unsettled) unmarshal(r byteReader) error {
-	mr, err := newMapReader(r)
-	if err == errNull {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
-	pairs := mr.count / 2
-
-	m := make(Unsettled, pairs)
-	for i := 0; i < pairs; i++ {
-		var (
-			key   string
-			value DeliveryState
-		)
-		err = mr.next(&key, &value)
-		if err != nil {
-			return err
-		}
-		m[key] = value
-	}
-	*u = m
-	return nil
 }
 
 func (a *performativeAttach) marshal() ([]byte, error) {
@@ -435,6 +375,37 @@ func (a *performativeAttach) unmarshal(r byteReader) error {
 		&a.DesiredCapabilities,
 		&a.Properties,
 	)
+}
+
+type DeliveryState interface{}
+
+type Unsettled map[string]DeliveryState
+
+func (u *Unsettled) unmarshal(r byteReader) error {
+	mr, err := newMapReader(r)
+	if err == errNull {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	pairs := mr.count / 2
+
+	m := make(Unsettled, pairs)
+	for i := 0; i < pairs; i++ {
+		var (
+			key   string
+			value DeliveryState
+		)
+		err = mr.next(&key, &value)
+		if err != nil {
+			return err
+		}
+		m[key] = value
+	}
+	*u = m
+	return nil
 }
 
 /*
@@ -530,7 +501,7 @@ type source struct {
 	//					distribution-modes. That is, the value MUST be of the same type as
 	//					would be valid in a field defined with the following attributes:
 	//						type="symbol" multiple="true" requires="distribution-mode"
-	DynamicNodeProperties Fields // TODO: implement custom type with validation
+	DynamicNodeProperties map[Symbol]interface{} // TODO: implement custom type with validation
 
 	// the distribution mode of the link
 	//
@@ -545,7 +516,7 @@ type source struct {
 	// actually in place (including any filters defaulted at the node). The receiving
 	// endpoint MUST check that the filter in place meets its needs and take responsibility
 	// for detaching if it does not.
-	Filter Fields // TODO: implement custom type with validation
+	Filter map[Symbol]interface{} // TODO: implement custom type with validation
 
 	// default outcome for unsettled transfers
 	//
@@ -693,7 +664,7 @@ type target struct {
 	//					distribution-modes. That is, the value MUST be of the same type as
 	//					would be valid in a field defined with the following attributes:
 	//						type="symbol" multiple="true" requires="distribution-mode"
-	DynamicNodeProperties Fields // TODO: implement custom type with validation
+	DynamicNodeProperties map[Symbol]interface{} // TODO: implement custom type with validation
 
 	// the extension capabilities the sender supports/desires
 	//
@@ -838,7 +809,7 @@ type flow struct {
 
 	// link state properties
 	// http://www.amqp.org/specification/1.0/link-state-properties
-	Properties Fields
+	Properties map[Symbol]interface{}
 }
 
 func (f *flow) link() (uint32, bool) {
@@ -1204,9 +1175,8 @@ func (d *performativeDetach) unmarshal(r byteReader) error {
     <field name="info" type="fields"/>
 </type>
 */
+
 type Error struct {
-	// error condition
-	//
 	// A symbolic value indicating the error condition.
 	Condition Symbol // required
 
@@ -1217,7 +1187,7 @@ type Error struct {
 	Description string
 
 	// map carrying information about the error condition
-	Info Fields
+	Info map[Symbol]interface{}
 }
 
 func (e *Error) marshal() ([]byte, error) {

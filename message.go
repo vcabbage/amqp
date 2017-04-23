@@ -21,13 +21,75 @@ const (
 )
 
 type Message struct {
-	Header                Header
-	DeliveryAnnotations   Map // TODO: implement custom type with validation
-	MessageAnnotations    Map // TODO: implement custom type with validation
-	Properties            Properties
-	ApplicationProperties Map    // TODO: implement custom type with validation
-	ApplicationData       []byte // TODO: this could be amqp-sequence or amqp-value rather than data
-	Footer                Map    // TODO: implement custom type with validation
+	// The header section carries standard delivery details about the transfer
+	// of a message through the AMQP network. If the header section is omitted
+	// the receiver MUST assume the appropriate default values (or the meaning
+	// implied by no value being set) for the fields within the header unless
+	// other target or node specific defaults have otherwise been set.
+	Header MessageHeader
+
+	// The delivery-annotations section is used for delivery-specific non-standard
+	// properties at the head of the message. Delivery annotations convey information
+	// from the sending peer to the receiving peer. If the recipient does not
+	// understand the annotation it cannot be acted upon and its effects
+	// (such as any implied propagation) cannot be acted upon. Annotations might be
+	// specific to one implementation, or common to multiple implementations.
+	// The capabilities negotiated on link attach and on the source and target
+	// SHOULD be used to establish which annotations a peer supports. A registry
+	// of defined annotations and their meanings is maintained [AMQPDELANN].
+	// The symbolic key "rejected" is reserved for the use of communicating error
+	// information regarding rejected messages. Any values associated with the
+	// "rejected" key MUST be of type error.
+	//
+	// If the delivery-annotations section is omitted, it is equivalent to a
+	// delivery-annotations section containing an empty map of annotations.
+	DeliveryAnnotations map[interface{}]interface{}
+
+	// The message-annotations section is used for properties of the message which
+	// are aimed at the infrastructure and SHOULD be propagated across every
+	// delivery step. Message annotations convey information about the message.
+	// Intermediaries MUST propagate the annotations unless the annotations are
+	// explicitly augmented or modified (e.g., by the use of the modified outcome).
+	//
+	// The capabilities negotiated on link attach and on the source and target can
+	// be used to establish which annotations a peer understands; however, in a
+	// network of AMQP intermediaries it might not be possible to know if every
+	// intermediary will understand the annotation. Note that for some annotations
+	// it might not be necessary for the intermediary to understand their purpose,
+	// i.e., they could be used purely as an attribute which can be filtered on.
+	//
+	// A registry of defined annotations and their meanings is maintained [AMQPMESSANN].
+	//
+	// If the message-annotations section is omitted, it is equivalent to a
+	// message-annotations section containing an empty map of annotations.
+	Annotations map[interface{}]interface{}
+
+	// The properties section is used for a defined set of standard properties of
+	// the message. The properties section is part of the bare message; therefore,
+	// if retransmitted by an intermediary, it MUST remain unaltered.
+	Properties MessageProperties
+
+	// The application-properties section is a part of the bare message used for
+	// structured application data. Intermediaries can use the data within this
+	// structure for the purposes of filtering or routing.
+	//
+	// The keys of this map are restricted to be of type string (which excludes
+	// the possibility of a null key) and the values are restricted to be of
+	// simple types only, that is, excluding map, list, and array types.
+	ApplicationProperties map[string]interface{}
+
+	// A data section contains opaque binary data.
+	//
+	// TODO: this could be data(s), amqp-sequence(s), amqp-value rather than singe data:
+	// "The body consists of one of the following three choices: one or more data
+	//  sections, one or more amqp-sequence sections, or a single amqp-value section."
+	Data []byte
+
+	// The footer section is used for details about the message or delivery which
+	// can only be calculated or evaluated once the whole bare message has been
+	// constructed or seen (for example message hashes, HMACs, signatures and
+	// encryption details).
+	Footer map[interface{}]interface{} // TODO: implement custom type with validation
 
 	link       *link
 	deliveryID uint32
@@ -55,35 +117,6 @@ func (m *Message) Reject() {
 
 func (m *Message) Release() {
 	m.sendDisposition(&StateReleased{})
-}
-
-type Map map[string]interface{}
-
-func (m *Map) unmarshal(r byteReader) error {
-	mr, err := newMapReader(r)
-	if err == errNull {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-
-	pairs := mr.count / 2
-
-	mm := make(Map, pairs)
-	for i := 0; i < pairs; i++ {
-		var (
-			key   string
-			value interface{}
-		)
-		err = mr.next(&key, &value)
-		if err != nil {
-			return err
-		}
-		mm[key] = value
-	}
-	*m = mm
-	return nil
 }
 
 // func (h *Header) marshal() ([]byte, error) {
@@ -152,7 +185,7 @@ func (m *Message) unmarshal(r byteReader) error {
 			if err = consumeBytes(r, 3); err != nil {
 				return err
 			}
-			err = unmarshal(r, &m.MessageAnnotations)
+			err = unmarshal(r, &m.Annotations)
 		case typeMessageProperties:
 			err = unmarshal(r, &m.Properties)
 		case typeApplicationProperties:
@@ -164,7 +197,7 @@ func (m *Message) unmarshal(r byteReader) error {
 			if err = consumeBytes(r, 3); err != nil {
 				return err
 			}
-			err = unmarshal(r, &m.ApplicationData)
+			err = unmarshal(r, &m.Data)
 		case typeFooter:
 			if err = consumeBytes(r, 3); err != nil {
 				return err
@@ -190,7 +223,8 @@ func (m *Message) unmarshal(r byteReader) error {
     <field name="delivery-count" type="uint" default="0"/>
 </type>
 */
-type Header struct {
+
+type MessageHeader struct {
 	Durable       bool
 	Priority      uint8
 	TTL           time.Duration // from milliseconds
@@ -198,7 +232,7 @@ type Header struct {
 	DeliveryCount uint32
 }
 
-func (h *Header) marshal() ([]byte, error) {
+func (h *MessageHeader) marshal() ([]byte, error) {
 	return marshalComposite(typeMessageHeader, []field{
 		{value: h.Durable, omit: !h.Durable},
 		{value: h.Priority, omit: h.Priority == 4},
@@ -208,7 +242,7 @@ func (h *Header) marshal() ([]byte, error) {
 	}...)
 }
 
-func (h *Header) unmarshal(r byteReader) error {
+func (h *MessageHeader) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, typeMessageHeader,
 		&h.Durable,
 		&h.Priority,
@@ -236,7 +270,8 @@ func (h *Header) unmarshal(r byteReader) error {
     <field name="reply-to-group-id" type="string"/>
 </type>
 */
-type Properties struct {
+
+type MessageProperties struct {
 	MessageID          interface{} // TODO: implement custom type with validation
 	UserID             []byte
 	To                 string
@@ -252,7 +287,7 @@ type Properties struct {
 	ReplyToGroupID     string
 }
 
-func (p *Properties) marshal() ([]byte, error) {
+func (p *MessageProperties) marshal() ([]byte, error) {
 	return marshalComposite(typeMessageProperties, []field{
 		{value: p.MessageID, omit: p.MessageID != nil},
 		{value: p.UserID, omit: len(p.UserID) == 0},
@@ -269,7 +304,7 @@ func (p *Properties) marshal() ([]byte, error) {
 	}...)
 }
 
-func (p *Properties) unmarshal(r byteReader) error {
+func (p *MessageProperties) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, typeMessageProperties,
 		&p.MessageID,
 		&p.UserID,
@@ -302,6 +337,7 @@ const (
     <field name="section-offset" type="ulong" mandatory="true"/>
 </type>
 */
+
 type StateReceived struct {
 	// When sent by the sender this indicates the first section of the message
 	// (with section-number 0 being the first section) for which data can be resent.
@@ -346,6 +382,7 @@ func (sr *StateReceived) unmarshal(r byteReader) error {
     <descriptor name="amqp:accepted:list" code="0x00000000:0x00000024"/>
 </type>
 */
+
 type StateAccepted struct{}
 
 func (sa *StateAccepted) marshal() ([]byte, error) {
@@ -362,6 +399,7 @@ func (sa *StateAccepted) unmarshal(r byteReader) error {
     <field name="error" type="error"/>
 </type>
 */
+
 type StateRejected struct {
 	Error interface{}
 }
@@ -383,6 +421,7 @@ func (sr *StateRejected) unmarshal(r byteReader) error {
     <descriptor name="amqp:released:list" code="0x00000000:0x00000026"/>
 </type>
 */
+
 type StateReleased struct{}
 
 func (sr *StateReleased) marshal() ([]byte, error) {
@@ -401,6 +440,7 @@ func (sr *StateReleased) unmarshal(r byteReader) error {
     <field name="message-annotations" type="fields"/>
 </type>
 */
+
 type StateModified struct {
 	// count the transfer as an unsuccessful delivery attempt
 	//
@@ -421,7 +461,7 @@ type StateModified struct {
 	// the value in this field associated with that key replaces the one in the
 	// existing headers; where the existing message-annotations has no such value,
 	// the value in this map is added.
-	MessageAnnotations Fields
+	MessageAnnotations map[Symbol]interface{}
 }
 
 func (sm *StateModified) marshal() ([]byte, error) {
