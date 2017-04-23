@@ -272,12 +272,12 @@ func (h *MessageHeader) unmarshal(r byteReader) error {
 */
 
 type MessageProperties struct {
-	MessageID          interface{} // TODO: implement custom type with validation
+	MessageID          interface{} // may be uint64, UUID, []byte, or string
 	UserID             []byte
 	To                 string
 	Subject            string
-	ReplyTo            interface{} // TODO: implement custom type with validation
-	CorrelationID      interface{} // TODO: implement custom type with validation
+	ReplyTo            string
+	CorrelationID      interface{} // may be uint64, UUID, []byte, or string
 	ContentType        Symbol
 	ContentEncoding    Symbol
 	AbsoluteExpiryTime time.Time
@@ -293,7 +293,7 @@ func (p *MessageProperties) marshal() ([]byte, error) {
 		{value: p.UserID, omit: len(p.UserID) == 0},
 		{value: p.To, omit: p.To == ""},
 		{value: p.Subject, omit: p.Subject == ""},
-		{value: p.ReplyTo, omit: p.ReplyTo == nil},
+		{value: p.ReplyTo, omit: p.ReplyTo == ""},
 		{value: p.CorrelationID, omit: p.CorrelationID == nil},
 		{value: p.ContentType, omit: p.ContentType == ""},
 		{value: p.ContentEncoding, omit: p.ContentEncoding == ""},
@@ -401,7 +401,7 @@ func (sa *StateAccepted) unmarshal(r byteReader) error {
 */
 
 type StateRejected struct {
-	Error interface{}
+	Error *Error
 }
 
 func (sr *StateRejected) marshal() ([]byte, error) {

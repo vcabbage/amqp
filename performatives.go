@@ -377,7 +377,7 @@ func (a *performativeAttach) unmarshal(r byteReader) error {
 	)
 }
 
-type DeliveryState interface{}
+type DeliveryState interface{} // TODO: http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-transactions-v1.0-os.html#type-declared
 
 type Unsettled map[string]DeliveryState
 

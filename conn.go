@@ -187,23 +187,23 @@ func parseFrame(payload []byte) (preformative, error) {
 	var t preformative
 	switch pType {
 	case preformativeOpen:
-		t = &performativeOpen{}
+		t = new(performativeOpen)
 	case preformativeBegin:
-		t = &performativeBegin{}
+		t = new(performativeBegin)
 	case preformativeAttach:
-		t = &performativeAttach{}
+		t = new(performativeAttach)
 	case preformativeFlow:
-		t = &flow{}
+		t = new(flow)
 	case preformativeTransfer:
-		t = &performativeTransfer{}
+		t = new(performativeTransfer)
 	case preformativeDisposition:
-		t = &performativeDisposition{}
+		t = new(performativeDisposition)
 	case preformativeDetach:
-		t = &performativeDetach{}
+		t = new(performativeDetach)
 	case preformativeEnd:
-		t = &performativeEnd{}
+		t = new(performativeEnd)
 	case preformativeClose:
-		t = &performativeClose{}
+		t = new(performativeClose)
 	default:
 		return nil, errors.Errorf("unknown preformative type %0x", pType)
 	}
@@ -392,7 +392,7 @@ func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
 
 func (c *Conn) protoTLS() stateFunc {
 	if c.tlsConfig == nil {
-		c.tlsConfig = &tls.Config{}
+		c.tlsConfig = new(tls.Config)
 	}
 	if c.tlsConfig.ServerName == "" && !c.tlsConfig.InsecureSkipVerify {
 		c.tlsConfig.ServerName = c.hostname
