@@ -24,7 +24,7 @@ func (s *Session) Close() {
 	s.conn.delSession <- s
 }
 
-func (s *Session) txFrame(p Preformative) {
+func (s *Session) txFrame(p preformative) {
 	s.conn.txFrame <- frame{preformative: p, channel: s.channel}
 }
 

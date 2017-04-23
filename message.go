@@ -193,7 +193,7 @@ func (m *Message) unmarshal(r byteReader) error {
 type Header struct {
 	Durable       bool
 	Priority      uint8
-	TTL           Milliseconds
+	TTL           time.Duration // from milliseconds
 	FirstAcquirer bool
 	DeliveryCount uint32
 }
@@ -202,7 +202,7 @@ func (h *Header) marshal() ([]byte, error) {
 	return marshalComposite(typeMessageHeader, []field{
 		{value: h.Durable, omit: !h.Durable},
 		{value: h.Priority, omit: h.Priority == 4},
-		{value: h.TTL, omit: h.TTL.Duration == 0},
+		{value: milliseconds(h.TTL), omit: h.TTL == 0},
 		{value: h.FirstAcquirer, omit: !h.FirstAcquirer},
 		{value: h.DeliveryCount, omit: h.DeliveryCount == 0},
 	}...)
@@ -212,7 +212,7 @@ func (h *Header) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, typeMessageHeader,
 		&h.Durable,
 		&h.Priority,
-		&h.TTL,
+		(*milliseconds)(&h.TTL),
 		&h.FirstAcquirer,
 		&h.DeliveryCount,
 	)
@@ -288,11 +288,11 @@ func (p *Properties) unmarshal(r byteReader) error {
 }
 
 const (
-	TypeStateReceived = 0x23
-	TypeStateAccepted = 0x24
-	TypeStateRejected = 0x25
-	TypeStateReleased = 0x26
-	TypeStateModified = 0x27
+	typeStateReceived = 0x23
+	typeStateAccepted = 0x24
+	typeStateRejected = 0x25
+	typeStateReleased = 0x26
+	typeStateModified = 0x27
 )
 
 /*
@@ -328,14 +328,14 @@ type StateReceived struct {
 }
 
 func (sr *StateReceived) marshal() ([]byte, error) {
-	return marshalComposite(TypeStateReceived, []field{
+	return marshalComposite(typeStateReceived, []field{
 		{value: sr.SectionNumber, omit: false},
 		{value: sr.SectionOffset, omit: false},
 	}...)
 }
 
 func (sr *StateReceived) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, TypeStateReceived,
+	return unmarshalComposite(r, typeStateReceived,
 		&sr.SectionNumber,
 		&sr.SectionOffset,
 	)
@@ -349,11 +349,11 @@ func (sr *StateReceived) unmarshal(r byteReader) error {
 type StateAccepted struct{}
 
 func (sa *StateAccepted) marshal() ([]byte, error) {
-	return marshalComposite(TypeStateAccepted)
+	return marshalComposite(typeStateAccepted)
 }
 
 func (sa *StateAccepted) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, TypeStateAccepted)
+	return unmarshalComposite(r, typeStateAccepted)
 }
 
 /*
@@ -367,13 +367,13 @@ type StateRejected struct {
 }
 
 func (sr *StateRejected) marshal() ([]byte, error) {
-	return marshalComposite(TypeStateRejected,
+	return marshalComposite(typeStateRejected,
 		field{value: sr.Error, omit: sr.Error == nil},
 	)
 }
 
 func (sr *StateRejected) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, TypeStateRejected,
+	return unmarshalComposite(r, typeStateRejected,
 		&sr.Error,
 	)
 }
@@ -386,11 +386,11 @@ func (sr *StateRejected) unmarshal(r byteReader) error {
 type StateReleased struct{}
 
 func (sr *StateReleased) marshal() ([]byte, error) {
-	return marshalComposite(TypeStateReleased)
+	return marshalComposite(typeStateReleased)
 }
 
 func (sr *StateReleased) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, TypeStateReleased)
+	return unmarshalComposite(r, typeStateReleased)
 }
 
 /*
@@ -425,7 +425,7 @@ type StateModified struct {
 }
 
 func (sm *StateModified) marshal() ([]byte, error) {
-	return marshalComposite(TypeStateModified, []field{
+	return marshalComposite(typeStateModified, []field{
 		{value: sm.DeliveryFailed, omit: !sm.DeliveryFailed},
 		{value: sm.UndeliverableHere, omit: !sm.UndeliverableHere},
 		{value: sm.MessageAnnotations, omit: sm.MessageAnnotations == nil},
@@ -433,7 +433,7 @@ func (sm *StateModified) marshal() ([]byte, error) {
 }
 
 func (sm *StateModified) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, TypeStateModified,
+	return unmarshalComposite(r, typeStateModified,
 		&sm.DeliveryFailed,
 		&sm.UndeliverableHere,
 		&sm.MessageAnnotations,

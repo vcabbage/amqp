@@ -189,7 +189,7 @@ func readCompositeHeader(r byteReader) (_ amqpType, fields int, _ error) {
 		return 0, 0, err
 	}
 
-	if byt == Null {
+	if byt == null {
 		return 0, 0, errNull
 	}
 
@@ -234,7 +234,7 @@ func marshalComposite(code amqpType, fields ...field) ([]byte, error) {
 
 	for i := 0; i < lastSetIdx+1; i++ {
 		if rawFields[i] == nil {
-			rawFields[i] = []byte{Null}
+			rawFields[i] = []byte{null}
 		}
 	}
 
@@ -251,10 +251,10 @@ func marshalComposite(code amqpType, fields ...field) ([]byte, error) {
 }
 
 func writeSymbolArray(w byteWriter, symbols []Symbol) error {
-	ofType := Sym8
+	ofType := sym8
 	for _, symbol := range symbols {
 		if len(symbol) > math.MaxUint8 {
-			ofType = Sym32
+			ofType = sym32
 			break
 		}
 	}
@@ -284,9 +284,9 @@ func writeSymbol(wr byteWriter, sym Symbol, typ uint8) error {
 	l := len(sym)
 
 	switch typ {
-	case Sym8:
+	case sym8:
 		wr.WriteByte(uint8(l))
-	case Sym32:
+	case sym32:
 		err := binary.Write(wr, binary.BigEndian, uint32(l))
 		if err != nil {
 			return err
@@ -307,12 +307,12 @@ func writeString(wr byteWriter, str string) error {
 	switch {
 	// Str8
 	case l < 256:
-		_, err := wr.Write(append([]byte{Str8, uint8(l)}, []byte(str)...))
+		_, err := wr.Write(append([]byte{str8, uint8(l)}, []byte(str)...))
 		return err
 
 	// Str32
 	case l < math.MaxUint32:
-		wr.WriteByte(Str32)
+		wr.WriteByte(str32)
 		err := binary.Write(wr, binary.BigEndian, uint32(l))
 		if err != nil {
 			return err
@@ -331,12 +331,12 @@ func writeBinary(wr byteWriter, bin []byte) error {
 	switch {
 	// List8
 	case l < 256:
-		_, err := wr.Write(append([]byte{Vbin8, uint8(l)}, bin...))
+		_, err := wr.Write(append([]byte{vbin8, uint8(l)}, bin...))
 		return err
 
 	// List32
 	case l < math.MaxUint32:
-		wr.WriteByte(Vbin32)
+		wr.WriteByte(vbin32)
 		err := binary.Write(wr, binary.BigEndian, uint32(l))
 		if err != nil {
 			return err
@@ -350,7 +350,7 @@ func writeBinary(wr byteWriter, bin []byte) error {
 }
 
 func writeComposite(wr byteWriter, code amqpType, fields ...[]byte) error {
-	_, err := wr.Write([]byte{0x0, Smallulong, uint8(code)})
+	_, err := wr.Write([]byte{0x0, smallulong, uint8(code)})
 	if err != nil {
 		return err
 	}
@@ -374,29 +374,29 @@ func writeSlice(wr byteWriter, isArray bool, arrayType uint8, fields ...[]byte) 
 		size += len(field)
 	}
 
-	size8 := List8
-	size32 := List32
+	size8 := list8
+	size32 := list32
 	if isArray {
-		size8 = Array8
-		size32 = Array32
+		size8 = array8
+		size32 = array32
 	}
 
 	switch l := len(fields); {
-	// List0
+	// list0
 	case l == 0:
 		if isArray {
 			return errors.New("invalid array length 0")
 		}
-		return wr.WriteByte(List0)
+		return wr.WriteByte(list0)
 
-	// List8
+	// list8
 	case l < 256 && size < 256:
 		_, err := wr.Write([]byte{size8, uint8(size + 1), uint8(l)})
 		if err != nil {
 			return err
 		}
 
-	// List32
+	// list32
 	case l < math.MaxUint32 && size < math.MaxUint32:
 		err := wr.WriteByte(size32)
 		if err != nil {
@@ -502,15 +502,15 @@ func readBinary(r byteReader) ([]byte, error) {
 func readVariableType(r byteReader, t byte) ([]byte, error) {
 	var buf []byte
 	switch t {
-	case Null:
+	case null:
 		return nil, nil
-	case Vbin8, Str8, Sym8:
+	case vbin8, str8, sym8:
 		n, err := r.ReadByte()
 		if err != nil {
 			return nil, err
 		}
 		buf = make([]byte, int(n))
-	case Vbin32, Str32, Sym32:
+	case vbin32, str32, sym32:
 		var n uint32
 		err := binary.Read(r, binary.BigEndian, &n)
 		if err != nil {
@@ -531,11 +531,11 @@ func readSlice(r byteReader) (elements int, length int, _ error) {
 	}
 
 	switch b {
-	case Null:
+	case null:
 		return 0, 0, errNull
-	case List0:
+	case list0:
 		return 0, 0, nil
-	case List8, Array8:
+	case list8, array8:
 		lByte, err := r.ReadByte()
 		if err != nil {
 			return 0, 0, err
@@ -545,7 +545,7 @@ func readSlice(r byteReader) (elements int, length int, _ error) {
 			return 0, 0, err
 		}
 		return int(elemByte), int(lByte), nil
-	case List32, Array32:
+	case list32, array32:
 		var elems uint32
 		var l uint32
 		err = binary.Read(r, binary.BigEndian, &l)
@@ -568,7 +568,7 @@ func readAny(r byteReader) (interface{}, error) {
 		return nil, err
 	}
 
-	if b == Null {
+	if b == null {
 		return nil, nil
 	}
 
@@ -578,20 +578,20 @@ func readAny(r byteReader) (interface{}, error) {
 	}
 
 	switch b {
-	case Bool, BoolTrue, BoolFalse:
+	case boolAMQP, boolTrue, boolFalse:
 		return readBool(r)
-	case Ubyte, Ushort, Uint, Smalluint, Uint0, Ulong, Smallulong, Ulong0:
+	case ubyte, ushort, uintAMQP, smalluint, uint0, ulong, smallulong, ulong0:
 		return readUint(r)
-	case Byte, Short, Int, Smallint, Long, Smalllong:
+	case byteAMQP, short, intAMQP, smallint, long, smalllong:
 		return readInt(r)
-	case Float, Double, Decimal32, Decimal64, Decimal128, Char, UUID,
-		List0, List8, List32, Map8, Map32, Array8, Array32:
+	case float, double, decimal32, decimal64, decimal128, char, uuid,
+		list0, list8, list32, map8, map32, array8, array32:
 		return nil, errors.Errorf("%0x not implemented", b)
-	case Vbin8, Vbin32:
+	case vbin8, vbin32:
 		return readBinary(r)
-	case Str8, Str32, Sym8, Sym32:
+	case str8, str32, sym8, sym32:
 		return readString(r)
-	case Timestamp:
+	case timestamp:
 		return readTimestamp(r)
 	default:
 		return nil, errors.Errorf("unknown type %0x", b)
@@ -603,10 +603,10 @@ func readTimestamp(r byteReader) (time.Time, error) {
 	if err != nil {
 		return time.Time{}, err
 	}
-	if typ == Null {
+	if typ == null {
 		return time.Time{}, errNull
 	}
-	if typ != Timestamp {
+	if typ != timestamp {
 		return time.Time{}, errors.Errorf("invaild type for timestamp %0x", typ)
 	}
 	var n uint64
@@ -617,59 +617,59 @@ func readTimestamp(r byteReader) (time.Time, error) {
 
 // Type codes
 const (
-	Null uint8 = 0x40
+	null uint8 = 0x40
 
 	// Bool
-	Bool      uint8 = 0x56 // boolean with the octet 0x00 being false and octet 0x01 being true
-	BoolTrue  uint8 = 0x41
-	BoolFalse uint8 = 0x42
+	boolAMQP  uint8 = 0x56 // boolean with the octet 0x00 being false and octet 0x01 being true
+	boolTrue  uint8 = 0x41
+	boolFalse uint8 = 0x42
 
 	// Unsigned
-	Ubyte      uint8 = 0x50 // 8-bit unsigned integer (1)
-	Ushort     uint8 = 0x60 // 16-bit unsigned integer in network byte order (2)
-	Uint       uint8 = 0x70 // 32-bit unsigned integer in network byte order (4)
-	Smalluint  uint8 = 0x52 // unsigned integer value in the range 0 to 255 inclusive (1)
-	Uint0      uint8 = 0x43 // the uint value 0 (0)
-	Ulong      uint8 = 0x80 // 64-bit unsigned integer in network byte order (8)
-	Smallulong uint8 = 0x53 // unsigned long value in the range 0 to 255 inclusive (1)
-	Ulong0     uint8 = 0x44 // the ulong value 0 (0)
+	ubyte      uint8 = 0x50 // 8-bit unsigned integer (1)
+	ushort     uint8 = 0x60 // 16-bit unsigned integer in network byte order (2)
+	uintAMQP   uint8 = 0x70 // 32-bit unsigned integer in network byte order (4)
+	smalluint  uint8 = 0x52 // unsigned integer value in the range 0 to 255 inclusive (1)
+	uint0      uint8 = 0x43 // the uint value 0 (0)
+	ulong      uint8 = 0x80 // 64-bit unsigned integer in network byte order (8)
+	smallulong uint8 = 0x53 // unsigned long value in the range 0 to 255 inclusive (1)
+	ulong0     uint8 = 0x44 // the ulong value 0 (0)
 
 	// Signed
-	Byte      uint8 = 0x51 // 8-bit two's-complement integer (1)
-	Short     uint8 = 0x61 // 16-bit two's-complement integer in network byte order (2)
-	Int       uint8 = 0x71 // 32-bit two's-complement integer in network byte order (4)
-	Smallint  uint8 = 0x54 // 8-bit two's-complement integer (1)
-	Long      uint8 = 0x81 // 64-bit two's-complement integer in network byte order (8)
-	Smalllong uint8 = 0x55 // 8-bit two's-complement integer
+	byteAMQP  uint8 = 0x51 // 8-bit two's-complement integer (1)
+	short     uint8 = 0x61 // 16-bit two's-complement integer in network byte order (2)
+	intAMQP   uint8 = 0x71 // 32-bit two's-complement integer in network byte order (4)
+	smallint  uint8 = 0x54 // 8-bit two's-complement integer (1)
+	long      uint8 = 0x81 // 64-bit two's-complement integer in network byte order (8)
+	smalllong uint8 = 0x55 // 8-bit two's-complement integer
 
 	// Decimal
-	Float      uint8 = 0x72 // IEEE 754-2008 binary32 (4)
-	Double     uint8 = 0x82 // IEEE 754-2008 binary64 (8)
-	Decimal32  uint8 = 0x74 // IEEE 754-2008 decimal32 using the Binary Integer Decimal encoding (4)
-	Decimal64  uint8 = 0x84 // IEEE 754-2008 decimal64 using the Binary Integer Decimal encoding (8)
-	Decimal128 uint8 = 0x94 // IEEE 754-2008 decimal128 using the Binary Integer Decimal encoding (16)
+	float      uint8 = 0x72 // IEEE 754-2008 binary32 (4)
+	double     uint8 = 0x82 // IEEE 754-2008 binary64 (8)
+	decimal32  uint8 = 0x74 // IEEE 754-2008 decimal32 using the Binary Integer Decimal encoding (4)
+	decimal64  uint8 = 0x84 // IEEE 754-2008 decimal64 using the Binary Integer Decimal encoding (8)
+	decimal128 uint8 = 0x94 // IEEE 754-2008 decimal128 using the Binary Integer Decimal encoding (16)
 
 	// Other
-	Char      uint8 = 0x73 // a UTF-32BE encoded Unicode character (4)
-	Timestamp uint8 = 0x83 // 64-bit two's-complement integer representing milliseconds since the unix epoc
-	UUID      uint8 = 0x98 // UUID as defined in section 4.1.2 of RFC-4122
+	char      uint8 = 0x73 // a UTF-32BE encoded Unicode character (4)
+	timestamp uint8 = 0x83 // 64-bit two's-complement integer representing milliseconds since the unix epoc
+	uuid      uint8 = 0x98 // UUID as defined in section 4.1.2 of RFC-4122
 
 	// Variable Length
-	Vbin8  uint8 = 0xa0 // up to 2^8 - 1 octets of binary data (1 + variable)
-	Vbin32 uint8 = 0xb0 // up to 2^32 - 1 octets of binary data (4 + variable)
-	Str8   uint8 = 0xa1 // up to 2^8 - 1 octets worth of UTF-8 Unicode (with no byte order mark) (1 + variable)
-	Str32  uint8 = 0xb1 // up to 2^32 - 1 octets worth of UTF-8 Unicode (with no byte order mark) (4 +variable)
-	Sym8   uint8 = 0xa3 // up to 2^8 - 1 seven bit ASCII characters representing a symbolic value (1 + variable)
-	Sym32  uint8 = 0xb3 // up to 2^32 - 1 seven bit ASCII characters representing a symbolic value (4 + variable)
+	vbin8  uint8 = 0xa0 // up to 2^8 - 1 octets of binary data (1 + variable)
+	vbin32 uint8 = 0xb0 // up to 2^32 - 1 octets of binary data (4 + variable)
+	str8   uint8 = 0xa1 // up to 2^8 - 1 octets worth of UTF-8 Unicode (with no byte order mark) (1 + variable)
+	str32  uint8 = 0xb1 // up to 2^32 - 1 octets worth of UTF-8 Unicode (with no byte order mark) (4 +variable)
+	sym8   uint8 = 0xa3 // up to 2^8 - 1 seven bit ASCII characters representing a symbolic value (1 + variable)
+	sym32  uint8 = 0xb3 // up to 2^32 - 1 seven bit ASCII characters representing a symbolic value (4 + variable)
 
 	// Compound
-	List0   uint8 = 0x45 // the empty list (i.e. the list with no elements) (0)
-	List8   uint8 = 0xc0 // up to 2^8 - 1 list elements with total size less than 2^8 octets (1 + compound)
-	List32  uint8 = 0xd0 // up to 2^32 - 1 list elements with total size less than 2^32 octets (4 + compound)
-	Map8    uint8 = 0xc1 // up to 2^8 - 1 octets of encoded map data (1 + compound)
-	Map32   uint8 = 0xd1 // up to 2^32 - 1 octets of encoded map data (4 + compound)
-	Array8  uint8 = 0xe0 // up to 2^8 - 1 array elements with total size less than 2^8 octets (1 + array)
-	Array32 uint8 = 0xf0 // up to 2^32 - 1 array elements with total size less than 2^32 octets (4 + array)
+	list0   uint8 = 0x45 // the empty list (i.e. the list with no elements) (0)
+	list8   uint8 = 0xc0 // up to 2^8 - 1 list elements with total size less than 2^8 octets (1 + compound)
+	list32  uint8 = 0xd0 // up to 2^32 - 1 list elements with total size less than 2^32 octets (4 + compound)
+	map8    uint8 = 0xc1 // up to 2^8 - 1 octets of encoded map data (1 + compound)
+	map32   uint8 = 0xd1 // up to 2^32 - 1 octets of encoded map data (4 + compound)
+	array8  uint8 = 0xe0 // up to 2^8 - 1 array elements with total size less than 2^8 octets (1 + array)
+	array32 uint8 = 0xf0 // up to 2^32 - 1 array elements with total size less than 2^32 octets (4 + array)
 )
 
 func readInt(r byteReader) (value int, _ error) {
@@ -680,38 +680,38 @@ func readInt(r byteReader) (value int, _ error) {
 
 	switch b {
 	// Unsigned
-	case Uint0, Ulong0:
+	case uint0, ulong0:
 		return 0, nil
-	case Ubyte, Smalluint, Smallulong:
+	case ubyte, smalluint, smallulong:
 		n, err := r.ReadByte()
 		return int(n), err
-	case Ushort:
+	case ushort:
 		var n uint16
 		err := binary.Read(r, binary.BigEndian, &n)
 		return int(n), err
-	case Uint:
+	case uintAMQP:
 		var n uint32
 		err := binary.Read(r, binary.BigEndian, &n)
 		return int(n), err
-	case Ulong:
+	case ulong:
 		var n uint64
 		err := binary.Read(r, binary.BigEndian, &n)
 		return int(n), err
 
 	// Signed
-	case Byte, Smallint, Smalllong:
+	case byteAMQP, smallint, smalllong:
 		var n int8
 		err := binary.Read(r, binary.BigEndian, &n)
 		return int(n), err
-	case Short:
+	case short:
 		var n int16
 		err := binary.Read(r, binary.BigEndian, &n)
 		return int(n), err
-	case Int:
+	case intAMQP:
 		var n int32
 		err := binary.Read(r, binary.BigEndian, &n)
 		return int(n), err
-	case Long:
+	case long:
 		var n int64
 		err := binary.Read(r, binary.BigEndian, &n)
 		return int(n), err
@@ -727,17 +727,17 @@ func readBool(r byteReader) (bool, error) {
 	}
 
 	switch b {
-	case Null:
+	case null:
 		return false, errNull
-	case Bool:
+	case boolAMQP:
 		b, err = r.ReadByte()
 		if err != nil {
 			return false, err
 		}
 		return b != 0, nil
-	case BoolTrue:
+	case boolTrue:
 		return true, nil
-	case BoolFalse:
+	case boolFalse:
 		return false, nil
 	default:
 		return false, fmt.Errorf("type code %x is not a recognized bool type", b)
@@ -753,22 +753,22 @@ func readUint(r byteReader) (value uint64, _ error) {
 	}
 
 	switch b {
-	case Null:
+	case null:
 		return 0, errNull
-	case Uint0, Ulong0:
+	case uint0, ulong0:
 		return 0, nil
-	case Ubyte, Smalluint, Smallulong:
+	case ubyte, smalluint, smallulong:
 		n, err := r.ReadByte()
 		return uint64(n), err
-	case Ushort:
+	case ushort:
 		var n uint16
 		err := binary.Read(r, binary.BigEndian, &n)
 		return uint64(n), err
-	case Uint:
+	case uintAMQP:
 		var n uint32
 		err := binary.Read(r, binary.BigEndian, &n)
 		return uint64(n), err
-	case Ulong:
+	case ulong:
 		var n uint64
 		err := binary.Read(r, binary.BigEndian, &n)
 		return n, err
@@ -791,7 +791,7 @@ func (s Symbol) marshal() ([]byte, error) {
 	switch {
 	// List8
 	case l < 256:
-		_, err = buf.Write(append([]byte{Sym8, uint8(l)}, []byte(s)...))
+		_, err = buf.Write(append([]byte{sym8, uint8(l)}, []byte(s)...))
 
 	// List32
 	case l < math.MaxUint32:
@@ -824,52 +824,52 @@ func marshal(i interface{}) ([]byte, error) {
 	switch t := i.(type) {
 	case bool:
 		if t {
-			err = buf.WriteByte(BoolTrue)
+			err = buf.WriteByte(boolTrue)
 		} else {
-			err = buf.WriteByte(BoolFalse)
+			err = buf.WriteByte(boolFalse)
 		}
 	case uint64:
 		if t == 0 {
-			err = buf.WriteByte(Ulong0)
+			err = buf.WriteByte(ulong0)
 			break
 		}
-		err = buf.WriteByte(Ulong)
+		err = buf.WriteByte(ulong)
 		if err != nil {
 			return nil, err
 		}
 		err = binary.Write(buf, binary.BigEndian, t)
 	case uint32:
 		if t == 0 {
-			err = buf.WriteByte(Uint0)
+			err = buf.WriteByte(uint0)
 			break
 		}
-		err = buf.WriteByte(Uint)
+		err = buf.WriteByte(uintAMQP)
 		if err != nil {
 			return nil, err
 		}
 		err = binary.Write(buf, binary.BigEndian, t)
 	case *uint32:
 		if t == nil {
-			err = buf.WriteByte(Null)
+			err = buf.WriteByte(null)
 			break
 		}
 		if *t == 0 {
-			err = buf.WriteByte(Uint0)
+			err = buf.WriteByte(uint0)
 			break
 		}
-		err = buf.WriteByte(Uint)
+		err = buf.WriteByte(uintAMQP)
 		if err != nil {
 			return nil, err
 		}
 		err = binary.Write(buf, binary.BigEndian, *t)
 	case uint16:
-		err = buf.WriteByte(Ushort)
+		err = buf.WriteByte(ushort)
 		if err != nil {
 			return nil, err
 		}
 		err = binary.Write(buf, binary.BigEndian, t)
 	case uint8:
-		_, err = buf.Write([]byte{Ubyte, t})
+		_, err = buf.Write([]byte{ubyte, t})
 	case []Symbol:
 		err = writeSymbolArray(buf, t)
 	case string:
@@ -882,31 +882,29 @@ func marshal(i interface{}) ([]byte, error) {
 	return append([]byte(nil), buf.Bytes()...), err
 }
 
-type Milliseconds struct {
-	time.Duration
+type milliseconds time.Duration
+
+func (m milliseconds) marshal() ([]byte, error) {
+	return marshal(uint32((time.Duration)(m).Nanoseconds() / 1000000))
 }
 
-func (m Milliseconds) marshal() ([]byte, error) {
-	return marshal(uint32(m.Duration.Seconds()))
-}
-
-func (m *Milliseconds) unmarshal(r byteReader) error {
+func (m *milliseconds) unmarshal(r byteReader) error {
 	var n uint32
 	err := unmarshal(r, &n)
-	m.Duration = time.Duration(n) * time.Millisecond
+	*m = milliseconds(time.Duration(n) * time.Millisecond)
 	return err
 }
 
 func writeMapHeader(wr byteWriter, elements int) error {
 	if elements < math.MaxUint8 {
-		err := wr.WriteByte(Map8)
+		err := wr.WriteByte(map8)
 		if err != nil {
 			return err
 		}
 		return wr.WriteByte(uint8(elements))
 	}
 
-	err := wr.WriteByte(Map32)
+	err := wr.WriteByte(map32)
 	if err != nil {
 		return err
 	}
@@ -972,15 +970,15 @@ func newMapReader(r byteReader) (*mapReader, error) {
 
 	var n int
 	switch b {
-	case Null:
+	case null:
 		return nil, errNull
-	case Map8:
+	case map8:
 		bn, err := r.ReadByte()
 		if err != nil {
 			return nil, err
 		}
 		n = int(bn)
-	case Map32:
+	case map32:
 		var n32 uint32
 		err = binary.Read(r, binary.BigEndian, &n32)
 		if err != nil {

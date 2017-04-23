@@ -180,31 +180,31 @@ func (c *Conn) NewSession() (*Session, error) {
 	return s, nil
 }
 
-func parseFrame(payload []byte) (Preformative, error) {
+func parseFrame(payload []byte) (preformative, error) {
 	pType, err := preformativeType(payload)
 	if err != nil {
 		return nil, err
 	}
 
-	var t Preformative
+	var t preformative
 	switch pType {
-	case PreformativeOpen:
+	case preformativeOpen:
 		t = &performativeOpen{}
-	case PreformativeBegin:
+	case preformativeBegin:
 		t = &performativeBegin{}
-	case PreformativeAttach:
+	case preformativeAttach:
 		t = &performativeAttach{}
-	case PreformativeFlow:
+	case preformativeFlow:
 		t = &flow{}
-	case PreformativeTransfer:
+	case preformativeTransfer:
 		t = &performativeTransfer{}
-	case PreformativeDisposition:
+	case preformativeDisposition:
 		t = &performativeDisposition{}
-	case PreformativeDetach:
+	case preformativeDetach:
 		t = &performativeDetach{}
-	case PreformativeEnd:
+	case preformativeEnd:
 		t = &performativeEnd{}
-	case PreformativeClose:
+	case preformativeClose:
 		t = &performativeClose{}
 	default:
 		return nil, errors.Errorf("unknown preformative type %0x", pType)
@@ -216,7 +216,7 @@ func parseFrame(payload []byte) (Preformative, error) {
 
 type frame struct {
 	channel      uint16
-	preformative Preformative
+	preformative preformative
 }
 
 func (c *Conn) startMux() {
@@ -229,7 +229,7 @@ func (c *Conn) startMux() {
 
 	keepalive := time.NewTicker(c.idleTimeout / 2)
 	var buf bytes.Buffer
-	writeFrame(&buf, FrameTypeAMQP, 0, nil)
+	writeFrame(&buf, frameTypeAMQP, 0, nil)
 	keepaliveFrame := buf.Bytes()
 	buf.Reset()
 
@@ -332,19 +332,19 @@ On connection open, we'll need to handle 4 possible scenarios:
 func (c *Conn) negotiateProto() stateFunc {
 	switch {
 	case c.tlsNegotiation && !c.tlsComplete:
-		return c.exchangeProtoHeader(ProtoTLS)
+		return c.exchangeProtoHeader(protoTLS)
 	case c.saslHandlers != nil && !c.saslComplete:
-		return c.exchangeProtoHeader(ProtoSASL)
+		return c.exchangeProtoHeader(protoSASL)
 	default:
-		return c.exchangeProtoHeader(ProtoAMQP)
+		return c.exchangeProtoHeader(protoAMQP)
 	}
 }
 
 // ProtoIDs
 const (
-	ProtoAMQP = 0x0
-	ProtoTLS  = 0x2
-	ProtoSASL = 0x3
+	protoAMQP = 0x0
+	protoTLS  = 0x2
+	protoSASL = 0x3
 )
 
 func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
@@ -382,11 +382,11 @@ func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
 	}
 
 	switch proto {
-	case ProtoAMQP:
+	case protoAMQP:
 		return c.txOpen
-	case ProtoTLS:
+	case protoTLS:
 		return c.protoTLS
-	case ProtoSASL:
+	case protoSASL:
 		return c.protoSASL
 	default:
 		c.err = fmt.Errorf("unknown protocol ID %#02x", p.protoID)
@@ -413,7 +413,7 @@ func (c *Conn) txPreformative(fr frame) error {
 	defer bufPool.Put(wr)
 	wr.Reset()
 
-	err = writeFrame(wr, FrameTypeAMQP, fr.channel, data)
+	err = writeFrame(wr, frameTypeAMQP, fr.channel, data)
 	if err != nil {
 		return err
 	}
@@ -452,7 +452,7 @@ func (c *Conn) rxOpen() stateFunc {
 		return nil
 	}
 
-	if fh.frameType != FrameTypeAMQP {
+	if fh.frameType != frameTypeAMQP {
 		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
 	}
 
@@ -465,8 +465,8 @@ func (c *Conn) rxOpen() stateFunc {
 
 	fmt.Printf("Rx Open: %#v\n", o)
 
-	if o.IdleTimeout.Duration > 0 {
-		c.idleTimeout = o.IdleTimeout.Duration
+	if o.IdleTimeout > 0 {
+		c.idleTimeout = o.IdleTimeout
 	}
 
 	if o.MaxFrameSize < c.maxFrameSize {
@@ -504,7 +504,7 @@ func (c *Conn) protoSASL() stateFunc {
 		return nil
 	}
 
-	if fh.frameType != FrameTypeSASL {
+	if fh.frameType != frameTypeSASL {
 		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
 	}
 
@@ -539,7 +539,7 @@ func (c *Conn) saslOutcome() stateFunc {
 		return nil
 	}
 
-	if fh.frameType != FrameTypeSASL {
+	if fh.frameType != frameTypeSASL {
 		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
 	}
 
@@ -549,7 +549,7 @@ func (c *Conn) saslOutcome() stateFunc {
 		return nil
 	}
 
-	if so.Code != CodeSASLOK {
+	if so.Code != codeSASLOK {
 		c.err = fmt.Errorf("SASL PLAIN auth failed with code %#00x: %s", so.Code, so.AdditionalData)
 		return nil
 	}

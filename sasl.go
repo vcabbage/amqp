@@ -7,11 +7,11 @@ import (
 
 // SASL Codes
 const (
-	CodeSASLOK      saslCode = iota // Connection authentication succeeded.
-	CodeSASLAuth                    // Connection authentication failed due to an unspecified problem with the supplied credentials.
-	CodeSASLSys                     // Connection authentication failed due to a system error.
-	CodeSASLSysPerm                 // Connection authentication failed due to a system error that is unlikely to be corrected without intervention.
-	CodeSASLSysTemp                 // Connection authentication failed due to a transient system error.
+	codeSASLOK      saslCode = iota // Connection authentication succeeded.
+	codeSASLAuth                    // Connection authentication failed due to an unspecified problem with the supplied credentials.
+	codeSASLSys                     // Connection authentication failed due to a system error.
+	codeSASLSysPerm                 // Connection authentication failed due to a system error that is unlikely to be corrected without intervention.
+	codeSASLSysTemp                 // Connection authentication failed due to a transient system error.
 )
 
 type amqpType uint8
@@ -71,7 +71,7 @@ func (h *saslHandlerPlain) init() stateFunc {
 	wr.Reset()
 	defer bufPool.Put(wr)
 
-	writeFrame(wr, FrameTypeSASL, 0, saslInit)
+	writeFrame(wr, frameTypeSASL, 0, saslInit)
 
 	fmt.Printf("Writing: %# 02x\n", wr.Bytes())
 

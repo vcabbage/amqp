@@ -3,36 +3,37 @@ package amqp
 import (
 	"errors"
 	"io/ioutil"
+	"time"
 )
 
-type Preformative interface {
+type preformative interface {
 	link() (handle uint32, ok bool)
 }
 
-// Preformative Types
+// preformative Types
 const (
-	PreformativeEmpty       = 0xff // used to indicate empty payload, not part of spec
-	PreformativeOpen        = 0x10
-	PreformativeBegin       = 0x11
-	PreformativeAttach      = 0x12
-	PreformativeFlow        = 0x13
-	PreformativeTransfer    = 0x14
-	PreformativeDisposition = 0x15
-	PreformativeDetach      = 0x16
-	PreformativeEnd         = 0x17
-	PreformativeClose       = 0x18
+	preformativeEmpty       = 0xff // used to indicate empty payload, not part of spec
+	preformativeOpen        = 0x10
+	preformativeBegin       = 0x11
+	preformativeAttach      = 0x12
+	preformativeFlow        = 0x13
+	preformativeTransfer    = 0x14
+	preformativeDisposition = 0x15
+	preformativeDetach      = 0x16
+	preformativeEnd         = 0x17
+	preformativeClose       = 0x18
 
-	TypeSource = 0x28
-	TypeTarget = 0x29
-	TypeError  = 0x1d
+	typeSource = 0x28
+	typeTarget = 0x29
+	typeError  = 0x1d
 )
 
 func preformativeType(payload []byte) (uint8, error) {
 	if len(payload) == 0 {
-		return PreformativeEmpty, nil
+		return preformativeEmpty, nil
 	}
 
-	if len(payload) < 3 || payload[0] != 0 || payload[1] != Smallulong {
+	if len(payload) < 3 || payload[0] != 0 || payload[1] != smallulong {
 		return 0, errors.New("invalid preformative header")
 	}
 
@@ -57,9 +58,9 @@ func preformativeType(payload []byte) (uint8, error) {
 type performativeOpen struct {
 	ContainerID         string // required
 	Hostname            string
-	MaxFrameSize        uint32       // default: 4294967295
-	ChannelMax          uint16       // default: 65535
-	IdleTimeout         Milliseconds // from milliseconds
+	MaxFrameSize        uint32        // default: 4294967295
+	ChannelMax          uint16        // default: 65535
+	IdleTimeout         time.Duration // from milliseconds
 	OutgoingLocales     []Symbol
 	IncomingLocales     []Symbol
 	OfferedCapabilities []Symbol
@@ -77,23 +78,23 @@ func (o *performativeOpen) marshal() ([]byte, error) {
 		{value: o.Hostname, omit: o.Hostname == ""},
 		{value: o.MaxFrameSize, omit: o.MaxFrameSize == 0},
 		{value: o.ChannelMax, omit: o.ChannelMax == 0},
-		{value: o.IdleTimeout, omit: o.IdleTimeout.Duration == 0},
+		{value: milliseconds(o.IdleTimeout), omit: o.IdleTimeout == 0},
 		{value: o.OutgoingLocales, omit: len(o.OutgoingLocales) == 0},
 		{value: o.IncomingLocales, omit: len(o.IncomingLocales) == 0},
 		{value: o.OfferedCapabilities, omit: len(o.OfferedCapabilities) == 0},
 		{value: o.DesiredCapabilities, omit: len(o.DesiredCapabilities) == 0},
 		{value: o.Properties, omit: len(o.Properties) == 0},
 	}
-	return marshalComposite(PreformativeOpen, fields...)
+	return marshalComposite(preformativeOpen, fields...)
 }
 
 func (o *performativeOpen) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, PreformativeOpen,
+	return unmarshalComposite(r, preformativeOpen,
 		&o.ContainerID,
 		&o.Hostname,
 		&o.MaxFrameSize,
 		&o.ChannelMax,
-		&o.IdleTimeout,
+		(*milliseconds)(&o.IdleTimeout),
 		&o.OutgoingLocales,
 		&o.IncomingLocales,
 		&o.OfferedCapabilities,
@@ -196,11 +197,11 @@ func (b *performativeBegin) marshal() ([]byte, error) {
 		{value: b.OfferedCapabilities, omit: len(b.OfferedCapabilities) == 0},
 		{value: b.DesiredCapabilities, omit: len(b.DesiredCapabilities) == 0},
 	}
-	return marshalComposite(PreformativeBegin, fields...)
+	return marshalComposite(preformativeBegin, fields...)
 }
 
 func (b *performativeBegin) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, PreformativeBegin,
+	return unmarshalComposite(r, preformativeBegin,
 		&b.RemoteChannel,
 		&b.NextOutgoingID,
 		&b.IncomingWindow,
@@ -414,11 +415,11 @@ func (a *performativeAttach) marshal() ([]byte, error) {
 		{value: a.DesiredCapabilities, omit: len(a.DesiredCapabilities) == 0},
 		{value: a.Properties, omit: len(a.Properties) == 0},
 	}
-	return marshalComposite(PreformativeAttach, fields...)
+	return marshalComposite(preformativeAttach, fields...)
 }
 
 func (a *performativeAttach) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, PreformativeAttach,
+	return unmarshalComposite(r, preformativeAttach,
 		&a.Name,
 		&a.Handle,
 		&a.Role,
@@ -584,11 +585,11 @@ func (s *source) marshal() ([]byte, error) {
 		{value: s.Outcomes, omit: len(s.Outcomes) == 0},
 		{value: s.Capabilities, omit: len(s.Capabilities) == 0},
 	}
-	return marshalComposite(TypeSource, fields...)
+	return marshalComposite(typeSource, fields...)
 }
 
 func (s *source) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, TypeSource,
+	return unmarshalComposite(r, typeSource,
 		&s.Address,
 		&s.Durable,
 		&s.ExpiryPolicy,
@@ -710,11 +711,11 @@ func (t *target) marshal() ([]byte, error) {
 		{value: t.DynamicNodeProperties, omit: len(t.DynamicNodeProperties) == 0},
 		{value: t.Capabilities, omit: len(t.Capabilities) == 0},
 	}
-	return marshalComposite(TypeTarget, fields...)
+	return marshalComposite(typeTarget, fields...)
 }
 
 func (t *target) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, TypeTarget,
+	return unmarshalComposite(r, typeTarget,
 		&t.Address,
 		&t.Durable,
 		&t.ExpiryPolicy,
@@ -861,11 +862,11 @@ func (f *flow) marshal() ([]byte, error) {
 		{value: f.Echo, omit: !f.Echo},
 		{value: f.Properties, omit: len(f.Properties) == 0},
 	}
-	return marshalComposite(PreformativeFlow, fields...)
+	return marshalComposite(preformativeFlow, fields...)
 }
 
 func (f *flow) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, PreformativeFlow,
+	return unmarshalComposite(r, preformativeFlow,
 		f.NextIncomingID,
 		&f.IncomingWindow,
 		&f.NextOutgoingID,
@@ -1051,11 +1052,11 @@ func (t *performativeTransfer) marshal() ([]byte, error) {
 		{value: t.Aborted, omit: !t.Aborted},
 		{value: t.Batchable, omit: !t.Batchable},
 	}
-	return marshalComposite(PreformativeFlow, fields...)
+	return marshalComposite(preformativeFlow, fields...)
 }
 
 func (t *performativeTransfer) unmarshal(r byteReader) error {
-	err := unmarshalComposite(r, PreformativeTransfer,
+	err := unmarshalComposite(r, preformativeTransfer,
 		&t.Handle,
 		&t.DeliveryID,
 		&t.DeliveryTag,
@@ -1138,11 +1139,11 @@ func (d *performativeDisposition) marshal() ([]byte, error) {
 		{value: d.State, omit: d.State == nil},
 		{value: d.Batchable, omit: !d.Batchable},
 	}
-	return marshalComposite(PreformativeDisposition, fields...)
+	return marshalComposite(preformativeDisposition, fields...)
 }
 
 func (d *performativeDisposition) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, PreformativeDisposition,
+	return unmarshalComposite(r, preformativeDisposition,
 		&d.Role,
 		&d.First,
 		&d.Last,
@@ -1184,11 +1185,11 @@ func (d *performativeDetach) marshal() ([]byte, error) {
 		{value: d.Closed, omit: !d.Closed},
 		{value: d.Error, omit: d.Error == nil},
 	}
-	return marshalComposite(PreformativeDetach, fields...)
+	return marshalComposite(preformativeDetach, fields...)
 }
 
 func (d *performativeDetach) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, PreformativeDetach,
+	return unmarshalComposite(r, preformativeDetach,
 		&d.Handle,
 		&d.Closed,
 		&d.Error,
@@ -1225,11 +1226,11 @@ func (e *Error) marshal() ([]byte, error) {
 		{value: e.Description, omit: e.Description == ""},
 		{value: e.Info, omit: len(e.Info) == 0},
 	}
-	return marshalComposite(TypeError, fields...)
+	return marshalComposite(typeError, fields...)
 }
 
 func (e *Error) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, TypeError,
+	return unmarshalComposite(r, typeError,
 		&e.Condition,
 		&e.Description,
 		&e.Info,
@@ -1258,11 +1259,11 @@ func (e *performativeEnd) marshal() ([]byte, error) {
 	fields := []field{
 		{value: e.Error, omit: e.Error == nil},
 	}
-	return marshalComposite(PreformativeEnd, fields...)
+	return marshalComposite(preformativeEnd, fields...)
 }
 
 func (e *performativeEnd) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, PreformativeEnd,
+	return unmarshalComposite(r, preformativeEnd,
 		e.Error,
 	)
 }
@@ -1289,11 +1290,11 @@ func (c *performativeClose) marshal() ([]byte, error) {
 	fields := []field{
 		{value: c.Error, omit: c.Error == nil},
 	}
-	return marshalComposite(PreformativeClose, fields...)
+	return marshalComposite(preformativeClose, fields...)
 }
 
 func (c *performativeClose) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, PreformativeClose,
+	return unmarshalComposite(r, preformativeClose,
 		c.Error,
 	)
 }

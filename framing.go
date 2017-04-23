@@ -25,8 +25,8 @@ func (fh frameHeader) dataOffsetBytes() int {
 
 // Frame Types
 const (
-	FrameTypeAMQP = 0x0
-	FrameTypeSASL = 0x1
+	frameTypeAMQP = 0x0
+	frameTypeSASL = 0x1
 )
 
 func parseFrameHeader(buf []byte) (frameHeader, error) {

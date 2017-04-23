@@ -18,7 +18,7 @@ type link struct {
 	handle     uint32
 	sourceAddr string
 	linkCredit uint32
-	rx         chan Preformative
+	rx         chan preformative
 	session    *Session
 
 	creditUsed          uint32
@@ -54,7 +54,7 @@ func newLink(s *Session, handle uint32) *link {
 	return &link{
 		handle:     handle,
 		linkCredit: 1,
-		rx:         make(chan Preformative),
+		rx:         make(chan preformative),
 		session:    s,
 	}
 }
