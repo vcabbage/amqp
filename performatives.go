@@ -1216,7 +1216,7 @@ type Error struct {
 	Description string
 
 	// map carrying information about the error condition
-	Info map[Symbol]interface{}
+	Info Fields
 }
 
 func (e *Error) MarshalBinary() ([]byte, error) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"log"
+	"math/rand"
 )
 
 type Session struct {
@@ -23,22 +24,17 @@ func (s *Session) Close() {
 	s.conn.delSession <- s
 }
 
-func (s *Session) txFrame(preformative Preformative) error {
-	data, err := Marshal(preformative)
-	if err != nil {
-		return err
+func (s *Session) txFrame(p Preformative) {
+	s.conn.txFrame <- frame{preformative: p, channel: s.channel}
+}
+
+func randString() string { // TODO: random string gen off SO, replace
+	var letterBytes = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+	b := make([]byte, 40)
+	for i := range b {
+		b[i] = letterBytes[rand.Int63()%int64(len(letterBytes))]
 	}
-
-	wr := bufPool.New().(*bytes.Buffer)
-	wr.Reset()
-
-	err = writeFrame(wr, FrameTypeAMQP, s.channel, data)
-	if err != nil {
-		return err
-	}
-
-	s.conn.txFrame <- wr
-	return nil
+	return string(b)
 }
 
 func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
@@ -53,17 +49,14 @@ func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
 	}
 	link.creditUsed = link.linkCredit
 
-	err := s.txFrame(&Attach{
-		Name:   "ASHJDJKHJA-ASDHJ-ASDHGJH-ASDSAD78Y",
+	s.txFrame(&Attach{
+		Name:   randString(),
 		Handle: link.handle,
 		Role:   true,
 		Source: &Source{
 			Address: link.sourceAddr,
 		},
 	})
-	if err != nil {
-		return nil, err
-	}
 
 	fr := <-link.rx
 	resp, ok := fr.(*Attach)
@@ -88,6 +81,7 @@ func (s *Session) Receiver(opts ...LinkOption) (*Receiver, error) {
 func (s *Session) startMux() {
 	links := make(map[uint32]*link)
 	nextLink := newLink(s, 0)
+
 	for {
 		select {
 		case s.newLink <- nextLink:
@@ -99,6 +93,7 @@ func (s *Session) startMux() {
 		case link := <-s.delLink:
 			fmt.Println("Got link deletion request")
 			delete(links, link.handle)
+			close(link.rx)
 
 		case fr := <-s.rx:
 			go func() {

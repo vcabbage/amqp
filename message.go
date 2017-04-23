@@ -33,8 +33,8 @@ type Message struct {
 	deliveryID uint32
 }
 
-func (m *Message) sendDisposition(state interface{}) error {
-	return m.link.session.txFrame(&Disposition{
+func (m *Message) sendDisposition(state interface{}) {
+	m.link.session.txFrame(&Disposition{
 		Role:    true,
 		First:   m.deliveryID,
 		Settled: true,
@@ -44,17 +44,17 @@ func (m *Message) sendDisposition(state interface{}) error {
 
 // Accept notifies the server that the message has been
 // accepted and does not require redelivery.
-func (m *Message) Accept() error {
-	return m.sendDisposition(&StateAccepted{})
+func (m *Message) Accept() {
+	m.sendDisposition(&StateAccepted{})
 }
 
 // Reject notifies the server that the message is invalid
-func (m *Message) Reject() error {
-	return m.sendDisposition(&StateRejected{})
+func (m *Message) Reject() {
+	m.sendDisposition(&StateRejected{})
 }
 
-func (m *Message) Release() error {
-	return m.sendDisposition(&StateReleased{})
+func (m *Message) Release() {
+	m.sendDisposition(&StateReleased{})
 }
 
 type Map map[string]interface{}

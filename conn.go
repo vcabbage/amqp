@@ -45,8 +45,8 @@ type Conn struct {
 
 	// mux
 	readErr    chan error
-	rxFrame    chan []byte
-	txFrame    chan *bytes.Buffer
+	rxFrame    chan frame
+	txFrame    chan frame
 	newSession chan *Session
 	delSession chan *Session
 }
@@ -79,8 +79,8 @@ func New(conn net.Conn, opts ...Opt) (*Conn, error) {
 		channelMax:   initialChannelMax,
 		idleTimeout:  1 * time.Minute,
 		readErr:      make(chan error),
-		rxFrame:      make(chan []byte),
-		txFrame:      make(chan *bytes.Buffer),
+		rxFrame:      make(chan frame),
+		txFrame:      make(chan frame),
 		newSession:   make(chan *Session),
 		delSession:   make(chan *Session),
 	}
@@ -121,14 +121,10 @@ func (c *Conn) Session() (*Session, error) {
 		return nil, s.err
 	}
 
-	err := s.txFrame(&Begin{
+	s.txFrame(&Begin{
 		NextOutgoingID: 0,
 		IncomingWindow: 1,
 	})
-	if err != nil {
-		s.Close()
-		return nil, err
-	}
 
 	fr := <-s.rx
 	begin, ok := fr.preformative.(*Begin)
@@ -146,110 +142,6 @@ func (c *Conn) Session() (*Session, error) {
 	go s.startMux()
 
 	return s, nil
-}
-
-type link struct {
-	handle     uint32
-	sourceAddr string
-	linkCredit uint32
-	rx         chan Preformative
-	session    *Session
-
-	creditUsed          uint32
-	senderDeliveryCount uint32
-}
-
-func (l *link) close() {
-	l.session.delLink <- l
-}
-
-func newLink(s *Session, handle uint32) *link {
-	return &link{
-		handle:     handle,
-		linkCredit: 1,
-		rx:         make(chan Preformative),
-		session:    s,
-	}
-}
-
-type LinkOption func(*link) error
-
-func LinkSource(source string) LinkOption {
-	return func(l *link) error {
-		l.sourceAddr = source
-		return nil
-	}
-}
-
-func LinkCredit(credit uint32) LinkOption {
-	return func(l *link) error {
-		l.linkCredit = credit
-		return nil
-	}
-}
-
-type Receiver struct {
-	link *link
-
-	buf *bytes.Buffer
-}
-
-func (r *Receiver) sendFlow() error {
-	newLinkCredit := r.link.linkCredit - (r.link.linkCredit - r.link.creditUsed)
-	r.link.senderDeliveryCount += r.link.creditUsed
-	err := r.link.session.txFrame(&Flow{
-		IncomingWindow: 2147483647,
-		NextOutgoingID: 0,
-		OutgoingWindow: 0,
-		Handle:         &r.link.handle,
-		DeliveryCount:  &r.link.senderDeliveryCount,
-		LinkCredit:     &newLinkCredit,
-	})
-	if err != nil {
-		return err
-	}
-
-	r.link.creditUsed = 0
-	return nil
-}
-
-func (r *Receiver) Receive() (*Message, error) {
-	r.buf.Reset()
-
-	msg := &Message{link: r.link}
-
-	first := true
-	for {
-		if r.link.creditUsed > r.link.linkCredit/2 {
-			if err := r.sendFlow(); err != nil {
-				return nil, err
-			}
-		}
-
-		fr := <-r.link.rx
-		transfer := fr.(*Transfer)
-		r.link.creditUsed++
-
-		if first && transfer.DeliveryID != nil {
-			msg.deliveryID = *transfer.DeliveryID
-			first = false
-		}
-
-		r.buf.Write(transfer.Payload)
-		if !transfer.More {
-			break
-		}
-	}
-
-	err := Unmarshal(r.buf, msg)
-	return msg, err
-}
-
-func (r *Receiver) Close() error {
-	r.link.close()
-	bufPool.Put(r.buf)
-	r.buf = nil
-	return nil
 }
 
 func parseFrame(payload []byte) (Preformative, error) {
@@ -318,46 +210,13 @@ outer:
 			fmt.Println("Got read error")
 			c.err = err
 
-		case rawFrame := <-c.rxFrame:
-			fmt.Println("Got rxFrame")
-			_, err := buf.Write(rawFrame)
-			if err != nil {
-				c.err = err
-				continue
+		case fr := <-c.rxFrame:
+			ch, ok := sessions[fr.channel]
+			if !ok {
+				c.err = errors.Errorf("unexpected frame: %+v", fr)
+				continue outer
 			}
-
-			for buf.Len() > 8 { // 8 = min size for header
-				frameHeader, err := parseFrameHeader(buf.Bytes())
-				if err != nil {
-					c.err = err
-					continue outer
-				}
-
-				ch, ok := sessions[frameHeader.channel]
-				if !ok {
-					c.err = errors.Errorf("unexpected frame header: %+v", frameHeader)
-					continue outer
-				}
-
-				if buf.Len() < int(frameHeader.size) {
-					continue outer
-				}
-
-				payload := make([]byte, frameHeader.size)
-				_, err = io.ReadFull(&buf, payload)
-				if err != nil {
-					c.err = err
-					continue outer
-				}
-
-				preformative, err := parseFrame(payload[8:])
-				if err != nil {
-					c.err = err
-					continue outer
-				}
-
-				ch.rx <- frame{channel: frameHeader.channel, preformative: preformative}
-			}
+			ch.rx <- fr
 
 		case c.newSession <- nextSession:
 			fmt.Println("Got new session request")
@@ -370,9 +229,8 @@ outer:
 			delete(sessions, s.channel)
 
 		case fr := <-c.txFrame:
-			fmt.Printf("Writing: %# 02x\n", fr)
-			_, c.err = c.net.Write(fr.Bytes())
-			bufPool.Put(fr)
+			fmt.Printf("Writing: %d; %+v\n", fr.channel, fr.preformative)
+			c.err = c.txPreformative(fr)
 
 		case <-keepalive.C:
 			fmt.Printf("Writing: %# 02x\n", keepaliveFrame)
@@ -382,6 +240,10 @@ outer:
 }
 
 func (c *Conn) connReader() {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+
+outer:
 	for {
 		n, err := c.net.Read(c.rxBuf[:c.maxFrameSize]) // TODO: send error on frame too large
 		if err != nil {
@@ -389,7 +251,38 @@ func (c *Conn) connReader() {
 			return
 		}
 
-		c.rxFrame <- append([]byte(nil), c.rxBuf[:n]...)
+		_, err = buf.Write(c.rxBuf[:n])
+		if err != nil {
+			c.readErr <- err
+			return
+		}
+
+		for buf.Len() > 8 { // 8 = min size for header
+			frameHeader, err := parseFrameHeader(buf.Bytes())
+			if err != nil {
+				c.err = err
+				continue outer
+			}
+
+			if buf.Len() < int(frameHeader.size) {
+				continue outer
+			}
+
+			payload := make([]byte, frameHeader.size)
+			_, err = io.ReadFull(buf, payload)
+			if err != nil {
+				c.err = err
+				continue outer
+			}
+
+			preformative, err := parseFrame(payload[8:])
+			if err != nil {
+				c.err = err
+				continue outer
+			}
+
+			c.rxFrame <- frame{channel: frameHeader.channel, preformative: preformative}
+		}
 	}
 }
 
@@ -464,8 +357,8 @@ func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
 	}
 }
 
-func (c *Conn) txPreformative(p Preformative) error {
-	data, err := Marshal(p)
+func (c *Conn) txPreformative(fr frame) error {
+	data, err := Marshal(fr.preformative)
 	if err != nil {
 		return err
 	}
@@ -474,7 +367,7 @@ func (c *Conn) txPreformative(p Preformative) error {
 	defer bufPool.Put(wr)
 	wr.Reset()
 
-	err = writeFrame(wr, FrameTypeAMQP, 0, data)
+	err = writeFrame(wr, FrameTypeAMQP, fr.channel, data)
 	if err != nil {
 		return err
 	}
@@ -484,11 +377,14 @@ func (c *Conn) txPreformative(p Preformative) error {
 }
 
 func (c *Conn) txOpen() stateFunc {
-	c.err = c.txPreformative(&Open{
-		ContainerID:  "gopher",
-		Hostname:     c.hostname,
-		MaxFrameSize: c.maxFrameSize,
-		ChannelMax:   c.channelMax,
+	c.err = c.txPreformative(frame{
+		preformative: &Open{
+			ContainerID:  "gopher",
+			Hostname:     c.hostname,
+			MaxFrameSize: c.maxFrameSize,
+			ChannelMax:   c.channelMax,
+		},
+		channel: 0,
 	})
 	if c.err != nil {
 		return nil
