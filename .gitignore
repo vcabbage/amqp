@@ -1,0 +1,5 @@
+amqp.test
+/go-fuzz/*
+!/go-fuzz/corpus
+*.log
+/cmd

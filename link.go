@@ -37,11 +37,16 @@ func (l *link) close() {
 		l.closed = true
 
 		if !l.detachRx {
+		outer:
 			for {
 				// TODO: timeout
-				fr := <-l.rx
-				if fr, ok := fr.(*performativeDetach); ok && fr.Closed {
-					break
+				select {
+				case <-l.session.conn.done:
+					l.err = l.session.conn.err
+				case fr := <-l.rx:
+					if fr, ok := fr.(*performativeDetach); ok && fr.Closed {
+						break outer
+					}
 				}
 			}
 		}
@@ -81,10 +86,10 @@ type Receiver struct {
 	buf *bytes.Buffer
 }
 
-func (r *Receiver) sendFlow() {
+func (r *Receiver) sendFlow() error {
 	newLinkCredit := r.link.linkCredit - (r.link.linkCredit - r.link.creditUsed)
 	r.link.senderDeliveryCount += r.link.creditUsed
-	r.link.session.txFrame(&flow{
+	err := r.link.session.txFrame(&flow{
 		IncomingWindow: 2147483647,
 		NextOutgoingID: 0,
 		OutgoingWindow: 0,
@@ -93,6 +98,7 @@ func (r *Receiver) sendFlow() {
 		LinkCredit:     &newLinkCredit,
 	})
 	r.link.creditUsed = 0
+	return err
 }
 
 func (r *Receiver) Receive() (*Message, error) {
@@ -104,10 +110,18 @@ func (r *Receiver) Receive() (*Message, error) {
 outer:
 	for {
 		if r.link.creditUsed > r.link.linkCredit/2 {
-			r.sendFlow()
+			err := r.sendFlow()
+			if err != nil {
+				return nil, err
+			}
 		}
 
-		fr := <-r.link.rx
+		var fr preformative
+		select {
+		case <-r.link.session.conn.done:
+			return nil, r.link.session.conn.err
+		case fr = <-r.link.rx:
+		}
 		switch fr := fr.(type) {
 		case *performativeTransfer:
 			r.link.creditUsed++

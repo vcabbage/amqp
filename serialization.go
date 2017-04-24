@@ -267,6 +267,10 @@ func unmarshalComposite(r byteReader, typ amqpType, fields ...interface{}) error
 		return errors.Errorf("invalid header %#0x for %#0x", t, typ)
 	}
 
+	if numFields > len(fields) {
+		return errors.Errorf("invalid field count %d for %#0x", numFields, typ)
+	}
+
 	for i := 0; i < numFields; i++ {
 		err = unmarshal(r, fields[i])
 		if err != nil {

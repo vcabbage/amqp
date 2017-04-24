@@ -31,6 +31,8 @@ const (
 
 func parseFrameHeader(buf []byte) (frameHeader, error) {
 	var fh frameHeader
+	// err := binary.Read(r, binary.BigEndian, &fh)
+	// return fh, err
 
 	if len(buf) < 8 {
 		return fh, fmt.Errorf("frame size %d, must be at least 8 bytes", len(buf))
@@ -45,36 +47,25 @@ func parseFrameHeader(buf []byte) (frameHeader, error) {
 }
 
 type proto struct {
-	proto string
-
-	// 0: AMQP
-	// 2: TLS -> tls.Conn -> AMQP
-	// 3: SASL
-	protoID  uint8
-	major    uint8
-	minor    uint8
-	revision uint8
+	Proto    [4]byte
+	ProtoID  uint8
+	Major    uint8
+	Minor    uint8
+	Revision uint8
 }
 
-func parseProto(buf []byte) (proto, error) {
-	if len(buf) != 8 {
-		return proto{}, fmt.Errorf("expected protocol header to be 8 bytes, not %d", len(buf))
+func parseProto(r io.Reader) (proto, error) {
+	var p proto
+	err := binary.Read(r, binary.LittleEndian, &p)
+	if err != nil {
+		return p, err
 	}
-	p := proto{
-		proto:    string(buf[:4]),
-		protoID:  buf[4],
-		major:    buf[5],
-		minor:    buf[6],
-		revision: buf[7],
+	if p.Proto != [4]byte{'A', 'M', 'Q', 'P'} {
+		return p, fmt.Errorf("unexpected protocol %q", p.Proto)
 	}
-	if p.proto != "AMQP" {
-		return p, fmt.Errorf("unexpected protocol %q", p.proto)
+	if p.Major != 1 || p.Minor != 0 || p.Revision != 0 {
+		return p, fmt.Errorf("unexpected protocol version %d.%d.%d", p.Major, p.Minor, p.Revision)
 	}
-
-	if p.major != 1 || p.minor != 0 || p.revision != 0 {
-		return p, fmt.Errorf("unexpected protocol version %d.%d.%d", p.major, p.minor, p.revision)
-	}
-
 	return p, nil
 }
 

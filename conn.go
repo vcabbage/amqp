@@ -57,8 +57,8 @@ type Conn struct {
 	hostname     string
 	idleTimeout  time.Duration
 
-	rxBuf []byte
-	err   error
+	err  error
+	done chan struct{}
 
 	// SASL
 	saslHandlers map[Symbol]stateFunc
@@ -66,8 +66,8 @@ type Conn struct {
 
 	// mux
 	readErr    chan error
+	rxProto    chan proto
 	rxFrame    chan frame
-	txFrame    chan frame
 	newSession chan *Session
 	delSession chan *Session
 }
@@ -114,9 +114,10 @@ func New(conn net.Conn, opts ...ConnOpt) (*Conn, error) {
 		maxFrameSize: initialMaxFrameSize,
 		channelMax:   initialChannelMax,
 		idleTimeout:  1 * time.Minute,
-		readErr:      make(chan error),
+		done:         make(chan struct{}),
+		readErr:      make(chan error, 1),
+		rxProto:      make(chan proto),
 		rxFrame:      make(chan frame),
-		txFrame:      make(chan frame),
 		newSession:   make(chan *Session),
 		delSession:   make(chan *Session),
 	}
@@ -127,20 +128,31 @@ func New(conn net.Conn, opts ...ConnOpt) (*Conn, error) {
 		}
 	}
 
+	go c.connReader()
+
 	for state := c.negotiateProto; state != nil; {
 		state = state()
 	}
 
-	if c.err != nil && c.net != nil {
-		c.net.Close()
+	if c.err != nil {
+		if c.net != nil {
+			c.net.Close()
+		}
+		return nil, c.err
 	}
 
-	return c, c.err
+	go c.startMux()
+
+	return c, nil
 }
 
 func (c *Conn) Close() error {
 	// TODO: shutdown AMQP
-	return c.net.Close()
+	err := c.net.Close()
+	if c.err == nil {
+		c.err = err
+	}
+	return c.err
 }
 
 func (c *Conn) MaxFrameSize() int {
@@ -152,17 +164,28 @@ func (c *Conn) ChannelMax() int {
 }
 
 func (c *Conn) NewSession() (*Session, error) {
-	s := <-c.newSession
-	if s.err != nil {
-		return nil, s.err
+	var s *Session
+	select {
+	case <-c.done:
+		return nil, c.err
+	case s = <-c.newSession:
 	}
 
-	s.txFrame(&performativeBegin{
+	err := s.txFrame(&performativeBegin{
 		NextOutgoingID: 0,
 		IncomingWindow: 1,
 	})
+	if err != nil {
+		s.Close()
+		return nil, err
+	}
 
-	fr := <-s.rx
+	var fr frame
+	select {
+	case <-c.done:
+		return nil, c.err
+	case fr = <-s.rx:
+	}
 	begin, ok := fr.preformative.(*performativeBegin)
 	if !ok {
 		s.Close()
@@ -204,6 +227,10 @@ func parseFrame(payload []byte) (preformative, error) {
 		t = new(performativeEnd)
 	case preformativeClose:
 		t = new(performativeClose)
+	case typeSASLMechanism:
+		t = new(saslMechanisms)
+	case typeSASLOutcome:
+		t = new(saslOutcome)
 	default:
 		return nil, errors.Errorf("unknown preformative type %0x", pType)
 	}
@@ -220,8 +247,6 @@ type frame struct {
 var keepaliveFrame = []byte{0x00, 0x00, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00}
 
 func (c *Conn) startMux() {
-	go c.connReader()
-
 	nextSession := newSession(c, 0)
 
 	// map channel to session
@@ -234,13 +259,13 @@ func (c *Conn) startMux() {
 outer:
 	for {
 		if c.err != nil {
-			panic(c.err) // TODO: graceful close
+			close(c.done)
+			return
 		}
 
 		select {
-		case err := <-c.readErr:
+		case c.err = <-c.readErr:
 			fmt.Println("Got read error")
-			c.err = err
 
 		case fr := <-c.rxFrame:
 			ch, ok := sessions[fr.channel]
@@ -260,10 +285,6 @@ outer:
 			fmt.Println("Got delete session request")
 			delete(sessions, s.channel)
 
-		case fr := <-c.txFrame:
-			fmt.Printf("Writing: %d; %+v\n", fr.channel, fr.preformative)
-			c.err = c.txPreformative(fr)
-
 		case <-keepalive.C:
 			fmt.Printf("Writing: %# 02x\n", keepaliveFrame)
 			_, c.err = c.net.Write(keepaliveFrame)
@@ -274,46 +295,86 @@ outer:
 func (c *Conn) connReader() {
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
+	rxBuf := make([]byte, c.maxFrameSize)
+
+	negotiating := true
 
 outer:
 	for {
-		n, err := c.net.Read(c.rxBuf[:c.maxFrameSize]) // TODO: send error on frame too large
+		n, err := c.net.Read(rxBuf[:c.maxFrameSize]) // TODO: send error on frame too large
 		if err != nil {
 			c.readErr <- err
 			return
 		}
 
-		_, err = buf.Write(c.rxBuf[:n])
+		_, err = buf.Write(rxBuf[:n])
 		if err != nil {
 			c.readErr <- err
 			return
 		}
 
-		for buf.Len() > 8 { // 8 = min size for header
+		for buf.Len() > 7 { // 8 = min size for header
+			if negotiating && bytes.Equal(buf.Bytes()[:4], []byte{'A', 'M', 'Q', 'P'}) {
+				p, err := parseProto(buf)
+				if err != nil {
+					c.readErr <- err
+					return
+				}
+
+				if p.ProtoID == protoAMQP {
+					negotiating = false
+				}
+
+				fmt.Printf("got: %#v\n", p)
+				select {
+				case <-c.done:
+					return
+				case c.rxProto <- p:
+				}
+				fmt.Printf("sent: %#v\n", p)
+				continue
+			}
+
 			frameHeader, err := parseFrameHeader(buf.Bytes())
 			if err != nil {
-				c.err = err
-				continue outer
+				c.readErr <- err
+				return
 			}
 
 			if buf.Len() < int(frameHeader.size) {
 				continue outer
 			}
 
+			if frameHeader.size < 8 {
+				c.readErr <- errors.Errorf("invalid header size: %#v", frameHeader)
+				return
+			}
+
 			payload := make([]byte, frameHeader.size)
 			_, err = io.ReadFull(buf, payload)
 			if err != nil {
-				c.err = err
-				continue outer
+				c.readErr <- err
+				return
 			}
 
-			preformative, err := parseFrame(payload[8:])
+			p, err := parseFrame(payload[8:])
 			if err != nil {
-				c.err = err
-				continue outer
+				c.readErr <- err
+				return
 			}
 
-			c.rxFrame <- frame{channel: frameHeader.channel, preformative: preformative}
+			fmt.Printf("got: %#v\n", p)
+
+			if o, ok := p.(*performativeOpen); ok && o.MaxFrameSize < c.maxFrameSize {
+				c.maxFrameSize = o.MaxFrameSize
+			}
+
+			select {
+			case <-c.done:
+				return
+			case c.rxFrame <- frame{channel: frameHeader.channel, preformative: p}:
+			}
+			fmt.Printf("sent: %#v\n", p)
 		}
 	}
 }
@@ -343,41 +404,36 @@ const (
 	protoSASL = 0x3
 )
 
-func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
-	_, c.err = c.net.Write([]byte{'A', 'M', 'Q', 'P', proto, 1, 0, 0})
+func (c *Conn) exchangeProtoHeader(protoID uint8) stateFunc {
+	_, c.err = c.net.Write([]byte{'A', 'M', 'Q', 'P', protoID, 1, 0, 0})
 	if c.err != nil {
 		return nil
 	}
 
-	c.rxBuf = make([]byte, c.maxFrameSize)
-	n, err := c.net.Read(c.rxBuf)
-	if err != nil {
-		c.err = err
+	var p proto
+	select {
+	case p = <-c.rxProto:
+	case c.err = <-c.readErr:
 		return nil
-	}
-
-	fmt.Printf("Read %d bytes.\n", n)
-
-	p, err := parseProto(c.rxBuf[:n])
-	if err != nil {
-		c.err = err
+	case <-time.After(1 * time.Second):
+		c.err = ErrTimeout
 		return nil
 	}
 
 	fmt.Printf("Proto: %s; ProtoID: %d; Version: %d.%d.%d\n",
-		p.proto,
-		p.protoID,
-		p.major,
-		p.minor,
-		p.revision,
+		p.Proto,
+		p.ProtoID,
+		p.Major,
+		p.Minor,
+		p.Revision,
 	)
 
-	if proto != p.protoID {
-		c.err = fmt.Errorf("unexpected protocol header %#00x, expected %#00x", p.protoID, proto)
+	if protoID != p.ProtoID {
+		c.err = fmt.Errorf("unexpected protocol header %#00x, expected %#00x", p.ProtoID, protoID)
 		return nil
 	}
 
-	switch proto {
+	switch protoID {
 	case protoAMQP:
 		return c.txOpen
 	case protoTLS:
@@ -385,7 +441,7 @@ func (c *Conn) exchangeProtoHeader(proto uint8) stateFunc {
 	case protoSASL:
 		return c.protoSASL
 	default:
-		c.err = fmt.Errorf("unknown protocol ID %#02x", p.protoID)
+		c.err = fmt.Errorf("unknown protocol ID %#02x", p.ProtoID)
 		return nil
 	}
 }
@@ -439,27 +495,15 @@ func (c *Conn) txOpen() stateFunc {
 }
 
 func (c *Conn) rxOpen() stateFunc {
-	n, err := c.net.Read(c.rxBuf)
+	fr, err := c.readFrame()
 	if err != nil {
-		c.err = errors.Wrapf(err, "reading")
+		c.err = err
 		return nil
 	}
 
-	fh, err := parseFrameHeader(c.rxBuf[:n])
-	if err != nil {
-		c.err = errors.Wrapf(err, "parsing frame header")
-		return nil
-	}
-
-	if fh.frameType != frameTypeAMQP {
-		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
-	}
-
-	var o performativeOpen
-	err = unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &o)
-	if err != nil {
-		c.err = errors.Wrapf(err, "unmarshaling")
-		return nil
+	o, ok := fr.preformative.(*performativeOpen)
+	if !ok {
+		c.err = fmt.Errorf("unexpected frame type %T", fr.preformative)
 	}
 
 	fmt.Printf("Rx Open: %#v\n", o)
@@ -468,18 +512,9 @@ func (c *Conn) rxOpen() stateFunc {
 		c.idleTimeout = o.IdleTimeout
 	}
 
-	if o.MaxFrameSize < c.maxFrameSize {
-		c.maxFrameSize = o.MaxFrameSize
-	}
 	if o.ChannelMax < c.channelMax {
 		c.channelMax = o.ChannelMax
 	}
-
-	if uint32(len(c.rxBuf)) < c.maxFrameSize {
-		c.rxBuf = make([]byte, c.maxFrameSize)
-	}
-
-	go c.startMux()
 
 	return nil
 }
@@ -491,26 +526,15 @@ func (c *Conn) protoSASL() stateFunc {
 		return nil
 	}
 
-	n, err := c.net.Read(c.rxBuf)
+	fr, err := c.readFrame()
 	if err != nil {
 		c.err = err
 		return nil
 	}
 
-	fh, err := parseFrameHeader(c.rxBuf[:n])
-	if err != nil {
-		c.err = err
-		return nil
-	}
-
-	if fh.frameType != frameTypeSASL {
-		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
-	}
-
-	var sm saslMechanisms
-	err = unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &sm)
-	if err != nil {
-		c.err = err
+	sm, ok := fr.preformative.(*saslMechanisms)
+	if !ok {
+		c.err = fmt.Errorf("unexpected frame type %T", fr.preformative)
 		return nil
 	}
 
@@ -526,26 +550,15 @@ func (c *Conn) protoSASL() stateFunc {
 }
 
 func (c *Conn) saslOutcome() stateFunc {
-	n, err := c.net.Read(c.rxBuf)
+	fr, err := c.readFrame()
 	if err != nil {
 		c.err = err
 		return nil
 	}
 
-	fh, err := parseFrameHeader(c.rxBuf[:n])
-	if err != nil {
-		c.err = err
-		return nil
-	}
-
-	if fh.frameType != frameTypeSASL {
-		c.err = fmt.Errorf("unexpected frame type %#02x", fh.frameType)
-	}
-
-	var so saslOutcome
-	c.err = unmarshal(bytes.NewBuffer(c.rxBuf[fh.dataOffsetBytes():n]), &so)
-	if c.err != nil {
-		return nil
+	so, ok := fr.preformative.(*saslOutcome)
+	if !ok {
+		c.err = fmt.Errorf("unexpected frame type %T", fr.preformative)
 	}
 
 	if so.Code != codeSASLOK {
@@ -556,4 +569,18 @@ func (c *Conn) saslOutcome() stateFunc {
 	c.saslComplete = true
 
 	return c.negotiateProto
+}
+
+var ErrTimeout = errors.New("timeout waiting for response")
+
+func (c *Conn) readFrame() (frame, error) {
+	var fr frame
+	select {
+	case fr = <-c.rxFrame:
+		return fr, nil
+	case err := <-c.readErr:
+		return fr, err
+	case <-time.After(1 * time.Second):
+		return fr, ErrTimeout
+	}
 }

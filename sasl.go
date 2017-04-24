@@ -18,11 +18,11 @@ type amqpType uint8
 
 // Composite Types
 const (
-	typeSASLMechanism amqpType = 0x40
-	typeSASLInit      amqpType = 0x41
-	typeSASLChallenge amqpType = 0x42
-	typeSASLResponse  amqpType = 0x43
-	typeSASLOutcome   amqpType = 0x44
+	typeSASLMechanism = 0x40
+	typeSASLInit      = 0x41
+	typeSASLChallenge = 0x42
+	typeSASLResponse  = 0x43
+	typeSASLOutcome   = 0x44
 )
 
 // SASL Mechanisms
@@ -143,6 +143,10 @@ func (sm *saslMechanisms) unmarshal(r byteReader) error {
 	)
 }
 
+func (*saslMechanisms) link() (uint32, bool) {
+	return 0, false
+}
+
 type saslOutcome struct {
 	Code           saslCode
 	AdditionalData []byte
@@ -153,4 +157,8 @@ func (so *saslOutcome) unmarshal(r byteReader) error {
 		&so.Code,
 		&so.AdditionalData,
 	)
+}
+
+func (*saslOutcome) link() (uint32, bool) {
+	return 0, false
 }

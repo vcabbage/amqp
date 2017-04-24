@@ -11,7 +11,6 @@ type Session struct {
 	channel       uint16
 	remoteChannel uint16
 	conn          *Conn
-	err           error
 	rx            chan frame
 
 	newLink chan *link
@@ -28,14 +27,19 @@ func newSession(c *Conn, channel uint16) *Session {
 	}
 }
 
-func (s *Session) Close() {
+func (s *Session) Close() error {
 	// s.txFrame(&)
 	// TODO: send end preformative
-	s.conn.delSession <- s
+	select {
+	case <-s.conn.done:
+		return s.conn.err
+	case s.conn.delSession <- s:
+		return nil
+	}
 }
 
-func (s *Session) txFrame(p preformative) {
-	s.conn.txFrame <- frame{preformative: p, channel: s.channel}
+func (s *Session) txFrame(p preformative) error {
+	return s.conn.txPreformative(frame{preformative: p, channel: s.channel})
 }
 
 func randString() string { // TODO: random string gen off SO, replace
@@ -48,27 +52,37 @@ func randString() string { // TODO: random string gen off SO, replace
 }
 
 func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
-	link := <-s.newLink
+	var l *link
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.err
+	case l = <-s.newLink:
+	}
 
 	for _, o := range opts {
-		err := o(link)
+		err := o(l)
 		if err != nil {
 			// TODO: release link
 			return nil, err
 		}
 	}
-	link.creditUsed = link.linkCredit
+	l.creditUsed = l.linkCredit
 
 	s.txFrame(&performativeAttach{
 		Name:   randString(),
-		Handle: link.handle,
+		Handle: l.handle,
 		Role:   true,
 		Source: &source{
-			Address: link.sourceAddr,
+			Address: l.sourceAddr,
 		},
 	})
 
-	fr := <-link.rx
+	var fr preformative
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.err
+	case fr = <-l.rx:
+	}
 	resp, ok := fr.(*performativeAttach)
 	if !ok {
 		return nil, fmt.Errorf("unexpected attach response: %+v", fr)
@@ -78,10 +92,10 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	fmt.Printf("Attach Source: %+v\n", resp.Source)
 	fmt.Printf("Attach Target: %+v\n", resp.Target)
 
-	link.senderDeliveryCount = resp.InitialDeliveryCount
+	l.senderDeliveryCount = resp.InitialDeliveryCount
 
 	r := &Receiver{
-		link: link,
+		link: l,
 		buf:  bufPool.New().(*bytes.Buffer),
 	}
 
@@ -94,6 +108,8 @@ func (s *Session) startMux() {
 
 	for {
 		select {
+		case <-s.conn.done:
+			return
 		case s.newLink <- nextLink:
 			fmt.Println("Got new link request")
 			links[nextLink.handle] = nextLink
@@ -118,7 +134,7 @@ func (s *Session) startMux() {
 					log.Printf("frame with unknown handle %d: %+v", handle, fr)
 					return
 				}
-				link.rx <- fr.preformative
+				link.rx <- fr.preformative // TODO: timeout
 			}()
 		}
 	}
