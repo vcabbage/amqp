@@ -4,23 +4,25 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+
+	"github.com/pkg/errors"
 )
 
 type frameHeader struct {
 	// size: an unsigned 32-bit integer that MUST contain the total frame size of the frame header,
 	// extended header, and frame body. The frame is malformed if the size is less than the size of
 	// the frame header (8 bytes).
-	size uint32
+	Size uint32
 	// doff: gives the position of the body within the frame. The value of the data offset is an
 	// unsigned, 8-bit integer specifying a count of 4-byte words. Due to the mandatory 8-byte
 	// frame header, the frame is malformed if the value is less than 2.
-	dataOffset uint8
-	frameType  uint8
-	channel    uint16
+	DataOffset uint8
+	FrameType  uint8
+	Channel    uint16
 }
 
 func (fh frameHeader) dataOffsetBytes() int {
-	return int(fh.dataOffset) * 4
+	return int(fh.DataOffset) * 4
 }
 
 // Frame Types
@@ -29,21 +31,10 @@ const (
 	frameTypeSASL = 0x1
 )
 
-func parseFrameHeader(buf []byte) (frameHeader, error) {
+func parseFrameHeader(r io.Reader) (frameHeader, error) {
 	var fh frameHeader
-	// err := binary.Read(r, binary.BigEndian, &fh)
-	// return fh, err
-
-	if len(buf) < 8 {
-		return fh, fmt.Errorf("frame size %d, must be at least 8 bytes", len(buf))
-	}
-
-	fh.size = binary.BigEndian.Uint32(buf)
-	fh.dataOffset = buf[4]
-	fh.frameType = buf[5]
-	fh.channel = binary.BigEndian.Uint16(buf[6:])
-
-	return fh, nil
+	err := binary.Read(r, binary.BigEndian, &fh)
+	return fh, err
 }
 
 type proto struct {
@@ -67,6 +58,49 @@ func parseProto(r io.Reader) (proto, error) {
 		return p, fmt.Errorf("unexpected protocol version %d.%d.%d", p.Major, p.Minor, p.Revision)
 	}
 	return p, nil
+}
+
+func parseFrame(r byteReader) (preformative, error) {
+	pType, err := peekPreformativeType(r)
+	if err != nil {
+		return nil, err
+	}
+
+	var t preformative
+	switch pType {
+	case preformativeOpen:
+		t = new(performativeOpen)
+	case preformativeBegin:
+		t = new(performativeBegin)
+	case preformativeAttach:
+		t = new(performativeAttach)
+	case preformativeFlow:
+		t = new(flow)
+	case preformativeTransfer:
+		t = new(performativeTransfer)
+	case preformativeDisposition:
+		t = new(performativeDisposition)
+	case preformativeDetach:
+		t = new(performativeDetach)
+	case preformativeEnd:
+		t = new(performativeEnd)
+	case preformativeClose:
+		t = new(performativeClose)
+	case typeSASLMechanism:
+		t = new(saslMechanisms)
+	case typeSASLOutcome:
+		t = new(saslOutcome)
+	default:
+		return nil, errors.Errorf("unknown preformative type %0x", pType)
+	}
+
+	err = unmarshal(r, t)
+	return t, err
+}
+
+type frame struct {
+	channel      uint16
+	preformative preformative
 }
 
 /*

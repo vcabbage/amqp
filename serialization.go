@@ -18,6 +18,7 @@ type byteReader interface {
 	io.Reader
 	io.ByteReader
 	UnreadByte() error
+	Bytes() []byte
 }
 
 type byteWriter interface {

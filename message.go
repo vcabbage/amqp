@@ -119,16 +119,6 @@ func (m *Message) Release() {
 	m.sendDisposition(&StateReleased{})
 }
 
-// func (h *Header) marshal() ([]byte, error) {
-// 	return marshalComposite(TypeMessageHeader, []field{
-// 		{value: h.Durable, omit: !h.Durable},
-// 		{value: h.Priority, omit: h.Priority == 4},
-// 		{value: h.TTL, omit: h.TTL.Duration == 0},
-// 		{value: h.FirstAcquirer, omit: !h.FirstAcquirer},
-// 		{value: h.DeliveryCount, omit: h.DeliveryCount == 0},
-// 	}...)
-// }
-
 func peekMessageType(buf []byte) (uint8, error) {
 	if len(buf) < 3 {
 		return 0, errors.New("invalid message")
@@ -138,7 +128,7 @@ func peekMessageType(buf []byte) (uint8, error) {
 		return 0, errors.Errorf("invalid composite header %0x", buf[0])
 	}
 
-	v, err := readInt(bytes.NewReader(buf[1:]))
+	v, err := readInt(bytes.NewBuffer(buf[1:]))
 	if err != nil {
 		return 0, err
 	}
@@ -156,15 +146,8 @@ func consumeBytes(r io.ByteReader, n int) error {
 }
 
 func (m *Message) unmarshal(r byteReader) error {
-	byter, ok := r.(interface {
-		Bytes() []byte
-	})
-	if !ok {
-		return errors.New("unmarshal message requires Bytes() method")
-	}
-
 	for {
-		buf := byter.Bytes()
+		buf := r.Bytes()
 		if len(buf) == 0 {
 			break
 		}

@@ -28,7 +28,8 @@ const (
 	typeError  = 0x1d
 )
 
-func preformativeType(payload []byte) (uint8, error) {
+func peekPreformativeType(r byteReader) (uint8, error) {
+	payload := r.Bytes()
 	if len(payload) == 0 {
 		return preformativeEmpty, nil
 	}

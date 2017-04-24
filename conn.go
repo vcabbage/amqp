@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/tls"
 	"fmt"
-	"io"
 	"net"
 	"net/url"
 	"time"
@@ -201,49 +200,6 @@ func (c *Conn) NewSession() (*Session, error) {
 	return s, nil
 }
 
-func parseFrame(payload []byte) (preformative, error) {
-	pType, err := preformativeType(payload)
-	if err != nil {
-		return nil, err
-	}
-
-	var t preformative
-	switch pType {
-	case preformativeOpen:
-		t = new(performativeOpen)
-	case preformativeBegin:
-		t = new(performativeBegin)
-	case preformativeAttach:
-		t = new(performativeAttach)
-	case preformativeFlow:
-		t = new(flow)
-	case preformativeTransfer:
-		t = new(performativeTransfer)
-	case preformativeDisposition:
-		t = new(performativeDisposition)
-	case preformativeDetach:
-		t = new(performativeDetach)
-	case preformativeEnd:
-		t = new(performativeEnd)
-	case preformativeClose:
-		t = new(performativeClose)
-	case typeSASLMechanism:
-		t = new(saslMechanisms)
-	case typeSASLOutcome:
-		t = new(saslOutcome)
-	default:
-		return nil, errors.Errorf("unknown preformative type %0x", pType)
-	}
-
-	err = unmarshal(bytes.NewReader(payload), t)
-	return t, err
-}
-
-type frame struct {
-	channel      uint16
-	preformative preformative
-}
-
 var keepaliveFrame = []byte{0x00, 0x00, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00}
 
 func (c *Conn) startMux() {
@@ -325,45 +281,29 @@ outer:
 					negotiating = false
 				}
 
-				fmt.Printf("got: %#v\n", p)
 				select {
 				case <-c.done:
 					return
 				case c.rxProto <- p:
 				}
-				fmt.Printf("sent: %#v\n", p)
 				continue
 			}
 
-			frameHeader, err := parseFrameHeader(buf.Bytes())
+			frameHeader, err := parseFrameHeader(buf)
 			if err != nil {
 				c.readErr <- err
 				return
 			}
 
-			if buf.Len() < int(frameHeader.size) {
+			if buf.Len() < int(frameHeader.Size)-8 {
 				continue outer
 			}
 
-			if frameHeader.size < 8 {
-				c.readErr <- errors.Errorf("invalid header size: %#v", frameHeader)
-				return
-			}
-
-			payload := make([]byte, frameHeader.size)
-			_, err = io.ReadFull(buf, payload)
+			p, err := parseFrame(buf)
 			if err != nil {
 				c.readErr <- err
 				return
 			}
-
-			p, err := parseFrame(payload[8:])
-			if err != nil {
-				c.readErr <- err
-				return
-			}
-
-			fmt.Printf("got: %#v\n", p)
 
 			if o, ok := p.(*performativeOpen); ok && o.MaxFrameSize < c.maxFrameSize {
 				c.maxFrameSize = o.MaxFrameSize
@@ -372,9 +312,8 @@ outer:
 			select {
 			case <-c.done:
 				return
-			case c.rxFrame <- frame{channel: frameHeader.channel, preformative: p}:
+			case c.rxFrame <- frame{channel: frameHeader.Channel, preformative: p}:
 			}
-			fmt.Printf("sent: %#v\n", p)
 		}
 	}
 }
@@ -415,6 +354,8 @@ func (c *Conn) exchangeProtoHeader(protoID uint8) stateFunc {
 	case p = <-c.rxProto:
 	case c.err = <-c.readErr:
 		return nil
+	case fr := <-c.rxFrame:
+		c.err = errors.Errorf("unexpected frame %#v", fr)
 	case <-time.After(1 * time.Second):
 		c.err = ErrTimeout
 		return nil
@@ -580,6 +521,8 @@ func (c *Conn) readFrame() (frame, error) {
 		return fr, nil
 	case err := <-c.readErr:
 		return fr, err
+	case p := <-c.rxProto:
+		return fr, errors.Errorf("unexpected protocol header %#v", p)
 	case <-time.After(1 * time.Second):
 		return fr, ErrTimeout
 	}
