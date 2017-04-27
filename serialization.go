@@ -19,6 +19,7 @@ type byteReader interface {
 	io.ByteReader
 	UnreadByte() error
 	Bytes() []byte
+	Len() int
 }
 
 type byteWriter interface {
@@ -597,6 +598,8 @@ func readBinary(r byteReader) ([]byte, error) {
 	return vari, err
 }
 
+var errInvalidLength = errors.New("length field is larger than frame")
+
 func readVariableType(r byteReader, t byte) ([]byte, error) {
 	var buf []byte
 	switch t {
@@ -607,14 +610,20 @@ func readVariableType(r byteReader, t byte) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		buf = make([]byte, int(n))
+		if uint64(n) > uint64(r.Len()) {
+			return nil, errInvalidLength
+		}
+		buf = make([]byte, n)
 	case vbin32, str32, sym32:
 		var n uint32
 		err := binary.Read(r, binary.BigEndian, &n)
 		if err != nil {
 			return nil, err
 		}
-		buf = make([]byte, int(n))
+		if uint64(n) > uint64(r.Len()) {
+			return nil, errInvalidLength
+		}
+		buf = make([]byte, n)
 	default:
 		return nil, errors.Errorf("type code %#00x is not a recognized variable length type", t)
 	}
@@ -1028,8 +1037,8 @@ func writeMapElement(wr byteWriter, key, value interface{}) error {
 
 type limitByteReader struct {
 	byteReader
-	limit int
-	read  int
+	limit uint32
+	read  uint32
 }
 
 var errLimitReached = errors.New("limit reached")
@@ -1039,7 +1048,7 @@ func (r *limitByteReader) Read(p []byte) (int, error) {
 		return 0, errLimitReached
 	}
 	n, err := r.byteReader.Read(p)
-	r.read += n
+	r.read += uint32(n)
 	return n, err
 }
 
@@ -1066,7 +1075,7 @@ func newMapReader(r byteReader) (*mapReader, error) {
 		return nil, err
 	}
 
-	var n int
+	var n uint32
 	switch b {
 	case null:
 		return nil, errNull
@@ -1075,16 +1084,18 @@ func newMapReader(r byteReader) (*mapReader, error) {
 		if err != nil {
 			return nil, err
 		}
-		n = int(bn)
+		n = uint32(bn)
 	case map32:
-		var n32 uint32
-		err = binary.Read(r, binary.BigEndian, &n32)
+		err = binary.Read(r, binary.BigEndian, &n)
 		if err != nil {
 			return nil, err
 		}
-		n = int(n32)
 	default:
 		return nil, fmt.Errorf("invalid map type %x", b)
+	}
+
+	if uint64(n) > uint64(r.Len()) {
+		return nil, errInvalidLength
 	}
 
 	b, err = r.ReadByte()

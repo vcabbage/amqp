@@ -1,11 +1,17 @@
 package amqp
 
 import (
-	"io"
-	"net"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
+
+	"io/ioutil"
+
+	"pack.ag/amqp/conntest"
 )
 
 func TestFuzzCrashers(t *testing.T) {
@@ -153,11 +159,188 @@ func TestFuzzCrashers(t *testing.T) {
 			"998@@\xa1\x14Service Bus E" +
 			"xplorer@@@@@@@@@\x00St\xc1" +
 			"8\x04\xa1\vMachineNam",
+		15: "AMQP\x03\x01\x00\x00\x00\x00\x00?\x02\x01\x00\x00\x00S@\xc0" +
+			"2\x01\xe0/\x04\xb3\x00\x00\x00\aMSSBCBS\x00\x00\x00" +
+			"\x05PLAIN\x00\x00\x00\tANONYMOUS\x00" +
+			"\x00\x00\bEXTERNAL\x00\x00\x00\x1a\x02\x01\x00\x00\x00" +
+			"SD\xc0\r\x02P\x00\xa0\bWelcome!A2Q" +
+			"P\x00\x01\x00\x00\x00\x00\x00G\x02\x00\x00\x00\x00S\x10\xc0:\n\xa1" +
+			"$83a29bedd884468ba2e" +
+			"37f3017eeab1d_G29@p\x00" +
+			"\x00\x02\x00`\x00\x01p\x00\x03\xa9\x80@@@@@\x00\x00\x00\x1f" +
+			"\x02\x00\x00\x00\x00S\x11\xc0\x12\b`\x00\x00R\x01p\x00\x00\x13\x88" +
+			"R\x01R\xff@@@\x00\x00\x00d\x02\x00\x00\x00\x00S\x12\xc0W" +
+			"\x0e\xa1(oJnNPGsiuzytMOJPa" +
+			"twtPilfsfykSBGplhxtx" +
+			"VSGCB@P\x01\x00S(\xc0\"\xd9\aTERNA" +
+			"L\x00\x00t@@@@@@@\x17\r\r\x1a@@@@@" +
+			"@C\x80\x00\x00\x01[\x9c\x00\x00\x00\x00\x04\x10\x00@-@\x00\x00" +
+			"\x01y\x02\x00\x00\x00\x00S\x14\xc0\x1d\vCC\xa0\x10F>\xc6\\" +
+			"\x06&\xfaE\x9c\x03\xa8\x8e\xe7\x83\xe3;C@B@@@A\x00" +
+			"Sp\xc0\n\x05@@pH\x19\b\x00@C\x00r\xc1\\\xa3\x13" +
+			"xop-enqueed-im\x83\x00\x00\x01[\x9c" +
+			"_-ѣ\x15x-opt-squnce-nu" +
+			"mber\x81\x00\x00\x00\x00\x00\x00\x03x\xa3\x12x@opt" +
+			"-locked-until\x83\x00\x00\x01[\x9c_" +
+			"\x9f\x11\x00Ss\xc0\r\xa1$58405f-81c9" +
+			"-4fc-ae42-ff0ab353d9" +
+			"98@@\xa1\x14Servie ",
+		16: "\x00\x00\x0000000\x00S\x17\xc00\x01000000" +
+			"00000000000000000000" +
+			"00000000000000000000" +
+			"000",
+		17: "AMQP\x03\x01\x00\x00\x00\x00\x00?\x02\x01\x00\x00\x00S@\xc0" +
+			"2\x01\xe0/\x04\xb3\x00\x00\x00\aMSSBCBS\x00\x00\x00" +
+			"\x05PLAIN\x00\x00\x00\tANONYMOUS\x00" +
+			"\x00\x00\bEXTERNAL\x00\x00\x00\x1a\x02\x01\x00\x00\x00" +
+			"SD\xc0\r\x02P\x00\xa0\bWelcome!AMQ" +
+			"P\x00\x01\x00\x00\x00\x00\x00G\x02\x00\x00\x00\x00S\x10\xc0:\n\xa1" +
+			"$83a29bedd884468ba2e" +
+			"37f301\"eeab1d_G29@p\x00" +
+			"\x00\x00\x00`\x00\x01p\x00\x03\xa9\x80@@@@@\x00\x00\x00\x1f" +
+			"\x02\x00\x00\x00\x00S\x11\xc0\x12\b`\x00\x00R\x01p\x00\x00\x13\x88" +
+			"R\x01R\xff@@@\x00\x00\x00d\x02\x00\x00\x00\x00S\x12\xc0W" +
+			"\x0e\xa1(oJnNPGsiuzytMOJPa" +
+			"twtPilfsfykSBGplhxtx" +
+			"VSGCB@P\x01\x00S(\xc0\x12\v\xa1\x05/tes" +
+			"t@@@@@@@@@@@@@C\x80\x00\x00\x00\x00" +
+			"\x00\x04\x10\x00@@@\x00\x00\x01y\x00\x00\x00\x00S\x14\xc0\x1dC" +
+			"C\xa0\x10F>\xc6\\\x06&\xfaE\x9c\x03\xa8\x8e\xe7\x83\xe3C@" +
+			"B@@@@\x00Sp\xc0\n\x05@@p\x19\b\x00@C\x00" +
+			"Sr\xc1\\\x06\xa3\x13x-opt-enqueue" +
+			"d-time\x83\x00\x00\x01[\x9c)ѣ\x15x-op" +
+			"t-equence-nmbe\x81\x00\x00\x00\x00\x00" +
+			"\x03x\xa3\x12x-opt-\xe6ocke-unti" +
+			"l\x83\x00\x00\x01\x9c_\x9f\x11\x00SsH\r\xa1$5e84" +
+			"053f-81c9-49fc-ae42-" +
+			"ff0b353d998@\xa1\x14Servic" +
+			" Bus Explrer@@@@@@@@" +
+			"@\x00St\xc18\x04\xa1\vMachineName" +
+			"\xa1\x0fWIN-37U7RVPH3B1\xa1Us" +
+			"erName\xa1Administrator" +
+			"\x00Su\xa0P<?xml verion=\"",
+		18: "\x00\x00\x00\x1f0000\x00S\x13\xc00\b`00000" +
+			"00000000000",
+		19: "AMQP\x03\x01\x00\x00\x00\x00\x00?\x02\x01\x00\x00\x00S@\xc0" +
+			"2\x01\xe0/\x04\xb3\x00\x00\x00\aMSSBCBS\x00\x00\x00" +
+			"\x05PLAIN\x00\x00\x00\tANONYMOUS\x00" +
+			"\x00\x00\bEXTERNAL\x00\x00\x00\x1a\x02\x01\x00\x00\x00" +
+			"SD\xc0\r\x02P\x00\xa0\bWelcome!AMQ" +
+			"P\x00\x01\x00\x00\x00\x00\x00G\x02\x00\x00\x00\x00S\x10\xc0:\x00\x01" +
+			"$8ֽ\xbf\xefѿｿｿ\xef\xef\xbf\xd5\xef\xcd" +
+			"\xbd��e\x85a\xe8\x03d_\xe629@p\x00" +
+			"\x00\x02\x00`\x00\x01p\x00\x03\xa9\x802dcfbb599" +
+			"75f217c445f95634d7c0" +
+			"250afe7d8316a70c47db" +
+			"a99ff94167ab74349729" +
+			"ce1d2bd5d161df27a6a6" +
+			"e7cba1e63924fcd03134" +
+			"abdad4952c3c409060d7" +
+			"ca2ee4e5f4c647c3edee" +
+			"7ad5aa1cbbd341a8a372" +
+			"ed4f4db1e469ee250a4e" +
+			"fcc46de1aa52a7e22685" +
+			"d0915b7aae075defbff1" +
+			"529d40a04f250a2d4a04" +
+			"6c36c8ca18631cb05533" +
+			"4625c4919072a8ee5258" +
+			"efb4e6205525455f428f" +
+			"63aeb62c68de9f758ee4" +
+			"b8c50a7d669ae00f8942" +
+			"5868f73e894c53ce9b96" +
+			"4dff34f42b9dc2bb0351" +
+			"9fbc169a397d25197cae" +
+			"5bc50742f3808f474f2a" +
+			"dd8d1a0281359043e0a3" +
+			"95705fbc0a89293fa2a5" +
+			"ddfe6ae5416e65c0a5b4" +
+			"eb83320585b33b26072b" +
+			"c99c9c1948a6a271d645" +
+			"17a433728974d0ff4586" +
+			"a42109d6268f9961a590" +
+			"8d6f2d198875b02ae786" +
+			"6fff3a9361b41842a35d" +
+			"c9477ec32da542b706f8" +
+			"478457649ddfda5dfab1" +
+			"d45aa10efe12c3065566" +
+			"541ebdc2d1db6814826f" +
+			"0cc9e3642e813408df3e" +
+			"baa3896bb2777e757dc3" +
+			"dbc1d28994a454fcb8d7" +
+			"6bc5914f29cfc05dc89f" +
+			"8c734315def58d4d6b0b" +
+			"0136ccd3c05178155e30" +
+			"fcb9f68df9104dc96e06" +
+			"58fa899c0058818da5ec" +
+			"88a723558ae3a6f2f8f5" +
+			"23e5af1a73a82ab16198" +
+			"c7ba8341568399d8013f" +
+			"c499e6e7ef61cb8654b4" +
+			"8b88aa2a931dc2cdcf24" +
+			"5686eed9c8355d620d5e" +
+			"91c1e878a9c7da655e3f" +
+			"29d9b7c3f44ad1c70890" +
+			"eb5f27ca28efff76420c" +
+			"d4e3cebd5c788536ddd3" +
+			"65f7ad1dbb91588d5861" +
+			"2e43b0460de9260d5f78" +
+			"0a245bc8e1a83166df1f" +
+			"3a3506d742c268ab4fc1" +
+			"0c6e04bca40295da0ff5" +
+			"420a199dd2fb36045215" +
+			"138c4a2a539ceccc382c" +
+			"8d349a81e13e84870894" +
+			"7c4a9e85d861811e75d3" +
+			"23896f6da3b2fa807f22" +
+			"bcfc57477e487602cf8e" +
+			"973bc925b1a19732b00d" +
+			"15d38675313a283bbaa7" +
+			"5e6793b5af11fe2514bd" +
+			"a3abe96cc19b0e58ddbe" +
+			"55e381ec58c31670fec1" +
+			"184d38bbf2d7cde0fcd2" +
+			"9e907e780d30130b98e0" +
+			"c9eec44bcb1d0ed18dfd" +
+			"a2a64adb523da3102eaf" +
+			"e2bd3051353d8148491a" +
+			"290308ed4ec3fa5da578" +
+			"4b481e861360c3b670e2" +
+			"56539f96a4c4c4360d0d" +
+			"40260049035f1cfdacb2" +
+			"75e7fa847e0df531b466" +
+			"141ac9a3a16e78659475" +
+			"72e4ab732daec23aac6e" +
+			"ed1256d796c4d58bf699" +
+			"f20aa4bbae461a16abbe" +
+			"9c1e9@@@@@",
+		20: "\x00\x00\x0000000\x00S\x18\xc00\x01000000" +
+			"00000000000000000000" +
+			"00000000000000000000" +
+			"000",
+		21: "",
+		22: "SSSBCB\x00\x00\x00S\x12\xc0W\x0e\xa1(pqa\xbd" +
+			"\xbfｿ\xef\x17\x1a\r\r\x15Xhؿ\xbdJ\xf0\xbf\xbd\xef" +
+			"ǽDpHYjxeUBrVfdwCB@P" +
+			"\x01\x00S(\xc0\x1a\v\xa1\x05/test@@@@@@" +
+			"BS\x00\x00\x00\x05PL@@@@@@@C\x80\x00\x00\x00" +
+			"\x00\x00\x04\x10\x00@@@",
+		23: "\x00\x00\x00d\x02\x00#\x00\x00S\x12\xc0W\x0e\xa1crypt" +
+			"o/des: invalid key s" +
+			"ize (pqa\xbd\xdb\xf1\xbd\xbf\xef%\xbd\xdbQ\xbd\xbf" +
+			"\xef%\xbf\xbdJ\xf0\xbf\xbf\xf1\xbd\xbd\xdb\xf1\xbf\xf1\xba\xbf\xf1\xbd\xbd" +
+			"\xdb\xf1\xbd\xbfwCB@P\x01\x00S(\xc0\x1a\v\xa1\x05/t" +
+			"est@@@@@@@@@@@@@C\x80\x00\x00" +
+			"\x00\x80\x00\x04\x10\x00@@@",
 	}
 
 	for i, tt := range tests {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			conn, err := New(&MyConn{data: []byte(tt), done: make(chan bool)}, ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="))
+			opts := []ConnOpt{
+				ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
+				ConnIdleTimeout(1 * time.Millisecond),
+			}
+
+			conn, err := New(conntest.New([]byte(tt)), opts...)
 			if err != nil {
 				return
 			}
@@ -173,7 +356,7 @@ func TestFuzzCrashers(t *testing.T) {
 				return
 			}
 
-			_, err = r.Receive()
+			_, err = r.Receive(context.Background())
 			if err != nil {
 				return
 			}
@@ -181,45 +364,51 @@ func TestFuzzCrashers(t *testing.T) {
 	}
 }
 
-type MyConn struct {
-	data []byte
-	done chan bool
-}
-
-func (c *MyConn) Read(b []byte) (n int, err error) {
-	if len(c.data) == 0 {
-		return 0, io.EOF
+func TestFuzzCorpus(t *testing.T) {
+	if os.Getenv("TEST_CORPUS") == "" {
+		t.Skip("set TEST_CORPUS to enable")
 	}
-	n = copy(b, c.data)
-	c.data = c.data[n:]
-	return
-}
+	finfos, err := ioutil.ReadDir("go-fuzz/corpus")
+	if err != nil {
+		t.Fatal(err)
+	}
 
-func (c *MyConn) Write(b []byte) (n int, err error) {
-	return len(b), nil
-}
+	for _, finfo := range finfos {
+		t.Run(finfo.Name(), func(t *testing.T) {
+			data, err := ioutil.ReadFile(filepath.Join("go-fuzz/corpus", finfo.Name()))
+			if err != nil {
+				t.Fatal(err)
+			}
 
-func (c *MyConn) Close() error {
-	close(c.done)
-	return nil
-}
+			opts := []ConnOpt{
+				ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
+				ConnIdleTimeout(10 * time.Millisecond),
+			}
 
-func (c *MyConn) LocalAddr() net.Addr {
-	return &net.TCPAddr{net.IP{127, 0, 0, 1}, 49706, ""}
-}
+			conn, err := New(conntest.New(data), opts...)
+			if err != nil {
+				fmt.Printf("New: %+v\n", err)
+				return
+			}
+			defer conn.Close()
 
-func (c *MyConn) RemoteAddr() net.Addr {
-	return &net.TCPAddr{net.IP{127, 0, 0, 1}, 49706, ""}
-}
+			s, err := conn.NewSession()
+			if err != nil {
+				fmt.Printf("NewSession: %+v\n", err)
+				return
+			}
 
-func (c *MyConn) SetDeadline(t time.Time) error {
-	return nil
-}
+			r, err := s.NewReceiver(LinkSource("source"), LinkCredit(2))
+			if err != nil {
+				fmt.Printf("NewReceiver: %+v\n", err)
+				return
+			}
 
-func (c *MyConn) SetReadDeadline(t time.Time) error {
-	return nil
-}
-
-func (c *MyConn) SetWriteDeadline(t time.Time) error {
-	return nil
+			_, err = r.Receive(context.Background())
+			if err != nil {
+				fmt.Printf("Receive: %+v\n", err)
+				return
+			}
+		})
+	}
 }

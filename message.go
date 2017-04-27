@@ -96,7 +96,7 @@ type Message struct {
 }
 
 func (m *Message) sendDisposition(state interface{}) {
-	m.link.session.txFrame(&performativeDisposition{
+	m.link.session.txFrame(&performDisposition{
 		Role:    true,
 		First:   m.deliveryID,
 		Settled: true,

@@ -21,10 +21,6 @@ type frameHeader struct {
 	Channel    uint16
 }
 
-func (fh frameHeader) dataOffsetBytes() int {
-	return int(fh.DataOffset) * 4
-}
-
 // Frame Types
 const (
 	frameTypeAMQP = 0x0
@@ -61,31 +57,31 @@ func parseProto(r io.Reader) (proto, error) {
 }
 
 func parseFrame(r byteReader) (preformative, error) {
-	pType, err := peekPreformativeType(r)
+	pType, err := peekPerformType(r)
 	if err != nil {
 		return nil, err
 	}
 
 	var t preformative
 	switch pType {
-	case preformativeOpen:
-		t = new(performativeOpen)
-	case preformativeBegin:
-		t = new(performativeBegin)
-	case preformativeAttach:
-		t = new(performativeAttach)
-	case preformativeFlow:
-		t = new(flow)
-	case preformativeTransfer:
-		t = new(performativeTransfer)
-	case preformativeDisposition:
-		t = new(performativeDisposition)
-	case preformativeDetach:
-		t = new(performativeDetach)
-	case preformativeEnd:
-		t = new(performativeEnd)
-	case preformativeClose:
-		t = new(performativeClose)
+	case typePerformOpen:
+		t = new(performOpen)
+	case typePerformBegin:
+		t = new(performBegin)
+	case typePerformAttach:
+		t = new(performAttach)
+	case typePerformFlow:
+		t = new(performFlow)
+	case typePerformTransfer:
+		t = new(performTransfer)
+	case typePerformDisposition:
+		t = new(performDisposition)
+	case typePerformDetach:
+		t = new(performDetach)
+	case typePerformEnd:
+		t = new(performEnd)
+	case typePerformClose:
+		t = new(performClose)
 	case typeSASLMechanism:
 		t = new(saslMechanisms)
 	case typeSASLOutcome:

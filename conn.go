@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pkg/errors"
@@ -41,6 +43,21 @@ func ConnTLSConfig(tc *tls.Config) ConnOpt {
 	}
 }
 
+func ConnIdleTimeout(d time.Duration) ConnOpt {
+	return func(c *Conn) error {
+		c.idleTimeout = d
+		return nil
+	}
+}
+
+func ConnMaxFrameSize(n uint32) ConnOpt {
+	return func(c *Conn) error {
+		// TODO: error if 0
+		c.maxFrameSize = n
+		return nil
+	}
+}
+
 type stateFunc func() stateFunc
 
 type Conn struct {
@@ -56,8 +73,15 @@ type Conn struct {
 	hostname     string
 	idleTimeout  time.Duration
 
-	err  error
-	done chan struct{}
+	peerMaxFrameSize uint32
+
+	// startMux holds errMu from start until shutdown complete
+	// operations are sequential before startMux is started and
+	// holding the mutex is not necessary
+	errMu      sync.Mutex
+	err        error
+	doneClosed int32
+	done       chan struct{}
 
 	// SASL
 	saslHandlers map[Symbol]stateFunc
@@ -109,16 +133,17 @@ func Dial(addr string, opts ...ConnOpt) (*Conn, error) {
 
 func New(conn net.Conn, opts ...ConnOpt) (*Conn, error) {
 	c := &Conn{
-		net:          conn,
-		maxFrameSize: initialMaxFrameSize,
-		channelMax:   initialChannelMax,
-		idleTimeout:  1 * time.Minute,
-		done:         make(chan struct{}),
-		readErr:      make(chan error, 1),
-		rxProto:      make(chan proto),
-		rxFrame:      make(chan frame),
-		newSession:   make(chan *Session),
-		delSession:   make(chan *Session),
+		net:              conn,
+		maxFrameSize:     initialMaxFrameSize,
+		peerMaxFrameSize: initialMaxFrameSize,
+		channelMax:       initialChannelMax,
+		idleTimeout:      1 * time.Minute,
+		done:             make(chan struct{}),
+		readErr:          make(chan error, 1),
+		rxProto:          make(chan proto),
+		rxFrame:          make(chan frame),
+		newSession:       make(chan *Session),
+		delSession:       make(chan *Session),
 	}
 
 	for _, opt := range opts {
@@ -134,9 +159,7 @@ func New(conn net.Conn, opts ...ConnOpt) (*Conn, error) {
 	}
 
 	if c.err != nil {
-		if c.net != nil {
-			c.net.Close()
-		}
+		c.Close()
 		return nil, c.err
 	}
 
@@ -147,11 +170,21 @@ func New(conn net.Conn, opts ...ConnOpt) (*Conn, error) {
 
 func (c *Conn) Close() error {
 	// TODO: shutdown AMQP
+	c.closeDone()
+
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
 	err := c.net.Close()
 	if c.err == nil {
 		c.err = err
 	}
 	return c.err
+}
+
+func (c *Conn) closeDone() {
+	if atomic.CompareAndSwapInt32(&c.doneClosed, 0, 1) {
+		close(c.done)
+	}
 }
 
 func (c *Conn) MaxFrameSize() int {
@@ -170,7 +203,7 @@ func (c *Conn) NewSession() (*Session, error) {
 	case s = <-c.newSession:
 	}
 
-	err := s.txFrame(&performativeBegin{
+	err := s.txFrame(&performBegin{
 		NextOutgoingID: 0,
 		IncomingWindow: 1,
 	})
@@ -185,7 +218,7 @@ func (c *Conn) NewSession() (*Session, error) {
 		return nil, c.err
 	case fr = <-s.rx:
 	}
-	begin, ok := fr.preformative.(*performativeBegin)
+	begin, ok := fr.preformative.(*performBegin)
 	if !ok {
 		s.Close()
 		return nil, fmt.Errorf("unexpected begin response: %+v", fr)
@@ -212,10 +245,13 @@ func (c *Conn) startMux() {
 
 	fmt.Println("Starting mux")
 
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+
 outer:
 	for {
 		if c.err != nil {
-			close(c.done)
+			c.closeDone()
 			return
 		}
 
@@ -226,7 +262,7 @@ outer:
 		case fr := <-c.rxFrame:
 			ch, ok := sessions[fr.channel]
 			if !ok {
-				c.err = errors.Errorf("unexpected frame: %+v", fr)
+				c.err = errors.Errorf("unexpected frame: %#v", fr.preformative)
 				continue outer
 			}
 			ch.rx <- fr
@@ -244,6 +280,8 @@ outer:
 		case <-keepalive.C:
 			fmt.Printf("Writing: %# 02x\n", keepaliveFrame)
 			_, c.err = c.net.Write(keepaliveFrame)
+		case <-c.done:
+			return
 		}
 	}
 }
@@ -255,65 +293,90 @@ func (c *Conn) connReader() {
 
 	negotiating := true
 
-outer:
+	idleTimeout := c.idleTimeout
+
+	var currentHeader frameHeader
+	frameInProgress := false
+	var err error
+
 	for {
-		n, err := c.net.Read(rxBuf[:c.maxFrameSize]) // TODO: send error on frame too large
-		if err != nil {
-			c.readErr <- err
-			return
-		}
-
-		_, err = buf.Write(rxBuf[:n])
-		if err != nil {
-			c.readErr <- err
-			return
-		}
-
-		for buf.Len() > 7 { // 8 = min size for header
-			if negotiating && bytes.Equal(buf.Bytes()[:4], []byte{'A', 'M', 'Q', 'P'}) {
-				p, err := parseProto(buf)
-				if err != nil {
-					c.readErr <- err
-					return
-				}
-
-				if p.ProtoID == protoAMQP {
-					negotiating = false
-				}
-
-				select {
-				case <-c.done:
-					return
-				case c.rxProto <- p:
-				}
-				continue
-			}
-
-			frameHeader, err := parseFrameHeader(buf)
+		fmt.Println(frameInProgress, buf.Len())
+		if frameInProgress || buf.Len() < 8 { // 8 = min size for header
+			c.net.SetReadDeadline(time.Now().Add(idleTimeout))
+			n, err := c.net.Read(rxBuf[:c.maxFrameSize]) // TODO: send error on frame too large
 			if err != nil {
 				c.readErr <- err
 				return
 			}
 
-			if buf.Len() < int(frameHeader.Size)-8 {
-				continue outer
+			_, err = buf.Write(rxBuf[:n])
+			if err != nil {
+				c.readErr <- err
+				return
 			}
+		}
 
-			p, err := parseFrame(buf)
+		if buf.Len() < 8 {
+			continue
+		}
+
+		if negotiating && bytes.Equal(buf.Bytes()[:4], []byte{'A', 'M', 'Q', 'P'}) {
+			p, err := parseProto(buf)
 			if err != nil {
 				c.readErr <- err
 				return
 			}
 
-			if o, ok := p.(*performativeOpen); ok && o.MaxFrameSize < c.maxFrameSize {
-				c.maxFrameSize = o.MaxFrameSize
+			if p.ProtoID == protoAMQP {
+				negotiating = false
 			}
+
+			// fmt.Printf("GOT: %#v\n", p)
 
 			select {
 			case <-c.done:
 				return
-			case c.rxFrame <- frame{channel: frameHeader.Channel, preformative: p}:
+			case c.rxProto <- p:
 			}
+			// fmt.Printf("Buf len: %d\n", buf.Len())
+			continue
+		}
+
+		if !frameInProgress {
+			currentHeader, err = parseFrameHeader(buf)
+			if err != nil {
+				c.readErr <- err
+				return
+			}
+			frameInProgress = true
+		}
+		// fmt.Printf("GOT: %#v\n", currentHeader)
+
+		if uint64(buf.Len()) < uint64(currentHeader.Size-8) {
+			continue
+		}
+		frameInProgress = false
+
+		frameBody := buf.Next(int(currentHeader.Size - 8))
+
+		p, err := parseFrame(bytes.NewBuffer(frameBody))
+		if err != nil {
+			c.readErr <- err
+			return
+		}
+
+		fmt.Printf("GOT: %#v\n", p)
+
+		if o, ok := p.(*performOpen); ok && o.MaxFrameSize < c.maxFrameSize {
+			if o.IdleTimeout > 0 && o.IdleTimeout < idleTimeout {
+				idleTimeout = o.IdleTimeout
+			}
+		}
+
+		select {
+		case <-c.done:
+			return
+		case c.rxFrame <- frame{channel: currentHeader.Channel, preformative: p}:
 		}
 	}
 }
@@ -356,6 +419,7 @@ func (c *Conn) exchangeProtoHeader(protoID uint8) stateFunc {
 		return nil
 	case fr := <-c.rxFrame:
 		c.err = errors.Errorf("unexpected frame %#v", fr)
+		return nil
 	case <-time.After(1 * time.Second):
 		c.err = ErrTimeout
 		return nil
@@ -420,7 +484,7 @@ func (c *Conn) txPreformative(fr frame) error {
 
 func (c *Conn) txOpen() stateFunc {
 	c.err = c.txPreformative(frame{
-		preformative: &performativeOpen{
+		preformative: &performOpen{
 			ContainerID:  randString(),
 			Hostname:     c.hostname,
 			MaxFrameSize: c.maxFrameSize,
@@ -442,12 +506,17 @@ func (c *Conn) rxOpen() stateFunc {
 		return nil
 	}
 
-	o, ok := fr.preformative.(*performativeOpen)
+	o, ok := fr.preformative.(*performOpen)
 	if !ok {
 		c.err = fmt.Errorf("unexpected frame type %T", fr.preformative)
+		return nil
 	}
 
 	fmt.Printf("Rx Open: %#v\n", o)
+
+	if o.MaxFrameSize > 0 {
+		c.peerMaxFrameSize = o.MaxFrameSize // TODO: make writer adhere
+	}
 
 	if o.IdleTimeout > 0 {
 		c.idleTimeout = o.IdleTimeout
@@ -500,6 +569,7 @@ func (c *Conn) saslOutcome() stateFunc {
 	so, ok := fr.preformative.(*saslOutcome)
 	if !ok {
 		c.err = fmt.Errorf("unexpected frame type %T", fr.preformative)
+		return nil
 	}
 
 	if so.Code != codeSASLOK {

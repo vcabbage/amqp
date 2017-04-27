@@ -12,26 +12,26 @@ type preformative interface {
 
 // preformative Types
 const (
-	preformativeEmpty       = 0xff // used to indicate empty payload, not part of spec
-	preformativeOpen        = 0x10
-	preformativeBegin       = 0x11
-	preformativeAttach      = 0x12
-	preformativeFlow        = 0x13
-	preformativeTransfer    = 0x14
-	preformativeDisposition = 0x15
-	preformativeDetach      = 0x16
-	preformativeEnd         = 0x17
-	preformativeClose       = 0x18
+	typePerformEmpty       = 0xff // used to indicate empty payload, not part of spec
+	typePerformOpen        = 0x10
+	typePerformBegin       = 0x11
+	typePerformAttach      = 0x12
+	typePerformFlow        = 0x13
+	typePerformTransfer    = 0x14
+	typePerformDisposition = 0x15
+	typePerformDetach      = 0x16
+	typePerformEnd         = 0x17
+	typePerformClose       = 0x18
 
 	typeSource = 0x28
 	typeTarget = 0x29
 	typeError  = 0x1d
 )
 
-func peekPreformativeType(r byteReader) (uint8, error) {
+func peekPerformType(r byteReader) (uint8, error) {
 	payload := r.Bytes()
 	if len(payload) == 0 {
-		return preformativeEmpty, nil
+		return typePerformEmpty, nil
 	}
 
 	if len(payload) < 3 || payload[0] != 0 || payload[1] != smallulong {
@@ -56,7 +56,7 @@ func peekPreformativeType(r byteReader) (uint8, error) {
     <field name="properties" type="fields"/>
 </type>
 */
-type performativeOpen struct {
+type performOpen struct {
 	ContainerID         string // required
 	Hostname            string
 	MaxFrameSize        uint32        // default: 4294967295
@@ -69,11 +69,11 @@ type performativeOpen struct {
 	Properties          map[Symbol]interface{}
 }
 
-func (o *performativeOpen) link() (uint32, bool) {
+func (o *performOpen) link() (uint32, bool) {
 	return 0, false
 }
 
-func (o *performativeOpen) marshal() ([]byte, error) {
+func (o *performOpen) marshal() ([]byte, error) {
 	fields := []field{
 		{value: o.ContainerID, omit: false},
 		{value: o.Hostname, omit: o.Hostname == ""},
@@ -86,11 +86,11 @@ func (o *performativeOpen) marshal() ([]byte, error) {
 		{value: o.DesiredCapabilities, omit: len(o.DesiredCapabilities) == 0},
 		{value: o.Properties, omit: len(o.Properties) == 0},
 	}
-	return marshalComposite(preformativeOpen, fields...)
+	return marshalComposite(typePerformOpen, fields...)
 }
 
-func (o *performativeOpen) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, preformativeOpen,
+func (o *performOpen) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typePerformOpen,
 		&o.ContainerID,
 		&o.Hostname,
 		&o.MaxFrameSize,
@@ -117,7 +117,7 @@ func (o *performativeOpen) unmarshal(r byteReader) error {
     <field name="properties" type="fields"/>
 </type>
 */
-type performativeBegin struct {
+type performBegin struct {
 	// the remote channel for this session
 	// If a session is locally initiated, the remote-channel MUST NOT be set.
 	// When an endpoint responds to a remotely initiated session, the remote-channel
@@ -155,11 +155,11 @@ type performativeBegin struct {
 	Properties map[Symbol]interface{}
 }
 
-func (b *performativeBegin) link() (uint32, bool) {
+func (b *performBegin) link() (uint32, bool) {
 	return 0, false
 }
 
-func (b *performativeBegin) marshal() ([]byte, error) {
+func (b *performBegin) marshal() ([]byte, error) {
 	fields := []field{
 		{value: b.RemoteChannel, omit: b.RemoteChannel == 0},
 		{value: b.NextOutgoingID, omit: false},
@@ -169,11 +169,11 @@ func (b *performativeBegin) marshal() ([]byte, error) {
 		{value: b.OfferedCapabilities, omit: len(b.OfferedCapabilities) == 0},
 		{value: b.DesiredCapabilities, omit: len(b.DesiredCapabilities) == 0},
 	}
-	return marshalComposite(preformativeBegin, fields...)
+	return marshalComposite(typePerformBegin, fields...)
 }
 
-func (b *performativeBegin) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, preformativeBegin,
+func (b *performBegin) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typePerformBegin,
 		&b.RemoteChannel,
 		&b.NextOutgoingID,
 		&b.IncomingWindow,
@@ -204,7 +204,7 @@ func (b *performativeBegin) unmarshal(r byteReader) error {
     <field name="properties" type="fields"/>
 </type>
 */
-type performativeAttach struct {
+type performAttach struct {
 	// the name of the link
 	//
 	// This name uniquely identifies the link from the container of the source
@@ -335,11 +335,11 @@ type performativeAttach struct {
 	Properties map[Symbol]interface{}
 }
 
-func (a *performativeAttach) link() (uint32, bool) {
+func (a *performAttach) link() (uint32, bool) {
 	return a.Handle, true
 }
 
-func (a *performativeAttach) marshal() ([]byte, error) {
+func (a *performAttach) marshal() ([]byte, error) {
 	fields := []field{
 		{value: a.Name, omit: false},
 		{value: a.Handle, omit: false},
@@ -356,11 +356,11 @@ func (a *performativeAttach) marshal() ([]byte, error) {
 		{value: a.DesiredCapabilities, omit: len(a.DesiredCapabilities) == 0},
 		{value: a.Properties, omit: len(a.Properties) == 0},
 	}
-	return marshalComposite(preformativeAttach, fields...)
+	return marshalComposite(typePerformAttach, fields...)
 }
 
-func (a *performativeAttach) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, preformativeAttach,
+func (a *performAttach) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typePerformAttach,
 		&a.Name,
 		&a.Handle,
 		&a.Role,
@@ -714,7 +714,7 @@ func (t *target) unmarshal(r byteReader) error {
     <field name="properties" type="fields"/>
 </type>
 */
-type flow struct {
+type performFlow struct {
 	// Identifies the expected transfer-id of the next incoming transfer frame.
 	// This value MUST be set if the peer has received the begin frame for the
 	// session, and MUST NOT be set if it has not. See subsection 2.5.6 for more details.
@@ -813,14 +813,14 @@ type flow struct {
 	Properties map[Symbol]interface{}
 }
 
-func (f *flow) link() (uint32, bool) {
+func (f *performFlow) link() (uint32, bool) {
 	if f.Handle == nil {
 		return 0, false
 	}
 	return *f.Handle, true
 }
 
-func (f *flow) marshal() ([]byte, error) {
+func (f *performFlow) marshal() ([]byte, error) {
 	fields := []field{
 		{value: f.NextIncomingID, omit: f.NextIncomingID == nil},
 		{value: f.IncomingWindow, omit: false},
@@ -834,12 +834,12 @@ func (f *flow) marshal() ([]byte, error) {
 		{value: f.Echo, omit: !f.Echo},
 		{value: f.Properties, omit: len(f.Properties) == 0},
 	}
-	return marshalComposite(preformativeFlow, fields...)
+	return marshalComposite(typePerformFlow, fields...)
 }
 
-func (f *flow) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, preformativeFlow,
-		f.NextIncomingID,
+func (f *performFlow) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typePerformFlow,
+		&f.NextIncomingID,
 		&f.IncomingWindow,
 		&f.NextOutgoingID,
 		&f.OutgoingWindow,
@@ -869,7 +869,7 @@ func (f *flow) unmarshal(r byteReader) error {
     <field name="batchable" type="boolean" default="false"/>
 </type>
 */
-type performativeTransfer struct {
+type performTransfer struct {
 	// Specifies the link on which the message is transferred.
 	Handle uint32 // required
 
@@ -1007,11 +1007,11 @@ type performativeTransfer struct {
 	Payload []byte
 }
 
-func (t *performativeTransfer) link() (uint32, bool) {
+func (t *performTransfer) link() (uint32, bool) {
 	return t.Handle, true
 }
 
-func (t *performativeTransfer) marshal() ([]byte, error) {
+func (t *performTransfer) marshal() ([]byte, error) {
 	fields := []field{
 		{value: t.DeliveryID, omit: t.DeliveryID == nil},
 		{value: t.DeliveryTag, omit: len(t.DeliveryTag) == 0},
@@ -1024,11 +1024,11 @@ func (t *performativeTransfer) marshal() ([]byte, error) {
 		{value: t.Aborted, omit: !t.Aborted},
 		{value: t.Batchable, omit: !t.Batchable},
 	}
-	return marshalComposite(preformativeFlow, fields...)
+	return marshalComposite(typePerformFlow, fields...)
 }
 
-func (t *performativeTransfer) unmarshal(r byteReader) error {
-	err := unmarshalComposite(r, preformativeTransfer,
+func (t *performTransfer) unmarshal(r byteReader) error {
+	err := unmarshalComposite(r, typePerformTransfer,
 		&t.Handle,
 		&t.DeliveryID,
 		&t.DeliveryTag,
@@ -1060,7 +1060,7 @@ func (t *performativeTransfer) unmarshal(r byteReader) error {
     <field name="batchable" type="boolean" default="false"/>
 </type>
 */
-type performativeDisposition struct {
+type performDisposition struct {
 	// directionality of disposition
 	//
 	// The role identifies whether the disposition frame contains information about
@@ -1098,11 +1098,11 @@ type performativeDisposition struct {
 	Batchable bool
 }
 
-func (*performativeDisposition) link() (uint32, bool) {
+func (*performDisposition) link() (uint32, bool) {
 	return 0, false
 }
 
-func (d *performativeDisposition) marshal() ([]byte, error) {
+func (d *performDisposition) marshal() ([]byte, error) {
 	fields := []field{
 		{value: d.Role, omit: false},
 		{value: d.First, omit: false},
@@ -1111,11 +1111,11 @@ func (d *performativeDisposition) marshal() ([]byte, error) {
 		{value: d.State, omit: d.State == nil},
 		{value: d.Batchable, omit: !d.Batchable},
 	}
-	return marshalComposite(preformativeDisposition, fields...)
+	return marshalComposite(typePerformDisposition, fields...)
 }
 
-func (d *performativeDisposition) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, preformativeDisposition,
+func (d *performDisposition) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typePerformDisposition,
 		&d.Role,
 		&d.First,
 		&d.Last,
@@ -1133,7 +1133,7 @@ func (d *performativeDisposition) unmarshal(r byteReader) error {
     <field name="error" type="error"/>
 </type>
 */
-type performativeDetach struct {
+type performDetach struct {
 	// the local handle of the link to be detached
 	Handle uint32 //required
 
@@ -1147,21 +1147,21 @@ type performativeDetach struct {
 	Error *Error
 }
 
-func (d *performativeDetach) link() (uint32, bool) {
+func (d *performDetach) link() (uint32, bool) {
 	return d.Handle, true
 }
 
-func (d *performativeDetach) marshal() ([]byte, error) {
+func (d *performDetach) marshal() ([]byte, error) {
 	fields := []field{
 		{value: d.Handle, omit: false},
 		{value: d.Closed, omit: !d.Closed},
 		{value: d.Error, omit: d.Error == nil},
 	}
-	return marshalComposite(preformativeDetach, fields...)
+	return marshalComposite(typePerformDetach, fields...)
 }
 
-func (d *performativeDetach) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, preformativeDetach,
+func (d *performDetach) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typePerformDetach,
 		&d.Handle,
 		&d.Closed,
 		&d.Error,
@@ -1214,7 +1214,7 @@ func (e *Error) unmarshal(r byteReader) error {
     <field name="error" type="error"/>
 </type>
 */
-type performativeEnd struct {
+type performEnd struct {
 	// error causing the end
 	//
 	// If set, this field indicates that the session is being ended due to an error
@@ -1222,20 +1222,20 @@ type performativeEnd struct {
 	Error *Error
 }
 
-func (*performativeEnd) link() (uint32, bool) {
+func (*performEnd) link() (uint32, bool) {
 	return 0, false
 }
 
-func (e *performativeEnd) marshal() ([]byte, error) {
+func (e *performEnd) marshal() ([]byte, error) {
 	fields := []field{
 		{value: e.Error, omit: e.Error == nil},
 	}
-	return marshalComposite(preformativeEnd, fields...)
+	return marshalComposite(typePerformEnd, fields...)
 }
 
-func (e *performativeEnd) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, preformativeEnd,
-		e.Error,
+func (e *performEnd) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typePerformEnd,
+		&e.Error,
 	)
 }
 
@@ -1245,7 +1245,7 @@ func (e *performativeEnd) unmarshal(r byteReader) error {
     <field name="error" type="error"/>
 </type>
 */
-type performativeClose struct {
+type performClose struct {
 	// error causing the close
 	//
 	// If set, this field indicates that the session is being closed due to an error
@@ -1253,19 +1253,19 @@ type performativeClose struct {
 	Error *Error
 }
 
-func (*performativeClose) link() (uint32, bool) {
+func (*performClose) link() (uint32, bool) {
 	return 0, false
 }
 
-func (c *performativeClose) marshal() ([]byte, error) {
+func (c *performClose) marshal() ([]byte, error) {
 	fields := []field{
 		{value: c.Error, omit: c.Error == nil},
 	}
-	return marshalComposite(preformativeClose, fields...)
+	return marshalComposite(typePerformClose, fields...)
 }
 
-func (c *performativeClose) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, preformativeClose,
-		c.Error,
+func (c *performClose) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typePerformClose,
+		&c.Error,
 	)
 }

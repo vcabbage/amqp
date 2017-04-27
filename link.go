@@ -2,6 +2,7 @@ package amqp
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 )
@@ -30,7 +31,7 @@ type link struct {
 
 func (l *link) close() {
 	if !l.closed {
-		l.session.txFrame(&performativeDetach{
+		l.session.txFrame(&performDetach{
 			Handle: l.handle,
 			Closed: true,
 		})
@@ -44,7 +45,7 @@ func (l *link) close() {
 				case <-l.session.conn.done:
 					l.err = l.session.conn.err
 				case fr := <-l.rx:
-					if fr, ok := fr.(*performativeDetach); ok && fr.Closed {
+					if fr, ok := fr.(*performDetach); ok && fr.Closed {
 						break outer
 					}
 				}
@@ -89,7 +90,7 @@ type Receiver struct {
 func (r *Receiver) sendFlow() error {
 	newLinkCredit := r.link.linkCredit - (r.link.linkCredit - r.link.creditUsed)
 	r.link.senderDeliveryCount += r.link.creditUsed
-	err := r.link.session.txFrame(&flow{
+	err := r.link.session.txFrame(&performFlow{
 		IncomingWindow: 2147483647,
 		NextOutgoingID: 0,
 		OutgoingWindow: 0,
@@ -101,7 +102,7 @@ func (r *Receiver) sendFlow() error {
 	return err
 }
 
-func (r *Receiver) Receive() (*Message, error) {
+func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 	r.buf.Reset()
 
 	msg := &Message{link: r.link}
@@ -121,9 +122,11 @@ outer:
 		case <-r.link.session.conn.done:
 			return nil, r.link.session.conn.err
 		case fr = <-r.link.rx:
+		case <-ctx.Done():
+			return nil, ctx.Err()
 		}
 		switch fr := fr.(type) {
-		case *performativeTransfer:
+		case *performTransfer:
 			r.link.creditUsed++
 
 			if first && fr.DeliveryID != nil {
@@ -135,7 +138,7 @@ outer:
 			if !fr.More {
 				break outer
 			}
-		case *performativeDetach:
+		case *performDetach:
 			if !fr.Closed {
 				log.Panicf("non-closing detach not supported: %+v", fr)
 			}

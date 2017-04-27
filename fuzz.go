@@ -3,13 +3,18 @@
 package amqp
 
 import (
-	"io"
-	"net"
+	"bytes"
+	"context"
 	"time"
+
+	"pack.ag/amqp/conntest"
 )
 
 func Fuzz(data []byte) int {
-	conn, err := New(&MyConn{data: data, done: make(chan bool)}, ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="))
+	conn, err := New(conntest.New(data),
+		ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
+		ConnIdleTimeout(3*time.Millisecond),
+	)
 	if err != nil {
 		return 0
 	}
@@ -25,7 +30,7 @@ func Fuzz(data []byte) int {
 		return 0
 	}
 
-	_, err = r.Receive()
+	_, err = r.Receive(context.Background())
 	if err != nil {
 		return 0
 	}
@@ -33,45 +38,39 @@ func Fuzz(data []byte) int {
 	return 1
 }
 
-type MyConn struct {
-	data []byte
-	done chan bool
-}
-
-func (c *MyConn) Read(b []byte) (n int, err error) {
-	if len(c.data) == 0 {
-		return 0, io.EOF
+func FuzzUnmarshal(data []byte) int {
+	types := []interface{}{
+		new(performAttach),
+		new(performBegin),
+		new(performClose),
+		new(performDetach),
+		new(performDisposition),
+		new(performEnd),
+		new(performFlow),
+		new(performOpen),
+		new(performTransfer),
+		new(source),
+		new(target),
+		new(Error),
+		new(saslCode),
+		new(saslMechanisms),
+		new(saslOutcome),
+		new(Message),
+		new(MessageHeader),
+		new(MessageProperties),
+		new(StateReceived),
+		new(StateAccepted),
+		new(StateRejected),
+		new(StateReleased),
+		new(StateModified),
+		new(mapAnyAny),
+		new(mapStringAny),
+		new(mapSymbolAny),
+		new(milliseconds),
 	}
-	n = copy(b, c.data)
-	c.data = c.data[n:]
-	return
-}
 
-func (c *MyConn) Write(b []byte) (n int, err error) {
-	return len(b), nil
-}
-
-func (c *MyConn) Close() error {
-	close(c.done)
-	return nil
-}
-
-func (c *MyConn) LocalAddr() net.Addr {
-	return &net.TCPAddr{net.IP{127, 0, 0, 1}, 49706, ""}
-}
-
-func (c *MyConn) RemoteAddr() net.Addr {
-	return &net.TCPAddr{net.IP{127, 0, 0, 1}, 49706, ""}
-}
-
-func (c *MyConn) SetDeadline(t time.Time) error {
-	return nil
-}
-
-func (c *MyConn) SetReadDeadline(t time.Time) error {
-	return nil
-}
-
-func (c *MyConn) SetWriteDeadline(t time.Time) error {
-	return nil
+	for _, t := range types {
+		unmarshal(bytes.NewBuffer(append([]byte(nil), data...)), t)
+	}
+	return 0
 }

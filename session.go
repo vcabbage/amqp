@@ -68,7 +68,7 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	}
 	l.creditUsed = l.linkCredit
 
-	s.txFrame(&performativeAttach{
+	s.txFrame(&performAttach{
 		Name:   randString(),
 		Handle: l.handle,
 		Role:   true,
@@ -83,7 +83,7 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 		return nil, s.conn.err
 	case fr = <-l.rx:
 	}
-	resp, ok := fr.(*performativeAttach)
+	resp, ok := fr.(*performAttach)
 	if !ok {
 		return nil, fmt.Errorf("unexpected attach response: %+v", fr)
 	}
@@ -122,19 +122,23 @@ func (s *Session) startMux() {
 			close(link.rx)
 
 		case fr := <-s.rx:
-			go func() {
-				handle, ok := fr.preformative.link()
-				if !ok {
-					log.Printf("unexpected frame: %+v (%T)", fr, fr.preformative)
-					return
-				}
+			handle, ok := fr.preformative.link()
+			if !ok {
+				log.Printf("unexpected frame: %+v (%T)", fr, fr.preformative)
+				continue
+			}
 
-				link, ok := links[handle]
-				if !ok {
-					log.Printf("frame with unknown handle %d: %+v", handle, fr)
-					return
+			link, ok := links[handle]
+			if !ok {
+				log.Printf("frame with unknown handle %d: %+v", handle, fr)
+				continue
+			}
+
+			go func() {
+				select {
+				case <-s.conn.done:
+				case link.rx <- fr.preformative:
 				}
-				link.rx <- fr.preformative // TODO: timeout
 			}()
 		}
 	}
