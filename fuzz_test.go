@@ -2,16 +2,14 @@ package amqp
 
 import (
 	"context"
-	"fmt"
+	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
 	"time"
 
-	"io/ioutil"
-
-	"pack.ag/amqp/conntest"
+	"pack.ag/amqp/testconn"
 )
 
 func TestFuzzCrashers(t *testing.T) {
@@ -335,12 +333,12 @@ func TestFuzzCrashers(t *testing.T) {
 
 	for i, tt := range tests {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			opts := []ConnOpt{
+			opts := []ConnOption{
 				ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
 				ConnIdleTimeout(1 * time.Millisecond),
 			}
 
-			conn, err := New(conntest.New([]byte(tt)), opts...)
+			conn, err := New(testconn.New([]byte(tt)), opts...)
 			if err != nil {
 				return
 			}
@@ -368,45 +366,47 @@ func TestFuzzCorpus(t *testing.T) {
 	if os.Getenv("TEST_CORPUS") == "" {
 		t.Skip("set TEST_CORPUS to enable")
 	}
-	finfos, err := ioutil.ReadDir("go-fuzz/corpus")
+
+	const dir = "fuzz/conn/corpus"
+	finfos, err := ioutil.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, finfo := range finfos {
 		t.Run(finfo.Name(), func(t *testing.T) {
-			data, err := ioutil.ReadFile(filepath.Join("go-fuzz/corpus", finfo.Name()))
+			data, err := ioutil.ReadFile(filepath.Join(dir, finfo.Name()))
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			opts := []ConnOpt{
+			opts := []ConnOption{
 				ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
 				ConnIdleTimeout(10 * time.Millisecond),
 			}
 
-			conn, err := New(conntest.New(data), opts...)
+			conn, err := New(testconn.New(data), opts...)
 			if err != nil {
-				fmt.Printf("New: %+v\n", err)
+				// fmt.Printf("New: %+v\n", err)
 				return
 			}
 			defer conn.Close()
 
 			s, err := conn.NewSession()
 			if err != nil {
-				fmt.Printf("NewSession: %+v\n", err)
+				// fmt.Printf("NewSession: %+v\n", err)
 				return
 			}
 
 			r, err := s.NewReceiver(LinkSource("source"), LinkCredit(2))
 			if err != nil {
-				fmt.Printf("NewReceiver: %+v\n", err)
+				// fmt.Printf("NewReceiver: %+v\n", err)
 				return
 			}
 
 			_, err = r.Receive(context.Background())
 			if err != nil {
-				fmt.Printf("Receive: %+v\n", err)
+				// fmt.Printf("Receive: %+v\n", err)
 				return
 			}
 		})

@@ -7,11 +7,11 @@ import (
 	"context"
 	"time"
 
-	"pack.ag/amqp/conntest"
+	"pack.ag/amqp/testconn"
 )
 
-func Fuzz(data []byte) int {
-	conn, err := New(conntest.New(data),
+func FuzzConn(data []byte) int {
+	conn, err := New(testconn.New(data),
 		ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
 		ConnIdleTimeout(3*time.Millisecond),
 	)
@@ -58,11 +58,11 @@ func FuzzUnmarshal(data []byte) int {
 		new(Message),
 		new(MessageHeader),
 		new(MessageProperties),
-		new(StateReceived),
-		new(StateAccepted),
-		new(StateRejected),
-		new(StateReleased),
-		new(StateModified),
+		new(stateReceived),
+		new(stateAccepted),
+		new(stateRejected),
+		new(stateReleased),
+		new(stateModified),
 		new(mapAnyAny),
 		new(mapStringAny),
 		new(mapSymbolAny),

@@ -2,49 +2,39 @@ package amqp
 
 import (
 	"bytes"
-	"io"
 	"time"
-
-	"github.com/pkg/errors"
 )
 
-const (
-	typeMessageHeader         = 0x70
-	typeDeliveryAnnotations   = 0x71
-	typeMessageAnnotations    = 0x72
-	typeMessageProperties     = 0x73
-	typeApplicationProperties = 0x74
-	typeApplicationData       = 0x75
-	typeAMQPSequence          = 0x76
-	typeAMQPValue             = 0x77
-	typeFooter                = 0x78
-)
-
+// Message is an AMQP message.
 type Message struct {
 	// The header section carries standard delivery details about the transfer
-	// of a message through the AMQP network. If the header section is omitted
-	// the receiver MUST assume the appropriate default values (or the meaning
-	// implied by no value being set) for the fields within the header unless
-	// other target or node specific defaults have otherwise been set.
+	// of a message through the AMQP network.
 	Header MessageHeader
+	// If the header section is omitted the receiver MUST assume the appropriate
+	// default values (or the meaning implied by no value being set) for the
+	// fields within the header unless other target or node specific defaults
+	// have otherwise been set.
 
 	// The delivery-annotations section is used for delivery-specific non-standard
 	// properties at the head of the message. Delivery annotations convey information
-	// from the sending peer to the receiving peer. If the recipient does not
-	// understand the annotation it cannot be acted upon and its effects
-	// (such as any implied propagation) cannot be acted upon. Annotations might be
-	// specific to one implementation, or common to multiple implementations.
-	// The capabilities negotiated on link attach and on the source and target
-	// SHOULD be used to establish which annotations a peer supports. A registry
-	// of defined annotations and their meanings is maintained [AMQPDELANN].
+	// from the sending peer to the receiving peer.
+	DeliveryAnnotations map[interface{}]interface{}
+	// If the recipient does not understand the annotation it cannot be acted upon
+	// and its effects (such as any implied propagation) cannot be acted upon.
+	// Annotations might be specific to one implementation, or common to multiple
+	// implementations. The capabilities negotiated on link attach and on the source
+	// and target SHOULD be used to establish which annotations a peer supports. A
+	// registry of defined annotations and their meanings is maintained [AMQPDELANN].
 	// The symbolic key "rejected" is reserved for the use of communicating error
 	// information regarding rejected messages. Any values associated with the
 	// "rejected" key MUST be of type error.
 	//
 	// If the delivery-annotations section is omitted, it is equivalent to a
 	// delivery-annotations section containing an empty map of annotations.
-	DeliveryAnnotations map[interface{}]interface{}
 
+	// The message-annotations section is used for properties of the message which
+	// are aimed at the infrastructure.
+	Annotations map[interface{}]interface{}
 	// The message-annotations section is used for properties of the message which
 	// are aimed at the infrastructure and SHOULD be propagated across every
 	// delivery step. Message annotations convey information about the message.
@@ -62,40 +52,42 @@ type Message struct {
 	//
 	// If the message-annotations section is omitted, it is equivalent to a
 	// message-annotations section containing an empty map of annotations.
-	Annotations map[interface{}]interface{}
 
 	// The properties section is used for a defined set of standard properties of
-	// the message. The properties section is part of the bare message; therefore,
-	// if retransmitted by an intermediary, it MUST remain unaltered.
+	// the message.
 	Properties MessageProperties
+	// The properties section is part of the bare message; therefore,
+	// if retransmitted by an intermediary, it MUST remain unaltered.
 
 	// The application-properties section is a part of the bare message used for
 	// structured application data. Intermediaries can use the data within this
 	// structure for the purposes of filtering or routing.
-	//
+	ApplicationProperties map[string]interface{}
 	// The keys of this map are restricted to be of type string (which excludes
 	// the possibility of a null key) and the values are restricted to be of
 	// simple types only, that is, excluding map, list, and array types.
-	ApplicationProperties map[string]interface{}
 
+	// Message payload.
+	Data []byte
 	// A data section contains opaque binary data.
-	//
 	// TODO: this could be data(s), amqp-sequence(s), amqp-value rather than singe data:
 	// "The body consists of one of the following three choices: one or more data
 	//  sections, one or more amqp-sequence sections, or a single amqp-value section."
-	Data []byte
 
 	// The footer section is used for details about the message or delivery which
 	// can only be calculated or evaluated once the whole bare message has been
 	// constructed or seen (for example message hashes, HMACs, signatures and
 	// encryption details).
-	Footer map[interface{}]interface{} // TODO: implement custom type with validation
+	Footer map[interface{}]interface{}
+	// TODO: implement custom type with validation
 
-	link       *link
-	deliveryID uint32
+	link       *link  // link the message was received on
+	deliveryID uint32 // used when sending disposition
 }
 
+// sendDisposition sends a disposition frame to the peer
 func (m *Message) sendDisposition(state interface{}) {
+	// TODO: prevent client sending twice?
 	m.link.session.txFrame(&performDisposition{
 		Role:    true,
 		First:   m.deliveryID,
@@ -107,25 +99,75 @@ func (m *Message) sendDisposition(state interface{}) {
 // Accept notifies the server that the message has been
 // accepted and does not require redelivery.
 func (m *Message) Accept() {
-	m.sendDisposition(&StateAccepted{})
+	m.sendDisposition(&stateAccepted{})
 }
 
 // Reject notifies the server that the message is invalid.
 func (m *Message) Reject() {
-	m.sendDisposition(&StateRejected{})
+	m.sendDisposition(&stateRejected{})
 }
 
+// Release releases the message back to the server. The message
+// may be redelivered to this or another consumer.
 func (m *Message) Release() {
-	m.sendDisposition(&StateReleased{})
+	m.sendDisposition(&stateReleased{})
 }
 
+// TODO: add support for sending Modified disposition
+
+func (m *Message) unmarshal(r byteReader) error {
+	for r.Len() > 0 {
+		typ, err := peekMessageType(r.Bytes())
+		if err != nil {
+			return err
+		}
+
+		var (
+			section       interface{}
+			discardHeader = true
+		)
+		switch amqpType(typ) {
+		case typeCodeMessageHeader:
+			discardHeader = false
+			section = &m.Header
+		case typeCodeDeliveryAnnotations:
+			section = &m.DeliveryAnnotations
+		case typeCodeMessageAnnotations:
+			section = &m.Annotations
+		case typeCodeMessageProperties:
+			discardHeader = false
+			section = &m.Properties
+		case typeCodeApplicationProperties:
+			section = &m.ApplicationProperties
+		case typeCodeApplicationData:
+			section = &m.Data
+		case typeCodeFooter:
+			section = &m.Footer
+		default:
+			return errorErrorf("unknown message section %x", typ)
+		}
+
+		if discardHeader {
+			r.Next(3)
+		}
+
+		err = unmarshal(r, section)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// peekMessageType reads the message type without
+// modifying any data.
 func peekMessageType(buf []byte) (uint8, error) {
 	if len(buf) < 3 {
-		return 0, errors.New("invalid message")
+		return 0, errorNew("invalid message")
 	}
 
 	if buf[0] != 0 {
-		return 0, errors.Errorf("invalid composite header %0x", buf[0])
+		return 0, errorErrorf("invalid composite header %0x", buf[0])
 	}
 
 	v, err := readInt(bytes.NewBuffer(buf[1:]))
@@ -133,67 +175,6 @@ func peekMessageType(buf []byte) (uint8, error) {
 		return 0, err
 	}
 	return uint8(v), err
-}
-
-func consumeBytes(r io.ByteReader, n int) error {
-	for i := 0; i < n; i++ {
-		_, err := r.ReadByte()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (m *Message) unmarshal(r byteReader) error {
-	for {
-		buf := r.Bytes()
-		if len(buf) == 0 {
-			break
-		}
-		typ, err := peekMessageType(buf)
-		if err != nil {
-			return err
-		}
-
-		switch typ {
-		case typeMessageHeader:
-			err = unmarshal(r, &m.Header)
-		case typeDeliveryAnnotations:
-			if err = consumeBytes(r, 3); err != nil {
-				return err
-			}
-			err = unmarshal(r, &m.DeliveryAnnotations)
-		case typeMessageAnnotations:
-			if err = consumeBytes(r, 3); err != nil {
-				return err
-			}
-			err = unmarshal(r, &m.Annotations)
-		case typeMessageProperties:
-			err = unmarshal(r, &m.Properties)
-		case typeApplicationProperties:
-			if err = consumeBytes(r, 3); err != nil {
-				return err
-			}
-			err = unmarshal(r, &m.ApplicationProperties)
-		case typeApplicationData:
-			if err = consumeBytes(r, 3); err != nil {
-				return err
-			}
-			err = unmarshal(r, &m.Data)
-		case typeFooter:
-			if err = consumeBytes(r, 3); err != nil {
-				return err
-			}
-			err = unmarshal(r, &m.Footer)
-		default:
-			return errors.Errorf("unknown message section %x", typ)
-		}
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 /*
@@ -207,6 +188,8 @@ func (m *Message) unmarshal(r byteReader) error {
 </type>
 */
 
+// MessageHeader carries standard delivery details about the transfer
+// of a message.
 type MessageHeader struct {
 	Durable       bool
 	Priority      uint8
@@ -216,7 +199,7 @@ type MessageHeader struct {
 }
 
 func (h *MessageHeader) marshal() ([]byte, error) {
-	return marshalComposite(typeMessageHeader, []field{
+	return marshalComposite(typeCodeMessageHeader, []field{
 		{value: h.Durable, omit: !h.Durable},
 		{value: h.Priority, omit: h.Priority == 4},
 		{value: milliseconds(h.TTL), omit: h.TTL == 0},
@@ -226,7 +209,7 @@ func (h *MessageHeader) marshal() ([]byte, error) {
 }
 
 func (h *MessageHeader) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeMessageHeader,
+	return unmarshalComposite(r, typeCodeMessageHeader,
 		&h.Durable,
 		&h.Priority,
 		(*milliseconds)(&h.TTL),
@@ -254,7 +237,10 @@ func (h *MessageHeader) unmarshal(r byteReader) error {
 </type>
 */
 
+// MessageProperties is the defined set of properties for AMQP messages.
 type MessageProperties struct {
+	// TODO: add useful descriptions from spec
+
 	MessageID          interface{} // may be uint64, UUID, []byte, or string
 	UserID             []byte
 	To                 string
@@ -271,7 +257,7 @@ type MessageProperties struct {
 }
 
 func (p *MessageProperties) marshal() ([]byte, error) {
-	return marshalComposite(typeMessageProperties, []field{
+	return marshalComposite(typeCodeMessageProperties, []field{
 		{value: p.MessageID, omit: p.MessageID != nil},
 		{value: p.UserID, omit: len(p.UserID) == 0},
 		{value: p.To, omit: p.To == ""},
@@ -288,7 +274,7 @@ func (p *MessageProperties) marshal() ([]byte, error) {
 }
 
 func (p *MessageProperties) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeMessageProperties,
+	return unmarshalComposite(r, typeCodeMessageProperties,
 		&p.MessageID,
 		&p.UserID,
 		&p.To,
@@ -305,14 +291,6 @@ func (p *MessageProperties) unmarshal(r byteReader) error {
 	)
 }
 
-const (
-	typeStateReceived = 0x23
-	typeStateAccepted = 0x24
-	typeStateRejected = 0x25
-	typeStateReleased = 0x26
-	typeStateModified = 0x27
-)
-
 /*
 <type name="received" class="composite" source="list" provides="delivery-state">
     <descriptor name="amqp:received:list" code="0x00000000:0x00000023"/>
@@ -321,7 +299,7 @@ const (
 </type>
 */
 
-type StateReceived struct {
+type stateReceived struct {
 	// When sent by the sender this indicates the first section of the message
 	// (with section-number 0 being the first section) for which data can be resent.
 	// Data from sections prior to the given section cannot be retransmitted for
@@ -346,15 +324,15 @@ type StateReceived struct {
 	SectionOffset uint64
 }
 
-func (sr *StateReceived) marshal() ([]byte, error) {
-	return marshalComposite(typeStateReceived, []field{
+func (sr *stateReceived) marshal() ([]byte, error) {
+	return marshalComposite(typeCodeStateReceived, []field{
 		{value: sr.SectionNumber, omit: false},
 		{value: sr.SectionOffset, omit: false},
 	}...)
 }
 
-func (sr *StateReceived) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeStateReceived,
+func (sr *stateReceived) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typeCodeStateReceived,
 		&sr.SectionNumber,
 		&sr.SectionOffset,
 	)
@@ -366,14 +344,14 @@ func (sr *StateReceived) unmarshal(r byteReader) error {
 </type>
 */
 
-type StateAccepted struct{}
+type stateAccepted struct{}
 
-func (sa *StateAccepted) marshal() ([]byte, error) {
-	return marshalComposite(typeStateAccepted)
+func (sa *stateAccepted) marshal() ([]byte, error) {
+	return marshalComposite(typeCodeStateAccepted)
 }
 
-func (sa *StateAccepted) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeStateAccepted)
+func (sa *stateAccepted) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typeCodeStateAccepted)
 }
 
 /*
@@ -383,18 +361,18 @@ func (sa *StateAccepted) unmarshal(r byteReader) error {
 </type>
 */
 
-type StateRejected struct {
+type stateRejected struct {
 	Error *Error
 }
 
-func (sr *StateRejected) marshal() ([]byte, error) {
-	return marshalComposite(typeStateRejected,
+func (sr *stateRejected) marshal() ([]byte, error) {
+	return marshalComposite(typeCodeStateRejected,
 		field{value: sr.Error, omit: sr.Error == nil},
 	)
 }
 
-func (sr *StateRejected) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeStateRejected,
+func (sr *stateRejected) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typeCodeStateRejected,
 		&sr.Error,
 	)
 }
@@ -405,14 +383,14 @@ func (sr *StateRejected) unmarshal(r byteReader) error {
 </type>
 */
 
-type StateReleased struct{}
+type stateReleased struct{}
 
-func (sr *StateReleased) marshal() ([]byte, error) {
-	return marshalComposite(typeStateReleased)
+func (sr *stateReleased) marshal() ([]byte, error) {
+	return marshalComposite(typeCodeStateReleased)
 }
 
-func (sr *StateReleased) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeStateReleased)
+func (sr *stateReleased) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typeCodeStateReleased)
 }
 
 /*
@@ -424,7 +402,7 @@ func (sr *StateReleased) unmarshal(r byteReader) error {
 </type>
 */
 
-type StateModified struct {
+type stateModified struct {
 	// count the transfer as an unsuccessful delivery attempt
 	//
 	// If the delivery-failed flag is set, any messages modified
@@ -447,16 +425,16 @@ type StateModified struct {
 	MessageAnnotations map[Symbol]interface{}
 }
 
-func (sm *StateModified) marshal() ([]byte, error) {
-	return marshalComposite(typeStateModified, []field{
+func (sm *stateModified) marshal() ([]byte, error) {
+	return marshalComposite(typeCodeStateModified, []field{
 		{value: sm.DeliveryFailed, omit: !sm.DeliveryFailed},
 		{value: sm.UndeliverableHere, omit: !sm.UndeliverableHere},
 		{value: sm.MessageAnnotations, omit: sm.MessageAnnotations == nil},
 	}...)
 }
 
-func (sm *StateModified) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeStateModified,
+func (sm *stateModified) unmarshal(r byteReader) error {
+	return unmarshalComposite(r, typeCodeStateModified,
 		&sm.DeliveryFailed,
 		&sm.UndeliverableHere,
 		&sm.MessageAnnotations,

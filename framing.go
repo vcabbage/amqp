@@ -2,12 +2,23 @@ package amqp
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
-
-	"github.com/pkg/errors"
+	"math"
 )
 
+// Frame structure:
+//
+//     header (8 bytes)
+//       0-3: SIZE (total size, at least 8 bytes for header, uint32)
+//       4:   DOFF (data offset,at least 2, count of 4 bytes words, uint8)
+//       5:   TYPE (frame type)
+//                0x0: AMQP
+//                0x1: SASL
+//       6-7: type dependent (channel for AMQP)
+//     extended header (opt)
+//     body (opt)
+
+// frameHeader in a structure appropriate for use with binary.Read()
 type frameHeader struct {
 	// size: an unsigned 32-bit integer that MUST contain the total frame size of the frame header,
 	// extended header, and frame body. The frame is malformed if the size is less than the size of
@@ -21,19 +32,24 @@ type frameHeader struct {
 	Channel    uint16
 }
 
-// Frame Types
 const (
 	frameTypeAMQP = 0x0
 	frameTypeSASL = 0x1
+
+	frameHeaderSize = 8
 )
 
+// parseFrameHeader reads the header from r and returns the result.
+//
+// No validation is done.
 func parseFrameHeader(r io.Reader) (frameHeader, error) {
 	var fh frameHeader
 	err := binary.Read(r, binary.BigEndian, &fh)
 	return fh, err
 }
 
-type proto struct {
+// protoHeader in a structure appropriate for use with binary.Read()
+type protoHeader struct {
 	Proto    [4]byte
 	ProtoID  uint8
 	Major    uint8
@@ -41,53 +57,57 @@ type proto struct {
 	Revision uint8
 }
 
-func parseProto(r io.Reader) (proto, error) {
-	var p proto
+// parseProtoHeader reads the proto header from r and returns the results
+//
+// An error is returned if the protocol is not "AMQP" or if the version is not 1.0.0.
+func parseProtoHeader(r io.Reader) (protoHeader, error) {
+	var p protoHeader
 	err := binary.Read(r, binary.LittleEndian, &p)
 	if err != nil {
 		return p, err
 	}
 	if p.Proto != [4]byte{'A', 'M', 'Q', 'P'} {
-		return p, fmt.Errorf("unexpected protocol %q", p.Proto)
+		return p, errorErrorf("unexpected protocol %q", p.Proto)
 	}
 	if p.Major != 1 || p.Minor != 0 || p.Revision != 0 {
-		return p, fmt.Errorf("unexpected protocol version %d.%d.%d", p.Major, p.Minor, p.Revision)
+		return p, errorErrorf("unexpected protocol version %d.%d.%d", p.Major, p.Minor, p.Revision)
 	}
 	return p, nil
 }
 
-func parseFrame(r byteReader) (preformative, error) {
+// parseFrame reads and unmarshals an AMQP frame.
+func parseFrame(r byteReader) (frameBody, error) {
 	pType, err := peekPerformType(r)
 	if err != nil {
 		return nil, err
 	}
 
-	var t preformative
+	var t frameBody
 	switch pType {
-	case typePerformOpen:
+	case typeCodeOpen:
 		t = new(performOpen)
-	case typePerformBegin:
+	case typeCodeBegin:
 		t = new(performBegin)
-	case typePerformAttach:
+	case typeCodeAttach:
 		t = new(performAttach)
-	case typePerformFlow:
+	case typeCodeFlow:
 		t = new(performFlow)
-	case typePerformTransfer:
+	case typeCodeTransfer:
 		t = new(performTransfer)
-	case typePerformDisposition:
+	case typeCodeDisposition:
 		t = new(performDisposition)
-	case typePerformDetach:
+	case typeCodeDetach:
 		t = new(performDetach)
-	case typePerformEnd:
+	case typeCodeEnd:
 		t = new(performEnd)
-	case typePerformClose:
+	case typeCodeClose:
 		t = new(performClose)
-	case typeSASLMechanism:
+	case typeCodeSASLMechanism:
 		t = new(saslMechanisms)
-	case typeSASLOutcome:
+	case typeCodeSASLOutcome:
 		t = new(saslOutcome)
 	default:
-		return nil, errors.Errorf("unknown preformative type %0x", pType)
+		return nil, errorErrorf("unknown preformative type %0x", pType)
 	}
 
 	err = unmarshal(r, t)
@@ -95,32 +115,38 @@ func parseFrame(r byteReader) (preformative, error) {
 }
 
 type frame struct {
-	channel      uint16
-	preformative preformative
+	typ     uint8     // AMQP/SASL
+	channel uint16    // channel this frame is for
+	body    frameBody // body of the frame
 }
 
-/*
-	header (8 bytes)
-		0-3:	SIZE (total size, at least 8 bytes for header, uint32)
-		4: 		DOFF (data offset,at least 2, count of 4 bytes words, uint8)
-		5:		TYPE (frame type)
-					0x0: AMQP
-					0x1: SASL
-		6-7:	TYPE dependent
-	extended header (opt)
-	body (opt)
-*/
-func writeFrame(wr io.Writer, frameType byte, channel uint16, data []byte) error {
-	err := binary.Write(wr, binary.BigEndian, uint32(len(data)+8)) // SIZE
-	if err != nil {
-		return err
-	}
-	_, err = wr.Write([]byte{2, frameType})
+// frameBody is the interface all frame bodies must implement
+type frameBody interface {
+	// if the frame is for a link, link() should return (link#, true),
+	// otherwise it should return (0, false)
+	link() (handle uint32, ok bool)
+}
+
+// writeFrame encodes and writes fr to wr.
+func writeFrame(wr io.Writer, fr frame) error {
+	data, err := marshal(fr.body)
 	if err != nil {
 		return err
 	}
 
-	err = binary.Write(wr, binary.BigEndian, channel)
+	frameSize := len(data) + frameHeaderSize
+	if frameSize > math.MaxUint32 {
+		return errorNew("frame too large")
+	}
+
+	header := frameHeader{
+		Size:       uint32(frameSize),
+		DataOffset: 2, // see frameHeader.DataOffset comment
+		FrameType:  fr.typ,
+		Channel:    fr.channel,
+	}
+
+	err = binary.Write(wr, binary.BigEndian, header)
 	if err != nil {
 		return err
 	}

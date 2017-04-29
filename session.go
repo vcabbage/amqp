@@ -2,7 +2,6 @@ package amqp
 
 import (
 	"bytes"
-	"fmt"
 	"log"
 	"math/rand"
 )
@@ -38,8 +37,12 @@ func (s *Session) Close() error {
 	}
 }
 
-func (s *Session) txFrame(p preformative) error {
-	return s.conn.txPreformative(frame{preformative: p, channel: s.channel})
+func (s *Session) txFrame(p frameBody) error {
+	return s.conn.txFrame(frame{
+		typ:     frameTypeAMQP,
+		channel: s.channel,
+		body:    p,
+	})
 }
 
 func randString() string { // TODO: random string gen off SO, replace
@@ -77,7 +80,7 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 		},
 	})
 
-	var fr preformative
+	var fr frameBody
 	select {
 	case <-s.conn.done:
 		return nil, s.conn.err
@@ -85,12 +88,12 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	}
 	resp, ok := fr.(*performAttach)
 	if !ok {
-		return nil, fmt.Errorf("unexpected attach response: %+v", fr)
+		return nil, errorErrorf("unexpected attach response: %+v", fr)
 	}
 
-	fmt.Printf("Attach Resp: %+v\n", resp)
-	fmt.Printf("Attach Source: %+v\n", resp.Source)
-	fmt.Printf("Attach Target: %+v\n", resp.Target)
+	// fmt.Printf("Attach Resp: %+v\n", resp)
+	// fmt.Printf("Attach Source: %+v\n", resp.Source)
+	// fmt.Printf("Attach Target: %+v\n", resp.Target)
 
 	l.senderDeliveryCount = resp.InitialDeliveryCount
 
@@ -111,20 +114,20 @@ func (s *Session) startMux() {
 		case <-s.conn.done:
 			return
 		case s.newLink <- nextLink:
-			fmt.Println("Got new link request")
+			// fmt.Println("Got new link request")
 			links[nextLink.handle] = nextLink
 			// TODO: handle max session/wrapping
 			nextLink = newLink(s, nextLink.handle+1)
 
 		case link := <-s.delLink:
-			fmt.Println("Got link deletion request")
+			// fmt.Println("Got link deletion request")
 			delete(links, link.handle)
 			close(link.rx)
 
 		case fr := <-s.rx:
-			handle, ok := fr.preformative.link()
+			handle, ok := fr.body.link()
 			if !ok {
-				log.Printf("unexpected frame: %+v (%T)", fr, fr.preformative)
+				log.Printf("unexpected frame: %+v (%T)", fr, fr.body)
 				continue
 			}
 
@@ -134,12 +137,10 @@ func (s *Session) startMux() {
 				continue
 			}
 
-			go func() {
-				select {
-				case <-s.conn.done:
-				case link.rx <- fr.preformative:
-				}
-			}()
+			select {
+			case <-s.conn.done:
+			case link.rx <- fr.body:
+			}
 		}
 	}
 }

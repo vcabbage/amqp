@@ -1,5 +1,6 @@
 amqp.test
-/go-fuzz/*
-!/go-fuzz/corpus
+/fuzz/*/*
+!/fuzz/*/corpus
+/fuzz/*.zip
 *.log
 /cmd

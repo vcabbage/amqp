@@ -1,10 +1,5 @@
 package amqp
 
-import (
-	"bytes"
-	"fmt"
-)
-
 // SASL Codes
 const (
 	codeSASLOK      saslCode = iota // Connection authentication succeeded.
@@ -12,17 +7,6 @@ const (
 	codeSASLSys                     // Connection authentication failed due to a system error.
 	codeSASLSysPerm                 // Connection authentication failed due to a system error that is unlikely to be corrected without intervention.
 	codeSASLSysTemp                 // Connection authentication failed due to a transient system error.
-)
-
-type amqpType uint8
-
-// Composite Types
-const (
-	typeSASLMechanism = 0x40
-	typeSASLInit      = 0x41
-	typeSASLChallenge = 0x42
-	typeSASLResponse  = 0x43
-	typeSASLOutcome   = 0x44
 )
 
 // SASL Mechanisms
@@ -36,7 +20,7 @@ func (s *saslCode) unmarshal(r byteReader) error {
 	return unmarshal(r, (*int)(s))
 }
 
-func ConnSASLPlain(username, password string) ConnOpt {
+func ConnSASLPlain(username, password string) ConnOption {
 	return func(c *Conn) error {
 		if c.saslHandlers == nil {
 			c.saslHandlers = make(map[Symbol]stateFunc)
@@ -57,29 +41,14 @@ type saslHandlerPlain struct {
 }
 
 func (h *saslHandlerPlain) init() stateFunc {
-	saslInit, err := marshal(&saslInit{
-		Mechanism:       "PLAIN",
-		InitialResponse: []byte("\x00" + h.username + "\x00" + h.password),
-		Hostname:        "",
+	h.c.txFrame(frame{
+		typ: frameTypeSASL,
+		body: &saslInit{
+			Mechanism:       "PLAIN",
+			InitialResponse: []byte("\x00" + h.username + "\x00" + h.password),
+			Hostname:        "",
+		},
 	})
-	if err != nil {
-		h.c.err = err
-		return nil
-	}
-
-	wr := bufPool.New().(*bytes.Buffer)
-	wr.Reset()
-	defer bufPool.Put(wr)
-
-	writeFrame(wr, frameTypeSASL, 0, saslInit)
-
-	fmt.Printf("Writing: %# 02x\n", wr.Bytes())
-
-	_, err = h.c.net.Write(wr.Bytes())
-	if err != nil {
-		h.c.err = err
-		return nil
-	}
 
 	return h.c.saslOutcome
 }
@@ -98,8 +67,12 @@ type saslInit struct {
 	Hostname        string
 }
 
+func (si *saslInit) link() (uint32, bool) {
+	return 0, false
+}
+
 func (si *saslInit) marshal() ([]byte, error) {
-	return marshalComposite(typeSASLInit, []field{
+	return marshalComposite(typeCodeSASLInit, []field{
 		{value: si.Mechanism, omit: false},
 		{value: si.InitialResponse, omit: len(si.InitialResponse) == 0},
 		{value: si.Hostname, omit: len(si.Hostname) == 0},
@@ -138,7 +111,7 @@ type saslMechanisms struct {
 }
 
 func (sm *saslMechanisms) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeSASLMechanism,
+	return unmarshalComposite(r, typeCodeSASLMechanism,
 		&sm.Mechanisms,
 	)
 }
@@ -153,7 +126,7 @@ type saslOutcome struct {
 }
 
 func (so *saslOutcome) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeSASLOutcome,
+	return unmarshalComposite(r, typeCodeSASLOutcome,
 		&so.Code,
 		&so.AdditionalData,
 	)
