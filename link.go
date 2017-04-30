@@ -36,11 +36,9 @@ type link struct {
 }
 
 // newLink is used by Session.mux to create new links
-func newLink(s *Session, handle uint32) *link {
+func newLink(s *Session) *link {
 	return &link{
-		handle:     handle,
 		linkCredit: 1,
-		rx:         make(chan frameBody), // TODO: size link to linkCredit to prevent slow readers causing contention for other sessions/links
 		session:    s,
 	}
 }
@@ -74,7 +72,7 @@ func (l *link) close() {
 		}
 	}
 
-	l.session.delLink <- l
+	l.session.deallocateHandle <- l
 }
 
 // LinkOption is an function for configuring an AMQP links.

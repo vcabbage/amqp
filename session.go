@@ -12,17 +12,17 @@ type Session struct {
 	conn          *Conn
 	rx            chan frame
 
-	newLink chan *link
-	delLink chan *link
+	allocateHandle   chan *link
+	deallocateHandle chan *link
 }
 
 func newSession(c *Conn, channel uint16) *Session {
 	return &Session{
-		conn:    c,
-		channel: channel,
-		rx:      make(chan frame),
-		newLink: make(chan *link),
-		delLink: make(chan *link),
+		conn:             c,
+		channel:          channel,
+		rx:               make(chan frame),
+		allocateHandle:   make(chan *link),
+		deallocateHandle: make(chan *link),
 	}
 }
 
@@ -54,21 +54,31 @@ func randString() string { // TODO: random string gen off SO, replace
 }
 
 func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
-	var l *link
-	select {
-	case <-s.conn.done:
-		return nil, s.conn.err
-	case l = <-s.newLink:
-	}
+	l := newLink(s)
 
+	// configure options
 	for _, o := range opts {
 		err := o(l)
 		if err != nil {
-			// TODO: release link
 			return nil, err
 		}
 	}
 	l.creditUsed = l.linkCredit
+	l.rx = make(chan frameBody, l.linkCredit)
+
+	// request handle from Session.mux
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.err
+	case s.allocateHandle <- l:
+	}
+
+	// wait for handle allocation
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.err
+	case <-l.rx:
+	}
 
 	s.txFrame(&performAttach{
 		Name:   randString(),
@@ -90,10 +100,6 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 		return nil, errorErrorf("unexpected attach response: %+v", fr)
 	}
 
-	// fmt.Printf("Attach Resp: %+v\n", resp)
-	// fmt.Printf("Attach Source: %+v\n", resp.Source)
-	// fmt.Printf("Attach Target: %+v\n", resp.Target)
-
 	l.senderDeliveryCount = resp.InitialDeliveryCount
 
 	r := &Receiver{
@@ -106,22 +112,21 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 
 func (s *Session) startMux() {
 	links := make(map[uint32]*link)
-	nextLink := newLink(s, 0)
+	var nextHandle uint32
 
 	for {
 		select {
 		case <-s.conn.done:
 			return
-		case s.newLink <- nextLink:
-			// fmt.Println("Got new link request")
-			links[nextLink.handle] = nextLink
-			// TODO: handle max session/wrapping
-			nextLink = newLink(s, nextLink.handle+1)
+		case l := <-s.allocateHandle:
+			l.handle = nextHandle
+			links[nextHandle] = l
+			nextHandle++ // TODO: handle max session/wrapping
+			l.rx <- nil
 
-		case link := <-s.delLink:
-			// fmt.Println("Got link deletion request")
-			delete(links, link.handle)
-			close(link.rx)
+		case l := <-s.deallocateHandle:
+			delete(links, l.handle)
+			close(l.rx)
 
 		case fr := <-s.rx:
 			handle, ok := fr.body.link()
