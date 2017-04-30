@@ -27,7 +27,6 @@ func newSession(c *Conn, channel uint16) *Session {
 }
 
 func (s *Session) Close() error {
-	// s.txFrame(&)
 	// TODO: send end preformative
 	select {
 	case <-s.conn.done:

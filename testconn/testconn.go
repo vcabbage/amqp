@@ -36,11 +36,8 @@ func (c *Conn) Read(b []byte) (int, error) {
 		}
 	}
 	time.Sleep(1 * time.Millisecond)
-	// // fmt.Printf("DEBUG: %q\n", c.data[0])
 	n := copy(b, c.data[0])
 	c.data = c.data[1:]
-	// n := copy(b, c.data)
-	// c.data = c.data[n:]
 	return n, nil
 }
 

@@ -96,7 +96,9 @@ type stateFunc func() stateFunc
 
 // Conn is an AMQP connection.
 type Conn struct {
-	net net.Conn // underlying connection
+	net        net.Conn // underlying connection
+	pauseRead  int32
+	resumeRead chan struct{} // pauseRead indicates that connReader should pause reading
 
 	// TLS
 	tlsNegotiation bool        // negotiate TLS
@@ -341,11 +343,20 @@ func (c *Conn) connReader() {
 	)
 
 	for {
-		// fmt.Println(frameInProgress, buf.Len())
 		if frameInProgress || buf.Len() < 8 { // 8 = min size for header
 			c.net.SetReadDeadline(time.Now().Add(idleTimeout))
 			n, err := c.net.Read(rxBuf[:c.maxFrameSize]) // TODO: send error on frame too large
 			if err != nil {
+				if atomic.LoadInt32(&c.pauseRead) == 1 {
+					// need to stop reading during TLS negotiation,
+					// see Conn.startTLS()
+					c.pauseRead = 0
+					for range c.resumeRead {
+						// reads indicate paused, resume on close
+					}
+					continue
+				}
+
 				c.readErr <- err
 				return
 			}
@@ -452,6 +463,7 @@ const (
 func (c *Conn) exchangeProtoHeader(protoID uint8) stateFunc {
 	_, c.err = c.net.Write([]byte{'A', 'M', 'Q', 'P', protoID, 1, 0, 0})
 	if c.err != nil {
+		c.err = errorWrapf(c.err, "writing to network")
 		return nil
 	}
 
@@ -494,14 +506,30 @@ func (c *Conn) startTLS() stateFunc {
 	if c.tlsConfig.ServerName == "" && !c.tlsConfig.InsecureSkipVerify {
 		c.tlsConfig.ServerName = c.hostname
 	}
-	c.net = tls.Client(c.net, c.tlsConfig)
+
+	// convoluted method to pause connReader, explorer simpler alternatives
+	c.resumeRead = make(chan struct{})        // 1. create channel
+	atomic.StoreInt32(&c.pauseRead, 1)        // 2. indicate should pause
+	c.net.SetReadDeadline(time.Time{}.Add(1)) // 3. set deadline to interrupt connReader
+	c.resumeRead <- struct{}{}                // 4. wait for connReader to read from chan, indicating paused
+	defer close(c.resumeRead)                 // 5. defer connReader resume by closing channel
+	c.net.SetReadDeadline(time.Time{})        // 6. clear deadline
+
+	conn := tls.Client(c.net, c.tlsConfig)
+	c.err = conn.Handshake()
+	if c.err != nil {
+		return nil
+	}
+
+	c.net = conn
 	c.tlsComplete = true
 	return c.negotiateProto
 }
 
 // txFrame encodes and transmits a frame on the connection
 func (c *Conn) txFrame(fr frame) error {
-	// BUG: this should respect c.peerMaxFrameSize
+	// BUG: This should respect c.peerMaxFrameSize, Should not affect current functionality,
+	//      only transfer frames should be larger than min-max frame size (512).
 	return writeFrame(c.net, fr) // TODO: buffer?
 }
 
@@ -535,7 +563,7 @@ func (c *Conn) openAMQP() stateFunc {
 	}
 
 	if o.MaxFrameSize > 0 {
-		c.peerMaxFrameSize = o.MaxFrameSize // TODO: make writer adhere
+		c.peerMaxFrameSize = o.MaxFrameSize
 	}
 
 	if o.IdleTimeout > 0 {
