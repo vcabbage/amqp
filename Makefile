@@ -20,5 +20,5 @@ fuzzclean:
 
 .PHONY: test
 test:
-	TEST_CORPUS=1 go test -race -run=Corpus
-	go test -v -race ./...
+	TEST_CORPUS=1 go test -tags gofuzz -race -run=Corpus
+	go test -tags gofuzz -v -race ./...

@@ -766,26 +766,37 @@ func readSlice(r byteReader) (elements int, length int, _ error) {
 		if err != nil {
 			return 0, 0, err
 		}
+
 		elemByte, err := r.ReadByte()
 		if err != nil {
 			return 0, 0, err
 		}
-		return int(elemByte), int(lByte), nil
+
+		elements = int(elemByte)
+		length = int(lByte)
 	case typeCodeList32, typeCodeArray32:
-		var elems uint32
 		var l uint32
 		err = binary.Read(r, binary.BigEndian, &l)
 		if err != nil {
 			return 0, 0, err
 		}
+
+		var elems uint32
 		err = binary.Read(r, binary.BigEndian, &elems)
 		if err != nil {
 			return 0, 0, err
 		}
-		return int(elems), int(l), nil
+
+		length = int(l)
+		elements = int(elems)
 	default:
 		return 0, 0, errorErrorf("type code %x is not a recognized list type", b)
 	}
+
+	if l := r.Len(); elements > l || length > l {
+		return 0, 0, errInvalidLength
+	}
+	return elements, length, nil
 }
 
 func readAny(r byteReader) (interface{}, error) {

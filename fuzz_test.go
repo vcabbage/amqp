@@ -1,16 +1,15 @@
+// +build gofuzz
+
 package amqp
 
 import (
-	"bytes"
-	"context"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
 	"testing"
-	"time"
 
-	"pack.ag/amqp/testconn"
+	"github.com/fortytw2/leaktest"
 )
 
 func TestFuzzConnCrashers(t *testing.T) {
@@ -334,85 +333,22 @@ func TestFuzzConnCrashers(t *testing.T) {
 
 	for i, tt := range tests {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			fuzzConnTest([]byte(tt))
+			defer leaktest.Check(t)()
+			FuzzConn([]byte(tt))
 		})
-	}
-}
-
-func fuzzConnTest(data []byte) {
-	opts := []ConnOption{
-		ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
-		ConnIdleTimeout(1 * time.Millisecond),
-	}
-
-	conn, err := New(testconn.New(data), opts...)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-
-	s, err := conn.NewSession()
-	if err != nil {
-		return
-	}
-
-	r, err := s.NewReceiver(LinkSource("source"), LinkCredit(2))
-	if err != nil {
-		return
-	}
-
-	_, err = r.Receive(context.Background())
-	if err != nil {
-		return
 	}
 }
 
 func TestFuzzMarshalCrashers(t *testing.T) {
 	tests := []string{
 		0: "\xc1\x000\xa0\x00S0",
+		1: "\xf0S\x13\xc0\x12\v@`@@`\v@```@@@",
 	}
 
 	for i, tt := range tests {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			fuzzMarshalTest([]byte(tt))
+			FuzzUnmarshal([]byte(tt))
 		})
-	}
-}
-
-func fuzzMarshalTest(data []byte) {
-	types := []interface{}{
-		new(performAttach),
-		new(performBegin),
-		new(performClose),
-		new(performDetach),
-		new(performDisposition),
-		new(performEnd),
-		new(performFlow),
-		new(performOpen),
-		new(performTransfer),
-		new(source),
-		new(target),
-		new(Error),
-		new(saslCode),
-		new(saslMechanisms),
-		new(saslOutcome),
-		new(Message),
-		new(MessageHeader),
-		new(MessageProperties),
-		new(stateReceived),
-		new(stateAccepted),
-		new(stateRejected),
-		new(stateReleased),
-		new(stateModified),
-		new(mapAnyAny),
-		new(mapStringAny),
-		new(mapSymbolAny),
-		new(unsettled),
-		new(milliseconds),
-	}
-
-	for _, t := range types {
-		unmarshal(bytes.NewBuffer(data), t)
 	}
 }
 
@@ -442,7 +378,8 @@ func TestFuzzConnCorpus(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			fuzzConnTest(data)
+			defer leaktest.Check(t)()
+			FuzzConn(data)
 		})
 	}
 }
@@ -459,7 +396,7 @@ func TestFuzzMarshalCorpus(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			fuzzMarshalTest(data)
+			FuzzUnmarshal(data)
 		})
 	}
 }
