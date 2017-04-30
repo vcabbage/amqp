@@ -172,7 +172,7 @@ outer:
 		}
 	}
 
-	err := unmarshal(r.buf, msg)
+	_, err := unmarshal(r.buf, msg)
 	return msg, err
 }
 

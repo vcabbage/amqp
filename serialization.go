@@ -131,125 +131,113 @@ type unmarshaler interface {
 	unmarshal(r byteReader) error
 }
 
-func unmarshal(r byteReader, i interface{}) error {
-	if um, ok := i.(unmarshaler); ok {
-		err := um.unmarshal(r)
+// unmarshal decodes AMQP encoded data into i.
+//
+// The decoding method is based on the type of i.
+//
+// If i implements unmarshaler, i.unmarshal() will be called.
+//
+// Pointers to primitive types will be decoded via the appropriate read[Type] function.
+//
+// If i is a pointer to a pointer (**Type), it will be dereferenced and a new instance
+// of (*Type) is allocated via reflection.
+//
+// Common map types (map[string]string, map[Symbol]interface{}, and
+// map[interface{}]interface{}), will be decoded via conversion to the mapStringAny,
+// mapSymbolAny, and mapAnyAny types.
+//
+// If the decoding function returns errNull, the null return value will
+// be true and err will be nil.
+func unmarshal(r byteReader, i interface{}) (null bool, err error) {
+	defer func() {
+		// prevent errNull from being passed up
 		if err == errNull {
-			return nil
+			null = true
+			err = nil
 		}
-		return err
+	}()
+
+	if um, ok := i.(unmarshaler); ok {
+		return null, um.unmarshal(r)
 	}
 
 	switch t := i.(type) {
 	case *int:
 		val, err := readInt(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = val
 	case *uint64:
 		val, err := readUint(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = uint64(val)
 	case *uint32:
 		val, err := readUint(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = uint32(val)
 	case *uint16:
 		val, err := readUint(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = uint16(val)
 	case *uint8:
 		val, err := readUint(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = uint8(val)
 	case *string:
 		val, err := readString(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = val
 	case *[]Symbol:
 		sa, err := readSymbolArray(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = sa
 	case *Symbol:
 		s, err := readString(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = Symbol(s)
 	case *[]byte:
 		val, err := readBinary(r)
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = val
 	case *bool:
 		b, err := readBool(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = b
 	case *time.Time:
 		ts, err := readTimestamp(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = ts
 	case *map[interface{}]interface{}:
-		return (*mapAnyAny)(t).unmarshal(r)
+		return null, (*mapAnyAny)(t).unmarshal(r)
 	case *map[string]interface{}:
-		return (*mapStringAny)(t).unmarshal(r)
+		return null, (*mapStringAny)(t).unmarshal(r)
 	case *map[Symbol]interface{}:
-		return (*mapSymbolAny)(t).unmarshal(r)
+		return null, (*mapSymbolAny)(t).unmarshal(r)
 	case *interface{}:
 		v, err := readAny(r)
-		if err == errNull {
-			return nil
-		}
 		if err != nil {
-			return err
+			return null, err
 		}
 		*t = v
 	default:
@@ -261,10 +249,9 @@ func unmarshal(r byteReader, i interface{}) error {
 			}
 			return unmarshal(r, indirect.Interface())
 		}
-
-		return errorErrorf("unable to unmarshal %T", i)
+		return null, errorErrorf("unable to unmarshal %T", i)
 	}
-	return nil
+	return null, nil
 }
 
 type mapAnyAny map[interface{}]interface{}
@@ -334,13 +321,51 @@ func (f *mapSymbolAny) unmarshal(r byteReader) error {
 	return nil
 }
 
-func unmarshalComposite(r byteReader, typ amqpType, fields ...interface{}) error {
-	t, numFields, err := readCompositeHeader(r)
-	if err == errNull {
+type unmarshalField struct {
+	field      interface{}
+	handleNull nullHandler
+}
+
+type nullHandler func() error
+
+func required(name string) nullHandler {
+	return func() error {
+		return errorNew(name + " is required")
+	}
+}
+
+func defaultUint32(n *uint32, defaultValue uint32) nullHandler {
+	return func() error {
+		*n = defaultValue
 		return nil
 	}
+}
+
+func defaultUint16(n *uint16, defaultValue uint16) nullHandler {
+	return func() error {
+		*n = defaultValue
+		return nil
+	}
+}
+
+func defaultUint8(n *uint8, defaultValue uint8) nullHandler {
+	return func() error {
+		*n = defaultValue
+		return nil
+	}
+}
+
+func defaultSymbol(s *Symbol, v Symbol) nullHandler {
+	return func() error {
+		*s = v
+		return nil
+	}
+}
+
+func unmarshalComposite(r byteReader, typ amqpType, fields ...unmarshalField) error {
+	t, numFields, err := readCompositeHeader(r)
 	if err != nil {
-		return errorWrapf(err, "reading composite header")
+		return err
 	}
 
 	if t != typ {
@@ -352,9 +377,15 @@ func unmarshalComposite(r byteReader, typ amqpType, fields ...interface{}) error
 	}
 
 	for i := 0; i < numFields; i++ {
-		err = unmarshal(r, fields[i])
+		null, err := unmarshal(r, fields[i].field)
 		if err != nil {
 			return errorWrapf(err, "unmarshaling field %d", i)
+		}
+		if null && fields[i].handleNull != nil {
+			err = fields[i].handleNull()
+			if err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -384,12 +415,12 @@ func readCompositeHeader(r byteReader) (_ amqpType, fields int, _ error) {
 	return amqpType(v), fields, err
 }
 
-type field struct {
+type marshalField struct {
 	value interface{}
 	omit  bool
 }
 
-func marshalComposite(code amqpType, fields ...field) ([]byte, error) {
+func marshalComposite(code amqpType, fields ...marshalField) ([]byte, error) {
 	var (
 		rawFields  = make([][]byte, len(fields))
 		lastSetIdx = -1
@@ -1021,7 +1052,7 @@ func (m milliseconds) marshal() ([]byte, error) {
 
 func (m *milliseconds) unmarshal(r byteReader) error {
 	var n uint32
-	err := unmarshal(r, &n)
+	_, err := unmarshal(r, &n)
 	*m = milliseconds(time.Duration(n) * time.Millisecond)
 	return err
 }
@@ -1079,6 +1110,7 @@ func (r *limitByteReader) Read(p []byte) (int, error) {
 type mapReader struct {
 	r     *limitByteReader
 	count int // elements (2 * # of pairs)
+	read  int
 }
 
 func (mr *mapReader) pairs() int {
@@ -1086,15 +1118,21 @@ func (mr *mapReader) pairs() int {
 }
 
 func (mr *mapReader) more() bool {
-	return mr.r.limit != mr.r.read
+	return mr.read < mr.count
 }
 
 func (mr *mapReader) next(key, value interface{}) error {
-	err := unmarshal(mr.r, key)
+	_, err := unmarshal(mr.r, key)
 	if err != nil {
 		return err
 	}
-	return unmarshal(mr.r, value)
+	mr.read++
+	_, err = unmarshal(mr.r, value)
+	if err != nil {
+		return err
+	}
+	mr.read++
+	return nil
 }
 
 func newMapReader(r byteReader) (*mapReader, error) {

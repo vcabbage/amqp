@@ -151,7 +151,7 @@ func (m *Message) unmarshal(r byteReader) error {
 			r.Next(3)
 		}
 
-		err = unmarshal(r, section)
+		_, err = unmarshal(r, section)
 		if err != nil {
 			return err
 		}
@@ -199,7 +199,7 @@ type MessageHeader struct {
 }
 
 func (h *MessageHeader) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeMessageHeader, []field{
+	return marshalComposite(typeCodeMessageHeader, []marshalField{
 		{value: h.Durable, omit: !h.Durable},
 		{value: h.Priority, omit: h.Priority == 4},
 		{value: milliseconds(h.TTL), omit: h.TTL == 0},
@@ -209,13 +209,13 @@ func (h *MessageHeader) marshal() ([]byte, error) {
 }
 
 func (h *MessageHeader) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeMessageHeader,
-		&h.Durable,
-		&h.Priority,
-		(*milliseconds)(&h.TTL),
-		&h.FirstAcquirer,
-		&h.DeliveryCount,
-	)
+	return unmarshalComposite(r, typeCodeMessageHeader, []unmarshalField{
+		{field: &h.Durable},
+		{field: &h.Priority, handleNull: defaultUint8(&h.Priority, 4)},
+		{field: (*milliseconds)(&h.TTL)},
+		{field: &h.FirstAcquirer},
+		{field: &h.DeliveryCount},
+	}...)
 }
 
 /*
@@ -257,7 +257,7 @@ type MessageProperties struct {
 }
 
 func (p *MessageProperties) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeMessageProperties, []field{
+	return marshalComposite(typeCodeMessageProperties, []marshalField{
 		{value: p.MessageID, omit: p.MessageID != nil},
 		{value: p.UserID, omit: len(p.UserID) == 0},
 		{value: p.To, omit: p.To == ""},
@@ -274,21 +274,21 @@ func (p *MessageProperties) marshal() ([]byte, error) {
 }
 
 func (p *MessageProperties) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeMessageProperties,
-		&p.MessageID,
-		&p.UserID,
-		&p.To,
-		&p.Subject,
-		&p.ReplyTo,
-		&p.CorrelationID,
-		&p.ContentType,
-		&p.ContentEncoding,
-		&p.AbsoluteExpiryTime,
-		&p.CreationTime,
-		&p.GroupID,
-		&p.GroupSequence,
-		&p.ReplyToGroupID,
-	)
+	return unmarshalComposite(r, typeCodeMessageProperties, []unmarshalField{
+		{field: &p.MessageID},
+		{field: &p.UserID},
+		{field: &p.To},
+		{field: &p.Subject},
+		{field: &p.ReplyTo},
+		{field: &p.CorrelationID},
+		{field: &p.ContentType},
+		{field: &p.ContentEncoding},
+		{field: &p.AbsoluteExpiryTime},
+		{field: &p.CreationTime},
+		{field: &p.GroupID},
+		{field: &p.GroupSequence},
+		{field: &p.ReplyToGroupID},
+	}...)
 }
 
 /*
@@ -325,17 +325,17 @@ type stateReceived struct {
 }
 
 func (sr *stateReceived) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeStateReceived, []field{
+	return marshalComposite(typeCodeStateReceived, []marshalField{
 		{value: sr.SectionNumber, omit: false},
 		{value: sr.SectionOffset, omit: false},
 	}...)
 }
 
 func (sr *stateReceived) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeStateReceived,
-		&sr.SectionNumber,
-		&sr.SectionOffset,
-	)
+	return unmarshalComposite(r, typeCodeStateReceived, []unmarshalField{
+		{field: &sr.SectionNumber, handleNull: required("StateReceived.SectionNumber")},
+		{field: &sr.SectionOffset, handleNull: required("StateReceived.SectionOffset")},
+	}...)
 }
 
 /*
@@ -367,13 +367,13 @@ type stateRejected struct {
 
 func (sr *stateRejected) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeStateRejected,
-		field{value: sr.Error, omit: sr.Error == nil},
+		marshalField{value: sr.Error, omit: sr.Error == nil},
 	)
 }
 
 func (sr *stateRejected) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, typeCodeStateRejected,
-		&sr.Error,
+		unmarshalField{field: &sr.Error},
 	)
 }
 
@@ -426,7 +426,7 @@ type stateModified struct {
 }
 
 func (sm *stateModified) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeStateModified, []field{
+	return marshalComposite(typeCodeStateModified, []marshalField{
 		{value: sm.DeliveryFailed, omit: !sm.DeliveryFailed},
 		{value: sm.UndeliverableHere, omit: !sm.UndeliverableHere},
 		{value: sm.MessageAnnotations, omit: sm.MessageAnnotations == nil},
@@ -434,9 +434,9 @@ func (sm *stateModified) marshal() ([]byte, error) {
 }
 
 func (sm *stateModified) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeStateModified,
-		&sm.DeliveryFailed,
-		&sm.UndeliverableHere,
-		&sm.MessageAnnotations,
-	)
+	return unmarshalComposite(r, typeCodeStateModified, []unmarshalField{
+		{field: &sm.DeliveryFailed},
+		{field: &sm.UndeliverableHere},
+		{field: &sm.MessageAnnotations},
+	}...)
 }

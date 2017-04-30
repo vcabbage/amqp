@@ -12,7 +12,8 @@ const (
 type saslCode int
 
 func (s *saslCode) unmarshal(r byteReader) error {
-	return unmarshal(r, (*int)(s))
+	_, err := unmarshal(r, (*int)(s))
+	return err
 }
 
 // SASL Mechanisms
@@ -74,7 +75,7 @@ func (si *saslInit) link() (uint32, bool) {
 }
 
 func (si *saslInit) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeSASLInit, []field{
+	return marshalComposite(typeCodeSASLInit, []marshalField{
 		{value: si.Mechanism, omit: false},
 		{value: si.InitialResponse, omit: len(si.InitialResponse) == 0},
 		{value: si.Hostname, omit: len(si.Hostname) == 0},
@@ -94,7 +95,7 @@ type saslMechanisms struct {
 
 func (sm *saslMechanisms) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, typeCodeSASLMechanism,
-		&sm.Mechanisms,
+		unmarshalField{field: &sm.Mechanisms, handleNull: required("SASLMechanisms.Mechanisms")},
 	)
 }
 
@@ -102,16 +103,24 @@ func (*saslMechanisms) link() (uint32, bool) {
 	return 0, false
 }
 
+/*
+<type name="sasl-outcome" class="composite" source="list" provides="sasl-frame">
+    <descriptor name="amqp:sasl-outcome:list" code="0x00000000:0x00000044"/>
+    <field name="code" type="sasl-code" mandatory="true"/>
+    <field name="additional-data" type="binary"/>
+</type>
+*/
+
 type saslOutcome struct {
 	Code           saslCode
 	AdditionalData []byte
 }
 
 func (so *saslOutcome) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeSASLOutcome,
-		&so.Code,
-		&so.AdditionalData,
-	)
+	return unmarshalComposite(r, typeCodeSASLOutcome, []unmarshalField{
+		{field: &so.Code, handleNull: required("SASLOutcome.Code")},
+		{field: &so.AdditionalData},
+	}...)
 }
 
 func (*saslOutcome) link() (uint32, bool) {

@@ -49,7 +49,7 @@ func (o *performOpen) link() (uint32, bool) {
 }
 
 func (o *performOpen) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: o.ContainerID, omit: false},
 		{value: o.Hostname, omit: o.Hostname == ""},
 		{value: o.MaxFrameSize, omit: o.MaxFrameSize == 0},
@@ -65,18 +65,18 @@ func (o *performOpen) marshal() ([]byte, error) {
 }
 
 func (o *performOpen) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeOpen,
-		&o.ContainerID,
-		&o.Hostname,
-		&o.MaxFrameSize,
-		&o.ChannelMax,
-		(*milliseconds)(&o.IdleTimeout),
-		&o.OutgoingLocales,
-		&o.IncomingLocales,
-		&o.OfferedCapabilities,
-		&o.DesiredCapabilities,
-		&o.Properties,
-	)
+	return unmarshalComposite(r, typeCodeOpen, []unmarshalField{
+		{field: &o.ContainerID, handleNull: required("Open.ContainerID")},
+		{field: &o.Hostname},
+		{field: &o.MaxFrameSize, handleNull: defaultUint32(&o.MaxFrameSize, 4294967295)},
+		{field: &o.ChannelMax, handleNull: defaultUint16(&o.ChannelMax, 65535)},
+		{field: (*milliseconds)(&o.IdleTimeout)},
+		{field: &o.OutgoingLocales},
+		{field: &o.IncomingLocales},
+		{field: &o.OfferedCapabilities},
+		{field: &o.DesiredCapabilities},
+		{field: &o.Properties},
+	}...)
 }
 
 /*
@@ -135,7 +135,7 @@ func (b *performBegin) link() (uint32, bool) {
 }
 
 func (b *performBegin) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: b.RemoteChannel, omit: b.RemoteChannel == 0},
 		{value: b.NextOutgoingID, omit: false},
 		{value: b.IncomingWindow, omit: false},
@@ -148,16 +148,16 @@ func (b *performBegin) marshal() ([]byte, error) {
 }
 
 func (b *performBegin) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeBegin,
-		&b.RemoteChannel,
-		&b.NextOutgoingID,
-		&b.IncomingWindow,
-		&b.OutgoingWindow,
-		&b.HandleMax,
-		&b.OfferedCapabilities,
-		&b.DesiredCapabilities,
-		&b.Properties,
-	)
+	return unmarshalComposite(r, typeCodeBegin, []unmarshalField{
+		{field: &b.RemoteChannel},
+		{field: &b.NextOutgoingID, handleNull: required("Begin.NextOutgoingID")},
+		{field: &b.IncomingWindow, handleNull: required("Begin.IncomingWindow")},
+		{field: &b.OutgoingWindow, handleNull: required("Begin.OutgoingWindow")},
+		{field: &b.HandleMax, handleNull: defaultUint32(&b.HandleMax, 4294967295)},
+		{field: &b.OfferedCapabilities},
+		{field: &b.DesiredCapabilities},
+		{field: &b.Properties},
+	}...)
 }
 
 /*
@@ -315,7 +315,7 @@ func (a *performAttach) link() (uint32, bool) {
 }
 
 func (a *performAttach) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: a.Name, omit: false},
 		{value: a.Handle, omit: false},
 		{value: a.Role, omit: false},
@@ -335,22 +335,22 @@ func (a *performAttach) marshal() ([]byte, error) {
 }
 
 func (a *performAttach) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeAttach,
-		&a.Name,
-		&a.Handle,
-		&a.Role,
-		&a.SenderSettleMode,
-		&a.ReceiverSettleMode,
-		&a.Source,
-		&a.Target,
-		&a.Unsettled,
-		&a.IncompleteUnsettled,
-		&a.InitialDeliveryCount,
-		&a.MaxMessageSize,
-		&a.OfferedCapabilities,
-		&a.DesiredCapabilities,
-		&a.Properties,
-	)
+	return unmarshalComposite(r, typeCodeAttach, []unmarshalField{
+		{field: &a.Name, handleNull: required("Attach.Name")},
+		{field: &a.Handle, handleNull: required("Attach.Handle")},
+		{field: &a.Role, handleNull: required("Attach.Role")},
+		{field: &a.SenderSettleMode, handleNull: defaultUint8(&a.SenderSettleMode, 2)},
+		{field: &a.ReceiverSettleMode, handleNull: defaultUint8(&a.ReceiverSettleMode, 0)},
+		{field: &a.Source},
+		{field: &a.Target},
+		{field: &a.Unsettled},
+		{field: &a.IncompleteUnsettled},
+		{field: &a.InitialDeliveryCount},
+		{field: &a.MaxMessageSize},
+		{field: &a.OfferedCapabilities},
+		{field: &a.DesiredCapabilities},
+		{field: &a.Properties},
+	}...)
 }
 
 type deliveryState interface{} // TODO: http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-transactions-v1.0-os.html#type-declared
@@ -359,28 +359,21 @@ type unsettled map[string]deliveryState
 
 func (u *unsettled) unmarshal(r byteReader) error {
 	mr, err := newMapReader(r)
-	if err == errNull {
-		return nil
-	}
 	if err != nil {
 		return err
 	}
 
-	pairs := mr.count / 2
-
-	m := make(unsettled, pairs)
-	for i := 0; i < pairs; i++ {
-		var (
-			key   string
-			value deliveryState
-		)
+	mm := make(unsettled, mr.pairs())
+	for mr.more() {
+		var key string
+		var value deliveryState
 		err = mr.next(&key, &value)
 		if err != nil {
 			return err
 		}
-		m[key] = value
+		mm[key] = value
 	}
-	*u = m
+	*u = mm
 	return nil
 }
 
@@ -519,7 +512,7 @@ type source struct {
 }
 
 func (s *source) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: s.Address, omit: s.Address == ""},
 		{value: s.Durable, omit: s.Durable == 0},
 		{value: s.ExpiryPolicy, omit: s.ExpiryPolicy == ""},
@@ -536,19 +529,19 @@ func (s *source) marshal() ([]byte, error) {
 }
 
 func (s *source) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeSource,
-		&s.Address,
-		&s.Durable,
-		&s.ExpiryPolicy,
-		&s.Timeout,
-		&s.Dynamic,
-		&s.DynamicNodeProperties,
-		&s.DistributionMode,
-		&s.Filter,
-		&s.DefaultOutcome,
-		&s.Outcomes,
-		&s.Capabilities,
-	)
+	return unmarshalComposite(r, typeCodeSource, []unmarshalField{
+		{field: &s.Address},
+		{field: &s.Durable},
+		{field: &s.ExpiryPolicy, handleNull: defaultSymbol(&s.ExpiryPolicy, "session-end")},
+		{field: &s.Timeout},
+		{field: &s.Dynamic},
+		{field: &s.DynamicNodeProperties},
+		{field: &s.DistributionMode},
+		{field: &s.Filter},
+		{field: &s.DefaultOutcome},
+		{field: &s.Outcomes},
+		{field: &s.Capabilities},
+	}...)
 }
 
 /*
@@ -649,7 +642,7 @@ type target struct {
 }
 
 func (t *target) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: t.Address, omit: t.Address == ""},
 		{value: t.Durable, omit: t.Durable == 0},
 		{value: t.ExpiryPolicy, omit: t.ExpiryPolicy == ""},
@@ -662,15 +655,15 @@ func (t *target) marshal() ([]byte, error) {
 }
 
 func (t *target) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeTarget,
-		&t.Address,
-		&t.Durable,
-		&t.ExpiryPolicy,
-		&t.Timeout,
-		&t.Dynamic,
-		&t.DynamicNodeProperties,
-		&t.Capabilities,
-	)
+	return unmarshalComposite(r, typeCodeTarget, []unmarshalField{
+		{field: &t.Address},
+		{field: &t.Durable},
+		{field: &t.ExpiryPolicy, handleNull: defaultSymbol(&t.ExpiryPolicy, "session-end")},
+		{field: &t.Timeout},
+		{field: &t.Dynamic},
+		{field: &t.DynamicNodeProperties},
+		{field: &t.Capabilities},
+	}...)
 }
 
 /*
@@ -796,7 +789,7 @@ func (f *performFlow) link() (uint32, bool) {
 }
 
 func (f *performFlow) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: f.NextIncomingID, omit: f.NextIncomingID == nil},
 		{value: f.IncomingWindow, omit: false},
 		{value: f.NextOutgoingID, omit: false},
@@ -813,19 +806,19 @@ func (f *performFlow) marshal() ([]byte, error) {
 }
 
 func (f *performFlow) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeFlow,
-		&f.NextIncomingID,
-		&f.IncomingWindow,
-		&f.NextOutgoingID,
-		&f.OutgoingWindow,
-		&f.Handle,
-		&f.DeliveryCount,
-		&f.LinkCredit,
-		&f.Available,
-		&f.Drain,
-		&f.Echo,
-		&f.Properties,
-	)
+	return unmarshalComposite(r, typeCodeFlow, []unmarshalField{
+		{field: &f.NextIncomingID},
+		{field: &f.IncomingWindow, handleNull: required("Flow.IncomingWindow")},
+		{field: &f.NextOutgoingID, handleNull: required("Flow.NextOutgoingID")},
+		{field: &f.OutgoingWindow, handleNull: required("Flow.OutgoingWindow")},
+		{field: &f.Handle},
+		{field: &f.DeliveryCount},
+		{field: &f.LinkCredit},
+		{field: &f.Available},
+		{field: &f.Drain},
+		{field: &f.Echo},
+		{field: &f.Properties},
+	}...)
 }
 
 /*
@@ -987,7 +980,7 @@ func (t *performTransfer) link() (uint32, bool) {
 }
 
 func (t *performTransfer) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: t.DeliveryID, omit: t.DeliveryID == nil},
 		{value: t.DeliveryTag, omit: len(t.DeliveryTag) == 0},
 		{value: t.MessageFormat, omit: t.MessageFormat == nil},
@@ -1003,19 +996,19 @@ func (t *performTransfer) marshal() ([]byte, error) {
 }
 
 func (t *performTransfer) unmarshal(r byteReader) error {
-	err := unmarshalComposite(r, typeCodeTransfer,
-		&t.Handle,
-		&t.DeliveryID,
-		&t.DeliveryTag,
-		&t.MessageFormat,
-		&t.Settled,
-		&t.More,
-		&t.ReceiverSettleMode,
-		&t.State,
-		&t.Resume,
-		&t.Aborted,
-		&t.Batchable,
-	)
+	err := unmarshalComposite(r, typeCodeTransfer, []unmarshalField{
+		{field: &t.Handle, handleNull: required("Transfer.Handle")},
+		{field: &t.DeliveryID},
+		{field: &t.DeliveryTag},
+		{field: &t.MessageFormat},
+		{field: &t.Settled},
+		{field: &t.More},
+		{field: &t.ReceiverSettleMode},
+		{field: &t.State},
+		{field: &t.Resume},
+		{field: &t.Aborted},
+		{field: &t.Batchable},
+	}...)
 	if err != nil {
 		return err
 	}
@@ -1078,7 +1071,7 @@ func (*performDisposition) link() (uint32, bool) {
 }
 
 func (d *performDisposition) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: d.Role, omit: false},
 		{value: d.First, omit: false},
 		{value: d.Last, omit: d.Last == nil},
@@ -1090,14 +1083,14 @@ func (d *performDisposition) marshal() ([]byte, error) {
 }
 
 func (d *performDisposition) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeDisposition,
-		&d.Role,
-		&d.First,
-		&d.Last,
-		&d.Settled,
-		&d.State,
-		&d.Batchable,
-	)
+	return unmarshalComposite(r, typeCodeDisposition, []unmarshalField{
+		{field: &d.Role, handleNull: required("Disposition.Role")},
+		{field: &d.First, handleNull: required("Disposition.First")},
+		{field: &d.Last},
+		{field: &d.Settled},
+		{field: &d.State},
+		{field: &d.Batchable},
+	}...)
 }
 
 /*
@@ -1127,20 +1120,19 @@ func (d *performDetach) link() (uint32, bool) {
 }
 
 func (d *performDetach) marshal() ([]byte, error) {
-	fields := []field{
+	return marshalComposite(typeCodeDetach, []marshalField{
 		{value: d.Handle, omit: false},
 		{value: d.Closed, omit: !d.Closed},
 		{value: d.Error, omit: d.Error == nil},
-	}
-	return marshalComposite(typeCodeDetach, fields...)
+	}...)
 }
 
 func (d *performDetach) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeDetach,
-		&d.Handle,
-		&d.Closed,
-		&d.Error,
-	)
+	return unmarshalComposite(r, typeCodeDetach, []unmarshalField{
+		{field: &d.Handle, handleNull: required("Detach.Handle")},
+		{field: &d.Closed},
+		{field: &d.Error},
+	}...)
 }
 
 /*
@@ -1172,7 +1164,7 @@ type Error struct {
 }
 
 func (e *Error) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: e.Condition, omit: false},
 		{value: e.Description, omit: e.Description == ""},
 		{value: e.Info, omit: len(e.Info) == 0},
@@ -1181,11 +1173,11 @@ func (e *Error) marshal() ([]byte, error) {
 }
 
 func (e *Error) unmarshal(r byteReader) error {
-	return unmarshalComposite(r, typeCodeError,
-		&e.Condition,
-		&e.Description,
-		&e.Info,
-	)
+	return unmarshalComposite(r, typeCodeError, []unmarshalField{
+		{field: &e.Condition, handleNull: required("Error.Condition")},
+		{field: &e.Description},
+		{field: &e.Info},
+	}...)
 }
 
 /*
@@ -1207,7 +1199,7 @@ func (*performEnd) link() (uint32, bool) {
 }
 
 func (e *performEnd) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: e.Error, omit: e.Error == nil},
 	}
 	return marshalComposite(typeCodeEnd, fields...)
@@ -1215,7 +1207,7 @@ func (e *performEnd) marshal() ([]byte, error) {
 
 func (e *performEnd) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, typeCodeEnd,
-		&e.Error,
+		unmarshalField{field: &e.Error},
 	)
 }
 
@@ -1238,7 +1230,7 @@ func (*performClose) link() (uint32, bool) {
 }
 
 func (c *performClose) marshal() ([]byte, error) {
-	fields := []field{
+	fields := []marshalField{
 		{value: c.Error, omit: c.Error == nil},
 	}
 	return marshalComposite(typeCodeClose, fields...)
@@ -1246,6 +1238,6 @@ func (c *performClose) marshal() ([]byte, error) {
 
 func (c *performClose) unmarshal(r byteReader) error {
 	return unmarshalComposite(r, typeCodeClose,
-		&c.Error,
+		unmarshalField{field: &c.Error},
 	)
 }

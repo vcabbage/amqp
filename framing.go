@@ -110,7 +110,7 @@ func parseFrame(r byteReader) (frameBody, error) {
 		return nil, errorErrorf("unknown preformative type %0x", pType)
 	}
 
-	err = unmarshal(r, t)
+	_, err = unmarshal(r, t)
 	return t, err
 }
 
