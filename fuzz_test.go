@@ -1,6 +1,7 @@
 package amqp
 
 import (
+	"bytes"
 	"context"
 	"io/ioutil"
 	"os"
@@ -12,7 +13,7 @@ import (
 	"pack.ag/amqp/testconn"
 )
 
-func TestFuzzCrashers(t *testing.T) {
+func TestFuzzConnCrashers(t *testing.T) {
 	tests := []string{
 		0: "\x00\x00\x00\x010000",
 		1: "\x00\x00\x00?\x02\x01\x00\x00\x00S@\xc02\x01\xe0/\x04\xb3\x00\x00\x00\aMSSBCBS\x00\x00\x00\x05PLAIN\x00\x00\x00\tANONYMOUS\x00\x00\x00\bEXTERNAL",
@@ -333,82 +334,132 @@ func TestFuzzCrashers(t *testing.T) {
 
 	for i, tt := range tests {
 		t.Run(strconv.Itoa(i), func(t *testing.T) {
-			opts := []ConnOption{
-				ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
-				ConnIdleTimeout(1 * time.Millisecond),
-			}
-
-			conn, err := New(testconn.New([]byte(tt)), opts...)
-			if err != nil {
-				return
-			}
-			defer conn.Close()
-
-			s, err := conn.NewSession()
-			if err != nil {
-				return
-			}
-
-			r, err := s.NewReceiver(LinkSource("source"), LinkCredit(2))
-			if err != nil {
-				return
-			}
-
-			_, err = r.Receive(context.Background())
-			if err != nil {
-				return
-			}
+			fuzzConnTest([]byte(tt))
 		})
 	}
 }
 
-func TestFuzzCorpus(t *testing.T) {
-	if os.Getenv("TEST_CORPUS") == "" {
-		t.Skip("set TEST_CORPUS to enable")
+func fuzzConnTest(data []byte) {
+	opts := []ConnOption{
+		ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
+		ConnIdleTimeout(1 * time.Millisecond),
 	}
 
-	const dir = "fuzz/conn/corpus"
+	conn, err := New(testconn.New(data), opts...)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+
+	s, err := conn.NewSession()
+	if err != nil {
+		return
+	}
+
+	r, err := s.NewReceiver(LinkSource("source"), LinkCredit(2))
+	if err != nil {
+		return
+	}
+
+	_, err = r.Receive(context.Background())
+	if err != nil {
+		return
+	}
+}
+
+func TestFuzzMarshalCrashers(t *testing.T) {
+	tests := []string{
+		0: "\xc1\x000\xa0\x00S0",
+	}
+
+	for i, tt := range tests {
+		t.Run(strconv.Itoa(i), func(t *testing.T) {
+			fuzzMarshalTest([]byte(tt))
+		})
+	}
+}
+
+func fuzzMarshalTest(data []byte) {
+	types := []interface{}{
+		new(performAttach),
+		new(performBegin),
+		new(performClose),
+		new(performDetach),
+		new(performDisposition),
+		new(performEnd),
+		new(performFlow),
+		new(performOpen),
+		new(performTransfer),
+		new(source),
+		new(target),
+		new(Error),
+		new(saslCode),
+		new(saslMechanisms),
+		new(saslOutcome),
+		new(Message),
+		new(MessageHeader),
+		new(MessageProperties),
+		new(stateReceived),
+		new(stateAccepted),
+		new(stateRejected),
+		new(stateReleased),
+		new(stateModified),
+		new(mapAnyAny),
+		new(mapStringAny),
+		new(mapSymbolAny),
+		new(unsettled),
+		new(milliseconds),
+	}
+
+	for _, t := range types {
+		unmarshal(bytes.NewBuffer(data), t)
+	}
+}
+
+func testDirFiles(t *testing.T, dir string) []string {
 	finfos, err := ioutil.ReadDir(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	var fullpaths []string
 	for _, finfo := range finfos {
-		t.Run(finfo.Name(), func(t *testing.T) {
-			data, err := ioutil.ReadFile(filepath.Join(dir, finfo.Name()))
+		fullpaths = append(fullpaths, filepath.Join(dir, finfo.Name()))
+	}
+
+	return fullpaths
+}
+
+func TestFuzzConnCorpus(t *testing.T) {
+	if os.Getenv("TEST_CORPUS") == "" {
+		t.Skip("set TEST_CORPUS to enable")
+	}
+
+	for _, path := range testDirFiles(t, "fuzz/conn/corpus") {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := ioutil.ReadFile(path)
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			opts := []ConnOption{
-				ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
-				ConnIdleTimeout(10 * time.Millisecond),
+			fuzzConnTest(data)
+		})
+	}
+}
+
+func TestFuzzMarshalCorpus(t *testing.T) {
+	if os.Getenv("TEST_CORPUS") == "" {
+		t.Skip("set TEST_CORPUS to enable")
+	}
+
+	for _, path := range testDirFiles(t, "fuzz/marshal/corpus") {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			data, err := ioutil.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
 			}
 
-			conn, err := New(testconn.New(data), opts...)
-			if err != nil {
-				// fmt.Printf("New: %+v\n", err)
-				return
-			}
-			defer conn.Close()
-
-			s, err := conn.NewSession()
-			if err != nil {
-				// fmt.Printf("NewSession: %+v\n", err)
-				return
-			}
-
-			r, err := s.NewReceiver(LinkSource("source"), LinkCredit(2))
-			if err != nil {
-				// fmt.Printf("NewReceiver: %+v\n", err)
-				return
-			}
-
-			_, err = r.Receive(context.Background())
-			if err != nil {
-				// fmt.Printf("Receive: %+v\n", err)
-				return
-			}
+			fuzzMarshalTest(data)
 		})
 	}
 }

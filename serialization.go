@@ -270,6 +270,16 @@ func (m *mapAnyAny) unmarshal(r byteReader) error {
 		if err != nil {
 			return err
 		}
+
+		// https://golang.org/ref/spec#Map_types:
+		// The comparison operators == and != must be fully defined
+		// for operands of the key type; thus the key type must not
+		// be a function, map, or slice.
+		switch reflect.ValueOf(key).Kind() {
+		case reflect.Slice, reflect.Func, reflect.Map:
+			return errorNew("invalid map key")
+		}
+
 		mm[key] = value
 	}
 	*m = mm
