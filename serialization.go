@@ -26,10 +26,10 @@ const (
 	typeCodeUbyte      amqpType = 0x50 // 8-bit unsigned integer (1)
 	typeCodeUshort     amqpType = 0x60 // 16-bit unsigned integer in network byte order (2)
 	typeCodeUint       amqpType = 0x70 // 32-bit unsigned integer in network byte order (4)
-	typeCodeSmalluint  amqpType = 0x52 // unsigned integer value in the range 0 to 255 inclusive (1)
+	typeCodeSmallUint  amqpType = 0x52 // unsigned integer value in the range 0 to 255 inclusive (1)
 	typeCodeUint0      amqpType = 0x43 // the uint value 0 (0)
 	typeCodeUlong      amqpType = 0x80 // 64-bit unsigned integer in network byte order (8)
-	typeCodeSmallulong amqpType = 0x53 // unsigned long value in the range 0 to 255 inclusive (1)
+	typeCodeSmallUlong amqpType = 0x53 // unsigned long value in the range 0 to 255 inclusive (1)
 	typeCodeUlong0     amqpType = 0x44 // the ulong value 0 (0)
 
 	// Signed
@@ -49,7 +49,7 @@ const (
 
 	// Other
 	typeCodeChar      amqpType = 0x73 // a UTF-32BE encoded Unicode character (4)
-	typeCodeTimestamp amqpType = 0x83 // 64-bit two's-complement integer representing milliseconds since the unix epoc
+	typeCodeTimestamp amqpType = 0x83 // 64-bit two's-complement integer representing milliseconds since the unix epoch
 	typeCodeUUID      amqpType = 0x98 // UUID as defined in section 4.1.2 of RFC-4122
 
 	// Variable Length
@@ -133,7 +133,11 @@ type unmarshaler interface {
 
 func unmarshal(r byteReader, i interface{}) error {
 	if um, ok := i.(unmarshaler); ok {
-		return um.unmarshal(r)
+		err := um.unmarshal(r)
+		if err == errNull {
+			return nil
+		}
+		return err
 	}
 
 	switch t := i.(type) {
@@ -241,6 +245,9 @@ func unmarshal(r byteReader, i interface{}) error {
 		return (*mapSymbolAny)(t).unmarshal(r)
 	case *interface{}:
 		v, err := readAny(r)
+		if err == errNull {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
@@ -254,9 +261,6 @@ func unmarshal(r byteReader, i interface{}) error {
 			}
 			return unmarshal(r, indirect.Interface())
 		}
-		// if um, ok := indirect.Interface().(unmarshaler); ok {
-		// 	return indirect.Interface().(unmarshaler).UnmarshalBinary(r)
-		// }
 
 		return errorErrorf("unable to unmarshal %T", i)
 	}
@@ -267,21 +271,14 @@ type mapAnyAny map[interface{}]interface{}
 
 func (m *mapAnyAny) unmarshal(r byteReader) error {
 	mr, err := newMapReader(r)
-	if err == errNull {
-		return nil
-	}
 	if err != nil {
 		return err
 	}
 
-	pairs := mr.count / 2
-
-	mm := make(mapAnyAny, pairs)
-	for i := 0; i < pairs; i++ {
-		var (
-			key   interface{}
-			value interface{}
-		)
+	mm := make(mapAnyAny, mr.pairs())
+	for mr.more() {
+		var key interface{}
+		var value interface{}
 		err = mr.next(&key, &value)
 		if err != nil {
 			return err
@@ -289,6 +286,7 @@ func (m *mapAnyAny) unmarshal(r byteReader) error {
 		mm[key] = value
 	}
 	*m = mm
+
 	return nil
 }
 
@@ -296,21 +294,14 @@ type mapStringAny map[string]interface{}
 
 func (m *mapStringAny) unmarshal(r byteReader) error {
 	mr, err := newMapReader(r)
-	if err == errNull {
-		return nil
-	}
 	if err != nil {
 		return err
 	}
 
-	pairs := mr.count / 2
-
-	mm := make(mapStringAny, pairs)
-	for i := 0; i < pairs; i++ {
-		var (
-			key   string
-			value interface{}
-		)
+	mm := make(mapStringAny, mr.pairs())
+	for mr.more() {
+		var key string
+		var value interface{}
 		err = mr.next(&key, &value)
 		if err != nil {
 			return err
@@ -325,21 +316,14 @@ type mapSymbolAny map[Symbol]interface{}
 
 func (f *mapSymbolAny) unmarshal(r byteReader) error {
 	mr, err := newMapReader(r)
-	if err == errNull {
-		return nil
-	}
 	if err != nil {
 		return err
 	}
 
-	pairs := mr.count / 2
-
-	m := make(mapSymbolAny, pairs)
-	for i := 0; i < pairs; i++ {
-		var (
-			key   Symbol
-			value interface{}
-		)
+	m := make(mapSymbolAny, mr.pairs())
+	for mr.more() {
+		var key Symbol
+		var value interface{}
 		err = mr.next(&key, &value)
 		if err != nil {
 			return err
@@ -432,8 +416,8 @@ func marshalComposite(code amqpType, fields ...field) ([]byte, error) {
 	}
 
 	buf := bufPool.New().(*bytes.Buffer)
-	buf.Reset()
 	defer bufPool.Put(buf)
+	buf.Reset()
 
 	err = writeComposite(buf, code, rawFields[:lastSetIdx+1]...)
 	if err != nil {
@@ -543,7 +527,7 @@ func writeBinary(wr byteWriter, bin []byte) error {
 }
 
 func writeComposite(wr byteWriter, code amqpType, fields ...[]byte) error {
-	_, err := wr.Write([]byte{0x0, byte(typeCodeSmallulong), uint8(code)})
+	_, err := wr.Write([]byte{0x0, byte(typeCodeSmallUlong), uint8(code)})
 	if err != nil {
 		return err
 	}
@@ -781,7 +765,7 @@ func readAny(r byteReader) (interface{}, error) {
 	switch amqpType(b) {
 	case typeCodeBool, typeCodeBoolTrue, typeCodeBoolFalse:
 		return readBool(r)
-	case typeCodeUbyte, typeCodeUshort, typeCodeUint, typeCodeSmalluint, typeCodeUint0, typeCodeUlong, typeCodeSmallulong, typeCodeUlong0:
+	case typeCodeUbyte, typeCodeUshort, typeCodeUint, typeCodeSmallUint, typeCodeUint0, typeCodeUlong, typeCodeSmallUlong, typeCodeUlong0:
 		return readUint(r)
 	case typeCodeByte, typeCodeShort, typeCodeInt, typeCodeSmallint, typeCodeLong, typeCodeSmalllong:
 		return readInt(r)
@@ -809,7 +793,7 @@ func readTimestamp(r byteReader) (time.Time, error) {
 	case t == typeCodeNull:
 		return time.Time{}, errNull
 	case t != typeCodeTimestamp:
-		return time.Time{}, errorErrorf("invaild type for timestamp %0x", t)
+		return time.Time{}, errorErrorf("invalid type for timestamp %0x", t)
 	}
 
 	var n uint64
@@ -828,7 +812,7 @@ func readInt(r byteReader) (value int, _ error) {
 	// Unsigned
 	case typeCodeUint0, typeCodeUlong0:
 		return 0, nil
-	case typeCodeUbyte, typeCodeSmalluint, typeCodeSmallulong:
+	case typeCodeUbyte, typeCodeSmallUint, typeCodeSmallUlong:
 		n, err := r.ReadByte()
 		return int(n), err
 	case typeCodeUshort:
@@ -903,7 +887,7 @@ func readUint(r byteReader) (value uint64, _ error) {
 		return 0, errNull
 	case typeCodeUint0, typeCodeUlong0:
 		return 0, nil
-	case typeCodeUbyte, typeCodeSmalluint, typeCodeSmallulong:
+	case typeCodeUbyte, typeCodeSmallUint, typeCodeSmallUlong:
 		n, err := r.ReadByte()
 		return uint64(n), err
 	case typeCodeUshort:
@@ -924,14 +908,15 @@ func readUint(r byteReader) (value uint64, _ error) {
 	}
 }
 
+// Symbol is an AMQP symbolic string.
 type Symbol string
 
 func (s Symbol) marshal() ([]byte, error) {
 	l := len(s)
 
 	buf := bufPool.New().(*bytes.Buffer)
-	buf.Reset()
 	defer bufPool.Put(buf)
+	buf.Reset()
 
 	var err error
 	switch {
@@ -963,8 +948,8 @@ func marshal(i interface{}) ([]byte, error) {
 	}
 
 	buf := bufPool.New().(*bytes.Buffer)
-	buf.Reset()
 	defer bufPool.Put(buf)
+	buf.Reset()
 
 	var err error
 	switch t := i.(type) {
@@ -1091,13 +1076,17 @@ func (r *limitByteReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-func (r *limitByteReader) limitReached() bool {
-	return r.read >= r.limit
-}
-
 type mapReader struct {
 	r     *limitByteReader
 	count int // elements (2 * # of pairs)
+}
+
+func (mr *mapReader) pairs() int {
+	return mr.count / 2
+}
+
+func (mr *mapReader) more() bool {
+	return mr.r.limit != mr.r.read
 }
 
 func (mr *mapReader) next(key, value interface{}) error {

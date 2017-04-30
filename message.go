@@ -241,18 +241,18 @@ func (h *MessageHeader) unmarshal(r byteReader) error {
 type MessageProperties struct {
 	// TODO: add useful descriptions from spec
 
-	MessageID          interface{} // may be uint64, UUID, []byte, or string
+	MessageID          interface{} // uint64, UUID, []byte, or string
 	UserID             []byte
 	To                 string
 	Subject            string
 	ReplyTo            string
-	CorrelationID      interface{} // may be uint64, UUID, []byte, or string
+	CorrelationID      interface{} // uint64, UUID, []byte, or string
 	ContentType        Symbol
 	ContentEncoding    Symbol
 	AbsoluteExpiryTime time.Time
 	CreationTime       time.Time
 	GroupID            string
-	GroupSequence      uint32 // sequence number
+	GroupSequence      uint32 // RFC-1982 sequence number
 	ReplyToGroupID     string
 }
 

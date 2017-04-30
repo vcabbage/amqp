@@ -6,6 +6,9 @@ import (
 	"math/rand"
 )
 
+// Session is an AMQP session.
+//
+// A session multiplexes Receivers.
 type Session struct {
 	channel       uint16
 	remoteChannel uint16
@@ -26,6 +29,7 @@ func newSession(c *Conn, channel uint16) *Session {
 	}
 }
 
+// Close closes the session.
 func (s *Session) Close() error {
 	// TODO: send end preformative
 	select {
@@ -53,6 +57,7 @@ func randString() string { // TODO: random string gen off SO, replace
 	return string(b)
 }
 
+// NewReceiver opens a new receiver link on the session.
 func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	l := newLink(s)
 
@@ -102,12 +107,10 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 
 	l.senderDeliveryCount = resp.InitialDeliveryCount
 
-	r := &Receiver{
+	return &Receiver{
 		link: l,
 		buf:  bufPool.New().(*bytes.Buffer),
-	}
-
-	return r, nil
+	}, nil
 }
 
 func (s *Session) startMux() {

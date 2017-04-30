@@ -104,6 +104,8 @@ type Receiver struct {
 	buf *bytes.Buffer
 }
 
+// sendFlow transmits a flow frame with enough credits to bring the sender's
+// link credits up to l.link.linkCredit.
 func (r *Receiver) sendFlow() error {
 	newLinkCredit := r.link.linkCredit - (r.link.linkCredit - r.link.creditUsed)
 	r.link.senderDeliveryCount += r.link.creditUsed

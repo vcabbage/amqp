@@ -331,20 +331,20 @@ outer:
 // up via the Conn.rxFrame and Conn.rxProto channels.
 func (c *Conn) connReader() {
 	buf := bufPool.Get().(*bytes.Buffer)
+	defer bufPool.Put(buf)
 	buf.Reset()
 	rxBuf := make([]byte, c.maxFrameSize)
 
 	var (
 		negotiating     = true
-		idleTimeout     = c.idleTimeout
 		currentHeader   frameHeader
-		frameInProgress = false
+		frameInProgress bool
 		err             error
 	)
 
 	for {
 		if frameInProgress || buf.Len() < 8 { // 8 = min size for header
-			c.net.SetReadDeadline(time.Now().Add(idleTimeout))
+			c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
 			n, err := c.net.Read(rxBuf[:c.maxFrameSize]) // TODO: send error on frame too large
 			if err != nil {
 				if atomic.LoadInt32(&c.pauseRead) == 1 {
@@ -417,24 +417,17 @@ func (c *Conn) connReader() {
 			continue // empty frame, likely for keepalive
 		}
 
-		frameBody := buf.Next(bodySize)
-
-		p, err := parseFrame(bytes.NewBuffer(frameBody))
+		payload := bytes.NewBuffer(buf.Next(bodySize))
+		parsedBody, err := parseFrame(payload)
 		if err != nil {
 			c.readErr <- err
 			return
 		}
 
-		if o, ok := p.(*performOpen); ok && o.MaxFrameSize < c.maxFrameSize {
-			if o.IdleTimeout > 0 && o.IdleTimeout < idleTimeout {
-				idleTimeout = o.IdleTimeout
-			}
-		}
-
 		select {
 		case <-c.done:
 			return
-		case c.rxFrame <- frame{channel: currentHeader.Channel, body: p}:
+		case c.rxFrame <- frame{channel: currentHeader.Channel, body: parsedBody}:
 		}
 	}
 }

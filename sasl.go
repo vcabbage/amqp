@@ -9,17 +9,18 @@ const (
 	codeSASLSysTemp                 // Connection authentication failed due to a transient system error.
 )
 
-// SASL Mechanisms
-const (
-	saslMechanismPLAIN Symbol = "PLAIN"
-)
-
 type saslCode int
 
 func (s *saslCode) unmarshal(r byteReader) error {
 	return unmarshal(r, (*int)(s))
 }
 
+// SASL Mechanisms
+const (
+	saslMechanismPLAIN Symbol = "PLAIN"
+)
+
+// ConnSASLPlain enables SASL PLAIN authentication for the connection.
 func ConnSASLPlain(username, password string) ConnOption {
 	return func(c *Conn) error {
 		if c.saslHandlers == nil {
@@ -61,6 +62,7 @@ func (h *saslHandlerPlain) init() stateFunc {
     <field name="hostname" type="string"/>
 </type>
 */
+
 type saslInit struct {
 	Mechanism       Symbol
 	InitialResponse []byte
@@ -80,32 +82,12 @@ func (si *saslInit) marshal() ([]byte, error) {
 }
 
 /*
-SASLMechanisms Frame
-
-00 53 40 c0 0e 01 e0 0b 01 b3 00 00 00 05 50 4c 41 49 4e
-
-0 - indicates decriptor
-53 - smallulong (?)
-40 - sasl-mechanisms (?)
-
-// composites are always lists
-c0 - list
-0e - size 14 bytes
-01 - 1 element
-
-e0 - array
-0b - size 11 bytes
-01 - 1 element
-
-b3 - sym32
-
-00 00 00 05 - 5 charaters
-50 - "P"
-4c - "L"
-41 - "A"
-49 - "I"
-4e - "N"
+<type name="sasl-mechanisms" class="composite" source="list" provides="sasl-frame">
+    <descriptor name="amqp:sasl-mechanisms:list" code="0x00000000:0x00000040"/>
+    <field name="sasl-server-mechanisms" type="symbol" multiple="true" mandatory="true"/>
+</type>
 */
+
 type saslMechanisms struct {
 	Mechanisms []Symbol
 }

@@ -8,7 +8,7 @@ import (
 func peekPerformType(r byteReader) (amqpType, error) {
 	payload := r.Bytes()
 
-	if r.Len() < 3 || payload[0] != 0 || amqpType(payload[1]) != typeCodeSmallulong {
+	if r.Len() < 3 || payload[0] != 0 || amqpType(payload[1]) != typeCodeSmallUlong {
 		return 0, errorNew("invalid preformative header")
 	}
 
@@ -30,6 +30,7 @@ func peekPerformType(r byteReader) (amqpType, error) {
     <field name="properties" type="fields"/>
 </type>
 */
+
 type performOpen struct {
 	ContainerID         string // required
 	Hostname            string
@@ -207,7 +208,7 @@ type performAttach struct {
 	//
 	// The role being played by the peer, i.e., whether the peer is the sender or the
 	// receiver of messages on the link.
-	Role bool // required, true=reciever / false=sender
+	Role bool // required, true=receiver / false=sender
 
 	// settlement policy for the sender
 	//
@@ -1039,7 +1040,7 @@ type performDisposition struct {
 	//
 	// The role identifies whether the disposition frame contains information about
 	// sending link endpoints or receiving link endpoints.
-	Role bool // required, true=reciever / false=sender
+	Role bool // required, true=receiver / false=sender
 
 	// lower bound of deliveries
 	//
@@ -1151,9 +1152,13 @@ func (d *performDetach) unmarshal(r byteReader) error {
 </type>
 */
 
+// Error is an AMQP error.
 type Error struct {
+	// TODO: should this implement the error interface?
+
 	// A symbolic value indicating the error condition.
 	Condition Symbol
+	// TODO: make enum
 
 	// descriptive text about the error condition
 	//
@@ -1163,6 +1168,7 @@ type Error struct {
 
 	// map carrying information about the error condition
 	Info map[Symbol]interface{}
+	// TODO: make more user friendly
 }
 
 func (e *Error) marshal() ([]byte, error) {
