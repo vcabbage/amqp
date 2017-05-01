@@ -1,5 +1,8 @@
 // +build gofuzz
 
+// Only build when "go test -tags gofuzz" is used so that the functions
+// in fuzz.go can be referenced.
+
 package amqp
 
 import (

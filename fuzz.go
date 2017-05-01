@@ -13,7 +13,7 @@ import (
 func FuzzConn(data []byte) int {
 	conn, err := New(testconn.New(data),
 		ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
-		ConnIdleTimeout(3*time.Millisecond),
+		ConnIdleTimeout(10*time.Millisecond),
 	)
 	if err != nil {
 		return 0

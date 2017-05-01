@@ -4,3 +4,4 @@ amqp.test
 /fuzz/*.zip
 *.log
 /cmd
+cover.out

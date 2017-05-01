@@ -793,7 +793,7 @@ func readSlice(r byteReader) (elements int, length int, _ error) {
 		return 0, 0, errorErrorf("type code %x is not a recognized list type", b)
 	}
 
-	if l := r.Len(); elements > l || length > l {
+	if elements > r.Len() {
 		return 0, 0, errInvalidLength
 	}
 	return elements, length, nil

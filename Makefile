@@ -22,3 +22,7 @@ fuzzclean:
 test:
 	TEST_CORPUS=1 go test -tags gofuzz -race -run=Corpus
 	go test -tags gofuzz -v -race ./...
+
+.PHONY: coverage
+coverage:
+	TEST_CORPUS=1 go test -tags gofuzz -cover -coverprofile=cover.out -v
