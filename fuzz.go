@@ -30,10 +30,16 @@ func FuzzConn(data []byte) int {
 		return 0
 	}
 
-	_, err = r.Receive(context.Background())
+	msg, err := r.Receive(context.Background())
 	if err != nil {
 		return 0
 	}
+
+	msg.Accept()
+
+	r.Close()
+
+	s.Close()
 
 	return 1
 }

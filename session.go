@@ -31,7 +31,7 @@ func newSession(c *Conn, channel uint16) *Session {
 
 // Close closes the session.
 func (s *Session) Close() error {
-	// TODO: send end preformative
+	// TODO: send end preformative (if Begin has been exchanged)
 	select {
 	case <-s.conn.done:
 		return s.conn.err
@@ -113,7 +113,7 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	}, nil
 }
 
-func (s *Session) startMux() {
+func (s *Session) mux() {
 	links := make(map[uint32]*link)
 	var nextHandle uint32
 
