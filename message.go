@@ -198,8 +198,8 @@ type MessageHeader struct {
 	DeliveryCount uint32
 }
 
-func (h *MessageHeader) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeMessageHeader, []marshalField{
+func (h *MessageHeader) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeMessageHeader, []marshalField{
 		{value: h.Durable, omit: !h.Durable},
 		{value: h.Priority, omit: h.Priority == 4},
 		{value: milliseconds(h.TTL), omit: h.TTL == 0},
@@ -256,8 +256,8 @@ type MessageProperties struct {
 	ReplyToGroupID     string
 }
 
-func (p *MessageProperties) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeMessageProperties, []marshalField{
+func (p *MessageProperties) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeMessageProperties, []marshalField{
 		{value: p.MessageID, omit: p.MessageID != nil},
 		{value: p.UserID, omit: len(p.UserID) == 0},
 		{value: p.To, omit: p.To == ""},
@@ -324,8 +324,8 @@ type stateReceived struct {
 	SectionOffset uint64
 }
 
-func (sr *stateReceived) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeStateReceived, []marshalField{
+func (sr *stateReceived) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateReceived, []marshalField{
 		{value: sr.SectionNumber, omit: false},
 		{value: sr.SectionOffset, omit: false},
 	}...)
@@ -346,8 +346,8 @@ func (sr *stateReceived) unmarshal(r reader) error {
 
 type stateAccepted struct{}
 
-func (sa *stateAccepted) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeStateAccepted)
+func (sa *stateAccepted) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateAccepted)
 }
 
 func (sa *stateAccepted) unmarshal(r reader) error {
@@ -365,8 +365,8 @@ type stateRejected struct {
 	Error *Error
 }
 
-func (sr *stateRejected) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeStateRejected,
+func (sr *stateRejected) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateRejected,
 		marshalField{value: sr.Error, omit: sr.Error == nil},
 	)
 }
@@ -385,8 +385,8 @@ func (sr *stateRejected) unmarshal(r reader) error {
 
 type stateReleased struct{}
 
-func (sr *stateReleased) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeStateReleased)
+func (sr *stateReleased) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateReleased)
 }
 
 func (sr *stateReleased) unmarshal(r reader) error {
@@ -425,8 +425,8 @@ type stateModified struct {
 	MessageAnnotations map[Symbol]interface{}
 }
 
-func (sm *stateModified) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeStateModified, []marshalField{
+func (sm *stateModified) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateModified, []marshalField{
 		{value: sm.DeliveryFailed, omit: !sm.DeliveryFailed},
 		{value: sm.UndeliverableHere, omit: !sm.UndeliverableHere},
 		{value: sm.MessageAnnotations, omit: sm.MessageAnnotations == nil},

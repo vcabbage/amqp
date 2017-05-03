@@ -71,8 +71,8 @@ func (si *saslInit) link() (uint32, bool) {
 	return 0, false
 }
 
-func (si *saslInit) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeSASLInit, []marshalField{
+func (si *saslInit) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeSASLInit, []marshalField{
 		{value: si.Mechanism, omit: false},
 		{value: si.InitialResponse, omit: len(si.InitialResponse) == 0},
 		{value: si.Hostname, omit: len(si.Hostname) == 0},

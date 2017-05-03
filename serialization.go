@@ -489,7 +489,7 @@ type marshalField struct {
 // The returned bytes include the composite header and fields. Fields with
 // omit set to true will be encoded as null or omitted altogether if there are
 // no non-null fields after them.
-func marshalComposite(code amqpType, fields ...marshalField) ([]byte, error) {
+func marshalComposite(wr writer, code amqpType, fields ...marshalField) error {
 	var (
 		rawFields = make([][]byte, len(fields)) // sized to the total number of fields
 
@@ -497,6 +497,10 @@ func marshalComposite(code amqpType, fields ...marshalField) ([]byte, error) {
 		// start at -1 as it's possible to have no fields in a composite
 		lastSetIdx = -1
 	)
+
+	buf := bufPool.Get().(*bytes.Buffer)
+	defer bufPool.Put(buf)
+	buf.Reset()
 
 	// marshal each field into it's index in rawFields,
 	// null fields are skipped, leaving the index nil.
@@ -506,10 +510,13 @@ func marshalComposite(code amqpType, fields ...marshalField) ([]byte, error) {
 			continue
 		}
 
-		rawFields[i], err = marshal(f.value)
+		err = marshal(buf, f.value)
 		if err != nil {
-			return nil, err
+			return err
 		}
+
+		rawFields[i] = append([]byte(nil), buf.Bytes()...) // TODO: is there a cleaner way to do this?
+		buf.Reset()
 
 		lastSetIdx = i
 	}
@@ -521,24 +528,14 @@ func marshalComposite(code amqpType, fields ...marshalField) ([]byte, error) {
 		}
 	}
 
-	buf := bufPool.New().(*bytes.Buffer)
-	defer bufPool.Put(buf)
-	buf.Reset()
-
 	// write header
-	_, err = buf.Write([]byte{0x0, byte(typeCodeSmallUlong), uint8(code)})
+	_, err = wr.Write([]byte{0x0, byte(typeCodeSmallUlong), uint8(code)})
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// write fields
-	err = writeList(buf, rawFields[:lastSetIdx+1]...)
-	if err != nil {
-		return nil, err
-	}
-
-	// copy bytes so buf can be returned to pool
-	return append([]byte(nil), buf.Bytes()...), nil
+	return writeList(wr, rawFields[:lastSetIdx+1]...)
 }
 
 func writeSymbolArray(w writer, symbols []Symbol) error {
@@ -1027,112 +1024,102 @@ func readUint(r reader) (value uint64, _ error) {
 // Symbol is an AMQP symbolic string.
 type Symbol string
 
-func (s Symbol) marshal() ([]byte, error) {
+func (s Symbol) marshal(wr writer) error {
 	l := len(s)
-
-	buf := bufPool.New().(*bytes.Buffer)
-	defer bufPool.Put(buf)
-	buf.Reset()
 
 	var err error
 	switch {
 	// List8
 	case l < 256:
-		_, err = buf.Write(append([]byte{byte(typeCodeSym8), byte(l)}, []byte(s)...))
+		_, err = wr.Write(append([]byte{byte(typeCodeSym8), byte(l)}, []byte(s)...))
 
 	// List32
 	case l < math.MaxUint32:
-		err = binary.Write(buf, binary.BigEndian, uint32(l))
+		err = binary.Write(wr, binary.BigEndian, uint32(l))
 		if err != nil {
-			return nil, err
+			return err
 		}
-		_, err = buf.Write([]byte(s))
+		_, err = wr.Write([]byte(s))
 	default:
-		return nil, errorNew("too long")
+		return errorNew("too long")
 	}
 
-	return append([]byte(nil), buf.Bytes()...), err
+	return err
 }
 
 type marshaler interface {
-	marshal() ([]byte, error)
+	marshal(writer) error
 }
 
-func marshal(i interface{}) ([]byte, error) {
-	if bm, ok := i.(marshaler); ok {
-		return bm.marshal()
-	}
-
-	buf := bufPool.New().(*bytes.Buffer)
-	defer bufPool.Put(buf)
-	buf.Reset()
-
+func marshal(wr writer, i interface{}) error {
 	var err error
 	switch t := i.(type) {
+	case marshaler:
+		return t.marshal(wr)
 	case bool:
 		if t {
-			err = buf.WriteByte(byte(typeCodeBoolTrue))
+			err = wr.WriteByte(byte(typeCodeBoolTrue))
 		} else {
-			err = buf.WriteByte(byte(typeCodeBoolFalse))
+			err = wr.WriteByte(byte(typeCodeBoolFalse))
 		}
 	case uint64:
 		if t == 0 {
-			err = buf.WriteByte(byte(typeCodeUlong0))
+			err = wr.WriteByte(byte(typeCodeUlong0))
 			break
 		}
-		err = buf.WriteByte(byte(typeCodeUlong))
+		err = wr.WriteByte(byte(typeCodeUlong))
 		if err != nil {
-			return nil, err
+			return err
 		}
-		err = binary.Write(buf, binary.BigEndian, t)
+		err = binary.Write(wr, binary.BigEndian, t)
 	case uint32:
 		if t == 0 {
-			err = buf.WriteByte(byte(typeCodeUint0))
+			err = wr.WriteByte(byte(typeCodeUint0))
 			break
 		}
-		err = buf.WriteByte(byte(typeCodeUint))
+		err = wr.WriteByte(byte(typeCodeUint))
 		if err != nil {
-			return nil, err
+			return err
 		}
-		err = binary.Write(buf, binary.BigEndian, t)
+		err = binary.Write(wr, binary.BigEndian, t)
 	case *uint32:
 		if t == nil {
-			err = buf.WriteByte(byte(typeCodeNull))
+			err = wr.WriteByte(byte(typeCodeNull))
 			break
 		}
 		if *t == 0 {
-			err = buf.WriteByte(byte(typeCodeUint0))
+			err = wr.WriteByte(byte(typeCodeUint0))
 			break
 		}
-		err = buf.WriteByte(byte(typeCodeUint))
+		err = wr.WriteByte(byte(typeCodeUint))
 		if err != nil {
-			return nil, err
+			return err
 		}
-		err = binary.Write(buf, binary.BigEndian, *t)
+		err = binary.Write(wr, binary.BigEndian, *t)
 	case uint16:
-		err = buf.WriteByte(byte(typeCodeUshort))
+		err = wr.WriteByte(byte(typeCodeUshort))
 		if err != nil {
-			return nil, err
+			return err
 		}
-		err = binary.Write(buf, binary.BigEndian, t)
+		err = binary.Write(wr, binary.BigEndian, t)
 	case uint8:
-		_, err = buf.Write([]byte{byte(typeCodeUbyte), t})
+		_, err = wr.Write([]byte{byte(typeCodeUbyte), t})
 	case []Symbol:
-		err = writeSymbolArray(buf, t)
+		err = writeSymbolArray(wr, t)
 	case string:
-		err = writeString(buf, t)
+		err = writeString(wr, t)
 	case []byte:
-		err = writeBinary(buf, t)
+		err = writeBinary(wr, t)
 	default:
-		return nil, errorErrorf("marshal not implemented for %T", i)
+		return errorErrorf("marshal not implemented for %T", i)
 	}
-	return append([]byte(nil), buf.Bytes()...), err
+	return err
 }
 
 type milliseconds time.Duration
 
-func (m milliseconds) marshal() ([]byte, error) {
-	return marshal(uint32((time.Duration)(m).Nanoseconds() / 1000000))
+func (m milliseconds) marshal(wr writer) error {
+	return marshal(wr, uint32((time.Duration)(m).Nanoseconds()/1000000))
 }
 
 func (m *milliseconds) unmarshal(r reader) error {
@@ -1159,20 +1146,11 @@ func writeMapHeader(wr writer, elements int) error {
 }
 
 func writeMapElement(wr writer, key, value interface{}) error {
-	keyBytes, err := marshal(key)
+	err := marshal(wr, key)
 	if err != nil {
 		return err
 	}
-	valueBytes, err := marshal(value)
-	if err != nil {
-		return err
-	}
-	_, err = wr.Write(keyBytes)
-	if err != nil {
-		return err
-	}
-	_, err = wr.Write(valueBytes)
-	return err
+	return marshal(wr, value)
 }
 
 type limitReader struct {

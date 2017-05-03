@@ -131,30 +131,42 @@ type frameBody interface {
 
 // writeFrame encodes and writes fr to wr.
 func writeFrame(wr io.Writer, fr frame) error {
-	data, err := marshal(fr.body)
-	if err != nil {
-		return err
-	}
-
-	frameSize := len(data) + frameHeaderSize
-	if frameSize > math.MaxUint32 {
-		return errorNew("frame too large")
-	}
-
 	header := frameHeader{
-		Size:       uint32(frameSize),
+		Size:       0, // overwrite later
 		DataOffset: 2, // see frameHeader.DataOffset comment
 		FrameType:  fr.typ,
 		Channel:    fr.channel,
 	}
 
-	var buf bytes.Buffer
-	err = binary.Write(&buf, binary.BigEndian, header)
+	// get a buffer
+	buf := bufPool.Get().(*bytes.Buffer)
+	defer bufPool.Put(buf)
+	buf.Reset()
+
+	// write header
+	err := binary.Write(buf, binary.BigEndian, header)
 	if err != nil {
 		return err
 	}
 
+	// write AMQP frame body
+	err = marshal(buf, fr.body)
+	if err != nil {
+		return err
+	}
+
+	// validate size
+	if buf.Len() > math.MaxUint32 {
+		return errorNew("frame too large")
+	}
+
+	// retrieve raw bytes
+	bufBytes := buf.Bytes()
+
+	// write correct size
+	binary.BigEndian.PutUint32(bufBytes, uint32(len(bufBytes)))
+
 	// frame needs to network as a single chunk
-	_, err = wr.Write(append(buf.Bytes(), data...)) // TODO: have a connWriter, like connReader
+	_, err = wr.Write(bufBytes) // TODO: have a connWriter, like connReader
 	return err
 }

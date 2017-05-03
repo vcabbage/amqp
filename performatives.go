@@ -46,8 +46,8 @@ func (o *performOpen) link() (uint32, bool) {
 	return 0, false
 }
 
-func (o *performOpen) marshal() ([]byte, error) {
-	fields := []marshalField{
+func (o *performOpen) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeOpen, []marshalField{
 		{value: o.ContainerID, omit: false},
 		{value: o.Hostname, omit: o.Hostname == ""},
 		{value: o.MaxFrameSize, omit: o.MaxFrameSize == 0},
@@ -58,8 +58,7 @@ func (o *performOpen) marshal() ([]byte, error) {
 		{value: o.OfferedCapabilities, omit: len(o.OfferedCapabilities) == 0},
 		{value: o.DesiredCapabilities, omit: len(o.DesiredCapabilities) == 0},
 		{value: o.Properties, omit: len(o.Properties) == 0},
-	}
-	return marshalComposite(typeCodeOpen, fields...)
+	}...)
 }
 
 func (o *performOpen) unmarshal(r reader) error {
@@ -132,8 +131,8 @@ func (b *performBegin) link() (uint32, bool) {
 	return 0, false
 }
 
-func (b *performBegin) marshal() ([]byte, error) {
-	fields := []marshalField{
+func (b *performBegin) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeBegin, []marshalField{
 		{value: b.RemoteChannel, omit: b.RemoteChannel == 0},
 		{value: b.NextOutgoingID, omit: false},
 		{value: b.IncomingWindow, omit: false},
@@ -141,8 +140,7 @@ func (b *performBegin) marshal() ([]byte, error) {
 		{value: b.HandleMax, omit: b.HandleMax == 0},
 		{value: b.OfferedCapabilities, omit: len(b.OfferedCapabilities) == 0},
 		{value: b.DesiredCapabilities, omit: len(b.DesiredCapabilities) == 0},
-	}
-	return marshalComposite(typeCodeBegin, fields...)
+	}...)
 }
 
 func (b *performBegin) unmarshal(r reader) error {
@@ -312,8 +310,8 @@ func (a *performAttach) link() (uint32, bool) {
 	return a.Handle, true
 }
 
-func (a *performAttach) marshal() ([]byte, error) {
-	fields := []marshalField{
+func (a *performAttach) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeAttach, []marshalField{
 		{value: a.Name, omit: false},
 		{value: a.Handle, omit: false},
 		{value: a.Role, omit: false},
@@ -328,8 +326,7 @@ func (a *performAttach) marshal() ([]byte, error) {
 		{value: a.OfferedCapabilities, omit: len(a.OfferedCapabilities) == 0},
 		{value: a.DesiredCapabilities, omit: len(a.DesiredCapabilities) == 0},
 		{value: a.Properties, omit: len(a.Properties) == 0},
-	}
-	return marshalComposite(typeCodeAttach, fields...)
+	}...)
 }
 
 func (a *performAttach) unmarshal(r reader) error {
@@ -509,8 +506,8 @@ type source struct {
 	Capabilities []Symbol
 }
 
-func (s *source) marshal() ([]byte, error) {
-	fields := []marshalField{
+func (s *source) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeSource, []marshalField{
 		{value: s.Address, omit: s.Address == ""},
 		{value: s.Durable, omit: s.Durable == 0},
 		{value: s.ExpiryPolicy, omit: s.ExpiryPolicy == ""},
@@ -522,8 +519,7 @@ func (s *source) marshal() ([]byte, error) {
 		{value: s.DefaultOutcome, omit: s.DefaultOutcome == nil},
 		{value: s.Outcomes, omit: len(s.Outcomes) == 0},
 		{value: s.Capabilities, omit: len(s.Capabilities) == 0},
-	}
-	return marshalComposite(typeCodeSource, fields...)
+	}...)
 }
 
 func (s *source) unmarshal(r reader) error {
@@ -639,8 +635,8 @@ type target struct {
 	Capabilities []Symbol
 }
 
-func (t *target) marshal() ([]byte, error) {
-	fields := []marshalField{
+func (t *target) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeTarget, []marshalField{
 		{value: t.Address, omit: t.Address == ""},
 		{value: t.Durable, omit: t.Durable == 0},
 		{value: t.ExpiryPolicy, omit: t.ExpiryPolicy == ""},
@@ -648,8 +644,7 @@ func (t *target) marshal() ([]byte, error) {
 		{value: t.Dynamic, omit: !t.Dynamic},
 		{value: t.DynamicNodeProperties, omit: len(t.DynamicNodeProperties) == 0},
 		{value: t.Capabilities, omit: len(t.Capabilities) == 0},
-	}
-	return marshalComposite(typeCodeTarget, fields...)
+	}...)
 }
 
 func (t *target) unmarshal(r reader) error {
@@ -786,8 +781,8 @@ func (f *performFlow) link() (uint32, bool) {
 	return *f.Handle, true
 }
 
-func (f *performFlow) marshal() ([]byte, error) {
-	fields := []marshalField{
+func (f *performFlow) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeFlow, []marshalField{
 		{value: f.NextIncomingID, omit: f.NextIncomingID == nil},
 		{value: f.IncomingWindow, omit: false},
 		{value: f.NextOutgoingID, omit: false},
@@ -799,8 +794,7 @@ func (f *performFlow) marshal() ([]byte, error) {
 		{value: f.Drain, omit: !f.Drain},
 		{value: f.Echo, omit: !f.Echo},
 		{value: f.Properties, omit: len(f.Properties) == 0},
-	}
-	return marshalComposite(typeCodeFlow, fields...)
+	}...)
 }
 
 func (f *performFlow) unmarshal(r reader) error {
@@ -977,8 +971,8 @@ func (t *performTransfer) link() (uint32, bool) {
 	return t.Handle, true
 }
 
-func (t *performTransfer) marshal() ([]byte, error) {
-	fields := []marshalField{
+func (t *performTransfer) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeFlow, []marshalField{
 		{value: t.DeliveryID, omit: t.DeliveryID == nil},
 		{value: t.DeliveryTag, omit: len(t.DeliveryTag) == 0},
 		{value: t.MessageFormat, omit: t.MessageFormat == nil},
@@ -989,8 +983,7 @@ func (t *performTransfer) marshal() ([]byte, error) {
 		{value: t.Resume, omit: !t.Resume},
 		{value: t.Aborted, omit: !t.Aborted},
 		{value: t.Batchable, omit: !t.Batchable},
-	}
-	return marshalComposite(typeCodeFlow, fields...)
+	}...)
 }
 
 func (t *performTransfer) unmarshal(r reader) error {
@@ -1069,16 +1062,15 @@ func (*performDisposition) link() (uint32, bool) {
 	return 0, false
 }
 
-func (d *performDisposition) marshal() ([]byte, error) {
-	fields := []marshalField{
+func (d *performDisposition) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeDisposition, []marshalField{
 		{value: d.Role, omit: false},
 		{value: d.First, omit: false},
 		{value: d.Last, omit: d.Last == nil},
 		{value: d.Settled, omit: !d.Settled},
 		{value: d.State, omit: d.State == nil},
 		{value: d.Batchable, omit: !d.Batchable},
-	}
-	return marshalComposite(typeCodeDisposition, fields...)
+	}...)
 }
 
 func (d *performDisposition) unmarshal(r reader) error {
@@ -1118,8 +1110,8 @@ func (d *performDetach) link() (uint32, bool) {
 	return d.Handle, true
 }
 
-func (d *performDetach) marshal() ([]byte, error) {
-	return marshalComposite(typeCodeDetach, []marshalField{
+func (d *performDetach) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeDetach, []marshalField{
 		{value: d.Handle, omit: false},
 		{value: d.Closed, omit: !d.Closed},
 		{value: d.Error, omit: d.Error == nil},
@@ -1162,13 +1154,12 @@ type Error struct {
 	// TODO: make more user friendly
 }
 
-func (e *Error) marshal() ([]byte, error) {
-	fields := []marshalField{
+func (e *Error) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeError, []marshalField{
 		{value: e.Condition, omit: false},
 		{value: e.Description, omit: e.Description == ""},
 		{value: e.Info, omit: len(e.Info) == 0},
-	}
-	return marshalComposite(typeCodeError, fields...)
+	}...)
 }
 
 func (e *Error) unmarshal(r reader) error {
@@ -1197,11 +1188,10 @@ func (*performEnd) link() (uint32, bool) {
 	return 0, false
 }
 
-func (e *performEnd) marshal() ([]byte, error) {
-	fields := []marshalField{
-		{value: e.Error, omit: e.Error == nil},
-	}
-	return marshalComposite(typeCodeEnd, fields...)
+func (e *performEnd) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeEnd,
+		marshalField{value: e.Error, omit: e.Error == nil},
+	)
 }
 
 func (e *performEnd) unmarshal(r reader) error {
@@ -1228,11 +1218,10 @@ func (*performClose) link() (uint32, bool) {
 	return 0, false
 }
 
-func (c *performClose) marshal() ([]byte, error) {
-	fields := []marshalField{
-		{value: c.Error, omit: c.Error == nil},
-	}
-	return marshalComposite(typeCodeClose, fields...)
+func (c *performClose) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeClose,
+		marshalField{value: c.Error, omit: c.Error == nil},
+	)
 }
 
 func (c *performClose) unmarshal(r reader) error {
