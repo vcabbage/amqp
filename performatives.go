@@ -1013,7 +1013,8 @@ func (t *performTransfer) unmarshal(r byteReader) error {
 		return err
 	}
 
-	t.Payload, err = ioutil.ReadAll(r)
+	t.Payload = append([]byte(nil), r.Bytes()...)
+
 	return err
 }
 

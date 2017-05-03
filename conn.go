@@ -527,6 +527,7 @@ func (c *Conn) exchangeProtoHeader(protoID uint8) stateFunc {
 		c.err = errorWrapf(c.err, "writing to network")
 		return nil
 	}
+	c.net.SetWriteDeadline(time.Time{})
 
 	// read response header
 	var p protoHeader
