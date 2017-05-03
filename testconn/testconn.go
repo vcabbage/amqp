@@ -3,7 +3,6 @@ package testconn
 import (
 	"bytes"
 	"errors"
-	"io"
 	"net"
 	"time"
 )
@@ -30,7 +29,7 @@ func (c *Conn) Read(b []byte) (int, error) {
 	if len(c.data) == 0 {
 		select {
 		case <-c.done:
-			return 0, io.EOF
+			return 0, errors.New("connection closed")
 		case err := <-c.err:
 			return 0, err
 		}
@@ -63,16 +62,19 @@ func (c *Conn) SetDeadline(t time.Time) error {
 }
 
 func (c *Conn) SetReadDeadline(t time.Time) error {
-	if c.readDeadline == nil {
-		c.readDeadline = time.AfterFunc(t.Sub(time.Now()), func() {
-			select {
-			case c.err <- errors.New("timeout"):
-			default:
-			}
-		})
+	if c.readDeadline != nil {
+		c.readDeadline.Stop()
+	}
+	if t.IsZero() {
 		return nil
 	}
-	c.readDeadline.Reset(t.Sub(time.Now()))
+	c.readDeadline = time.AfterFunc(t.Sub(time.Now()), func() {
+		select {
+		case c.err <- errors.New("timeout"):
+		case <-c.done:
+		default:
+		}
+	})
 	return nil
 }
 

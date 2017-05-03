@@ -37,7 +37,7 @@ func FuzzConn(data []byte) int {
 
 	msg.Accept()
 
-	r.Close()
+	// r.Close() // disabled until link close timeout implemented
 
 	s.Close()
 
