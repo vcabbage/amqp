@@ -482,7 +482,7 @@ func (c *Conn) connReader() {
 
 		// parse the frame
 		payload := bytes.NewBuffer(buf.Next(bodySize))
-		parsedBody, err := parseFrame(payload)
+		parsedBody, err := parseFrameBody(payload)
 		if err != nil {
 			c.readErr <- err
 			return
@@ -652,32 +652,27 @@ func (c *Conn) openAMQP() stateFunc {
 // negotiateSASL returns the SASL handler for the first matched
 // mechanism specified by the server
 func (c *Conn) negotiateSASL() stateFunc {
-	if c.saslHandlers == nil {
-		// we don't support SASL
-		c.err = errorErrorf("server request SASL, but not configured")
-		return nil
-	}
-
+	// read mechanisms frame
 	fr, err := c.readFrame()
 	if err != nil {
 		c.err = err
 		return nil
 	}
-
 	sm, ok := fr.body.(*saslMechanisms)
 	if !ok {
 		c.err = errorErrorf("unexpected frame type %T", fr.body)
 		return nil
 	}
 
+	// return first match in c.saslHandlers based on order received
 	for _, mech := range sm.Mechanisms {
 		if state, ok := c.saslHandlers[mech]; ok {
 			return state
 		}
 	}
 
-	// TODO: send some sort of "auth not supported" frame?
-	c.err = errorErrorf("no supported auth mechanism (%v)", sm.Mechanisms)
+	// no match
+	c.err = errorErrorf("no supported auth mechanism (%v)", sm.Mechanisms) // TODO: send some sort of "auth not supported" frame?
 	return nil
 }
 
@@ -687,25 +682,26 @@ func (c *Conn) negotiateSASL() stateFunc {
 // SASL handlers return this stateFunc when the mechanism specific negotiation
 // has completed.
 func (c *Conn) saslOutcome() stateFunc {
+	// read outcome frame
 	fr, err := c.readFrame()
 	if err != nil {
 		c.err = err
 		return nil
 	}
-
 	so, ok := fr.body.(*saslOutcome)
 	if !ok {
 		c.err = errorErrorf("unexpected frame type %T", fr.body)
 		return nil
 	}
 
+	// check if auth succeeded
 	if so.Code != codeSASLOK {
-		c.err = errorErrorf("SASL PLAIN auth failed with code %#00x: %s", so.Code, so.AdditionalData)
+		c.err = errorErrorf("SASL PLAIN auth failed with code %#00x: %s", so.Code, so.AdditionalData) // implement Stringer for so.Code
 		return nil
 	}
 
+	// return to c.negotiateProto
 	c.saslComplete = true
-
 	return c.negotiateProto
 }
 
@@ -721,6 +717,9 @@ func (c *Conn) readFrame() (frame, error) {
 		return fr, err
 	case p := <-c.rxProto:
 		return fr, errorErrorf("unexpected protocol header %#v", p)
+
+	// fail if we don't get a response after 1 second
+	// TODO: make configurable
 	case <-time.After(1 * time.Second):
 		return fr, errorWrapf(ErrTimeout, "timeout")
 	}

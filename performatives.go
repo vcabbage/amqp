@@ -1,15 +1,13 @@
 package amqp
 
-import (
-	"io/ioutil"
-	"time"
-)
+import "time"
 
-func peekPerformType(r byteReader) (amqpType, error) {
+// peekFrameBodyType peeks at the frame body's type code without advancing r.
+func peekFrameBodyType(r reader) (amqpType, error) {
 	payload := r.Bytes()
 
 	if r.Len() < 3 || payload[0] != 0 || amqpType(payload[1]) != typeCodeSmallUlong {
-		return 0, errorNew("invalid preformative header")
+		return 0, errorNew("invalid frame body header")
 	}
 
 	return amqpType(payload[2]), nil
@@ -64,7 +62,7 @@ func (o *performOpen) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeOpen, fields...)
 }
 
-func (o *performOpen) unmarshal(r byteReader) error {
+func (o *performOpen) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeOpen, []unmarshalField{
 		{field: &o.ContainerID, handleNull: required("Open.ContainerID")},
 		{field: &o.Hostname},
@@ -147,7 +145,7 @@ func (b *performBegin) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeBegin, fields...)
 }
 
-func (b *performBegin) unmarshal(r byteReader) error {
+func (b *performBegin) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeBegin, []unmarshalField{
 		{field: &b.RemoteChannel},
 		{field: &b.NextOutgoingID, handleNull: required("Begin.NextOutgoingID")},
@@ -334,7 +332,7 @@ func (a *performAttach) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeAttach, fields...)
 }
 
-func (a *performAttach) unmarshal(r byteReader) error {
+func (a *performAttach) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeAttach, []unmarshalField{
 		{field: &a.Name, handleNull: required("Attach.Name")},
 		{field: &a.Handle, handleNull: required("Attach.Handle")},
@@ -357,7 +355,7 @@ type deliveryState interface{} // TODO: http://docs.oasis-open.org/amqp/core/v1.
 
 type unsettled map[string]deliveryState
 
-func (u *unsettled) unmarshal(r byteReader) error {
+func (u *unsettled) unmarshal(r reader) error {
 	mr, err := newMapReader(r)
 	if err != nil {
 		return err
@@ -528,7 +526,7 @@ func (s *source) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeSource, fields...)
 }
 
-func (s *source) unmarshal(r byteReader) error {
+func (s *source) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeSource, []unmarshalField{
 		{field: &s.Address},
 		{field: &s.Durable},
@@ -654,7 +652,7 @@ func (t *target) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeTarget, fields...)
 }
 
-func (t *target) unmarshal(r byteReader) error {
+func (t *target) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeTarget, []unmarshalField{
 		{field: &t.Address},
 		{field: &t.Durable},
@@ -805,7 +803,7 @@ func (f *performFlow) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeFlow, fields...)
 }
 
-func (f *performFlow) unmarshal(r byteReader) error {
+func (f *performFlow) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeFlow, []unmarshalField{
 		{field: &f.NextIncomingID},
 		{field: &f.IncomingWindow, handleNull: required("Flow.IncomingWindow")},
@@ -995,7 +993,7 @@ func (t *performTransfer) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeFlow, fields...)
 }
 
-func (t *performTransfer) unmarshal(r byteReader) error {
+func (t *performTransfer) unmarshal(r reader) error {
 	err := unmarshalComposite(r, typeCodeTransfer, []unmarshalField{
 		{field: &t.Handle, handleNull: required("Transfer.Handle")},
 		{field: &t.DeliveryID},
@@ -1083,7 +1081,7 @@ func (d *performDisposition) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeDisposition, fields...)
 }
 
-func (d *performDisposition) unmarshal(r byteReader) error {
+func (d *performDisposition) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeDisposition, []unmarshalField{
 		{field: &d.Role, handleNull: required("Disposition.Role")},
 		{field: &d.First, handleNull: required("Disposition.First")},
@@ -1128,7 +1126,7 @@ func (d *performDetach) marshal() ([]byte, error) {
 	}...)
 }
 
-func (d *performDetach) unmarshal(r byteReader) error {
+func (d *performDetach) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeDetach, []unmarshalField{
 		{field: &d.Handle, handleNull: required("Detach.Handle")},
 		{field: &d.Closed},
@@ -1173,7 +1171,7 @@ func (e *Error) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeError, fields...)
 }
 
-func (e *Error) unmarshal(r byteReader) error {
+func (e *Error) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeError, []unmarshalField{
 		{field: &e.Condition, handleNull: required("Error.Condition")},
 		{field: &e.Description},
@@ -1206,7 +1204,7 @@ func (e *performEnd) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeEnd, fields...)
 }
 
-func (e *performEnd) unmarshal(r byteReader) error {
+func (e *performEnd) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeEnd,
 		unmarshalField{field: &e.Error},
 	)
@@ -1237,7 +1235,7 @@ func (c *performClose) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeClose, fields...)
 }
 
-func (c *performClose) unmarshal(r byteReader) error {
+func (c *performClose) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeClose,
 		unmarshalField{field: &c.Error},
 	)

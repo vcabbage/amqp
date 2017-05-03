@@ -107,7 +107,9 @@ const (
 	typeCodeSASLOutcome   amqpType = 0x44
 )
 
-type byteReader interface {
+// reader is the required interface for unmarshaling AMQP encoded
+// data. It is fulfilled byte *bytes.Buffer.
+type reader interface {
 	io.Reader
 	io.ByteReader
 	UnreadByte() error
@@ -116,19 +118,23 @@ type byteReader interface {
 	Next(int) []byte
 }
 
-type byteWriter interface {
+// writer is the required interface for marshaling AMQP encoded data.
+type writer interface {
 	io.Writer
 	io.ByteWriter
 }
 
+// bufPool is used to reduce allocations when encoding/decoding.
 var bufPool = sync.Pool{
 	New: func() interface{} {
 		return new(bytes.Buffer)
 	},
 }
 
+// unmarshaler is fulfilled by types that can unmarshal
+// themselves from AMQP data.
 type unmarshaler interface {
-	unmarshal(r byteReader) error
+	unmarshal(r reader) error
 }
 
 // unmarshal decodes AMQP encoded data into i.
@@ -148,7 +154,7 @@ type unmarshaler interface {
 //
 // If the decoding function returns errNull, the null return value will
 // be true and err will be nil.
-func unmarshal(r byteReader, i interface{}) (null bool, err error) {
+func unmarshal(r reader, i interface{}) (null bool, err error) {
 	defer func() {
 		// prevent errNull from being passed up
 		if err == errNull {
@@ -157,11 +163,9 @@ func unmarshal(r byteReader, i interface{}) (null bool, err error) {
 		}
 	}()
 
-	if um, ok := i.(unmarshaler); ok {
-		return null, um.unmarshal(r)
-	}
-
 	switch t := i.(type) {
+	case unmarshaler:
+		return null, t.unmarshal(r)
 	case *int:
 		val, err := readInt(r)
 		if err != nil {
@@ -254,9 +258,11 @@ func unmarshal(r byteReader, i interface{}) (null bool, err error) {
 	return null, nil
 }
 
+// mapAnyAny is used to decode AMQP maps who's keys are undefined or
+// inconsistently typed.
 type mapAnyAny map[interface{}]interface{}
 
-func (m *mapAnyAny) unmarshal(r byteReader) error {
+func (m *mapAnyAny) unmarshal(r reader) error {
 	mr, err := newMapReader(r)
 	if err != nil {
 		return err
@@ -287,9 +293,10 @@ func (m *mapAnyAny) unmarshal(r byteReader) error {
 	return nil
 }
 
+// mapStringAny is used to decode AMQP maps that have string keys
 type mapStringAny map[string]interface{}
 
-func (m *mapStringAny) unmarshal(r byteReader) error {
+func (m *mapStringAny) unmarshal(r reader) error {
 	mr, err := newMapReader(r)
 	if err != nil {
 		return err
@@ -309,9 +316,10 @@ func (m *mapStringAny) unmarshal(r byteReader) error {
 	return nil
 }
 
+// mapStringAny is used to decode AMQP maps that have Symbol keys
 type mapSymbolAny map[Symbol]interface{}
 
-func (f *mapSymbolAny) unmarshal(r byteReader) error {
+func (f *mapSymbolAny) unmarshal(r reader) error {
 	mr, err := newMapReader(r)
 	if err != nil {
 		return err
@@ -331,19 +339,29 @@ func (f *mapSymbolAny) unmarshal(r byteReader) error {
 	return nil
 }
 
+// unmarshalField is a struct that contains a field to be unmarshaled into.
+//
+// An optional nullHandler can be set. If the composite field being unmarshaled
+// is null and handleNull is not nil, nullHandler will be called.
 type unmarshalField struct {
 	field      interface{}
 	handleNull nullHandler
 }
 
+// nullHandler is a function to be called when a composite's field
+// is null.
 type nullHandler func() error
 
+// required returns a nullHandler that will cause an error to
+// be returned if the field is null.
 func required(name string) nullHandler {
 	return func() error {
 		return errorNew(name + " is required")
 	}
 }
 
+// defaultUint32 returns a nullHandler that sets n to defaultValue
+// if the field is null.
 func defaultUint32(n *uint32, defaultValue uint32) nullHandler {
 	return func() error {
 		*n = defaultValue
@@ -351,6 +369,8 @@ func defaultUint32(n *uint32, defaultValue uint32) nullHandler {
 	}
 }
 
+// defaultUint16 returns a nullHandler that sets n to defaultValue
+// if the field is null.
 func defaultUint16(n *uint16, defaultValue uint16) nullHandler {
 	return func() error {
 		*n = defaultValue
@@ -358,6 +378,8 @@ func defaultUint16(n *uint16, defaultValue uint16) nullHandler {
 	}
 }
 
+// defaultUint8 returns a nullHandler that sets n to defaultValue
+// if the field is null.
 func defaultUint8(n *uint8, defaultValue uint8) nullHandler {
 	return func() error {
 		*n = defaultValue
@@ -365,32 +387,45 @@ func defaultUint8(n *uint8, defaultValue uint8) nullHandler {
 	}
 }
 
-func defaultSymbol(s *Symbol, v Symbol) nullHandler {
+// defaultSymbol returns a nullHandler that sets s to defaultValue
+// if the field is null.
+func defaultSymbol(s *Symbol, defaultValue Symbol) nullHandler {
 	return func() error {
-		*s = v
+		*s = defaultValue
 		return nil
 	}
 }
 
-func unmarshalComposite(r byteReader, typ amqpType, fields ...unmarshalField) error {
+// unmarshalComposite is a helper for us in a composite's unmarshal() function.
+//
+// The composite from r will be unmarshaled into zero or more fields. An error
+// will be returned if typ does not match the decoded type.
+func unmarshalComposite(r reader, typ amqpType, fields ...unmarshalField) error {
 	t, numFields, err := readCompositeHeader(r)
 	if err != nil {
 		return err
 	}
 
+	// check type matches expectation
 	if t != typ {
 		return errorErrorf("invalid header %#0x for %#0x", t, typ)
 	}
 
+	// Validate the field count is less than or equal to the number of fields
+	// provided. Fields may be omitted by the sender if they are not set.
 	if numFields > len(fields) {
 		return errorErrorf("invalid field count %d for %#0x", numFields, typ)
 	}
 
 	for i := 0; i < numFields; i++ {
+		// Unmarshal each of the received fields.
 		null, err := unmarshal(r, fields[i].field)
 		if err != nil {
 			return errorWrapf(err, "unmarshaling field %d", i)
 		}
+
+		// If the field is null and handleNull is set,
+		// call it.
 		if null && fields[i].handleNull != nil {
 			err = fields[i].handleNull()
 			if err != nil {
@@ -398,45 +433,74 @@ func unmarshalComposite(r byteReader, typ amqpType, fields ...unmarshalField) er
 			}
 		}
 	}
+
+	// check and call handleNull for the remaining fields
+	for i := numFields; i < len(fields); i++ {
+		if fields[i].handleNull != nil {
+			err = fields[i].handleNull()
+			if err != nil {
+				return err
+			}
+		}
+	}
+
 	return nil
 }
 
-func readCompositeHeader(r byteReader) (_ amqpType, fields int, _ error) {
+// readCompositeHeader reads and consumes the composite header from r.
+//
+// If the composite is null, errNull will be returned.
+func readCompositeHeader(r reader) (_ amqpType, fields int, _ error) {
 	byt, err := r.ReadByte()
 	if err != nil {
 		return 0, 0, err
 	}
 
+	// could be null instead of a composite header
 	if amqpType(byt) == typeCodeNull {
 		return 0, 0, errNull
 	}
 
+	// compsites always start with 0x0
 	if byt != 0 {
 		return 0, 0, errorErrorf("invalid composite header %0x", byt)
 	}
 
+	// next, the composite type is encoded as an AMQP uint8
 	v, err := readInt(r)
 	if err != nil {
 		return 0, 0, err
 	}
 
-	fields, _, err = readSlice(r)
+	// fields are represented as a list
+	fields, _, err = readHeaderSlice(r)
 
 	return amqpType(v), fields, err
 }
 
+// marshalField is a field to be marshaled
 type marshalField struct {
 	value interface{}
-	omit  bool
+	omit  bool // indicates that this field should be omitted (set to null)
 }
 
+// marshalComposite is a helper for us in a composite's marshal() function.
+//
+// The returned bytes include the composite header and fields. Fields with
+// omit set to true will be encoded as null or omitted altogether if there are
+// no non-null fields after them.
 func marshalComposite(code amqpType, fields ...marshalField) ([]byte, error) {
 	var (
-		rawFields  = make([][]byte, len(fields))
+		rawFields = make([][]byte, len(fields)) // sized to the total number of fields
+
+		// lastSetIdx is the last index to have a non-omitted field.
+		// start at -1 as it's possible to have no fields in a composite
 		lastSetIdx = -1
-		err        error
 	)
 
+	// marshal each field into it's index in rawFields,
+	// null fields are skipped, leaving the index nil.
+	var err error
 	for i, f := range fields {
 		if f.omit {
 			continue
@@ -450,6 +514,7 @@ func marshalComposite(code amqpType, fields ...marshalField) ([]byte, error) {
 		lastSetIdx = i
 	}
 
+	// write null to each index up to lastSetIdx
 	for i := 0; i < lastSetIdx+1; i++ {
 		if rawFields[i] == nil {
 			rawFields[i] = []byte{byte(typeCodeNull)}
@@ -460,15 +525,23 @@ func marshalComposite(code amqpType, fields ...marshalField) ([]byte, error) {
 	defer bufPool.Put(buf)
 	buf.Reset()
 
-	err = writeComposite(buf, code, rawFields[:lastSetIdx+1]...)
+	// write header
+	_, err = buf.Write([]byte{0x0, byte(typeCodeSmallUlong), uint8(code)})
 	if err != nil {
 		return nil, err
 	}
 
+	// write fields
+	err = writeList(buf, rawFields[:lastSetIdx+1]...)
+	if err != nil {
+		return nil, err
+	}
+
+	// copy bytes so buf can be returned to pool
 	return append([]byte(nil), buf.Bytes()...), nil
 }
 
-func writeSymbolArray(w byteWriter, symbols []Symbol) error {
+func writeSymbolArray(w writer, symbols []Symbol) error {
 	ofType := typeCodeSym8
 	for _, symbol := range symbols {
 		if len(symbol) > math.MaxUint8 {
@@ -494,7 +567,7 @@ func writeSymbolArray(w byteWriter, symbols []Symbol) error {
 	return writeArray(w, ofType, elems...)
 }
 
-func writeSymbol(wr byteWriter, sym Symbol, typ amqpType) error {
+func writeSymbol(wr writer, sym Symbol, typ amqpType) error {
 	if !utf8.ValidString(string(sym)) {
 		return errorNew("not a valid UTF-8 string")
 	}
@@ -516,7 +589,7 @@ func writeSymbol(wr byteWriter, sym Symbol, typ amqpType) error {
 	return err
 }
 
-func writeString(wr byteWriter, str string) error {
+func writeString(wr writer, str string) error {
 	if !utf8.ValidString(str) {
 		return errorNew("not a valid UTF-8 string")
 	}
@@ -543,7 +616,7 @@ func writeString(wr byteWriter, str string) error {
 	}
 }
 
-func writeBinary(wr byteWriter, bin []byte) error {
+func writeBinary(wr writer, bin []byte) error {
 	l := len(bin)
 
 	switch {
@@ -567,26 +640,17 @@ func writeBinary(wr byteWriter, bin []byte) error {
 	}
 }
 
-func writeComposite(wr byteWriter, code amqpType, fields ...[]byte) error {
-	_, err := wr.Write([]byte{0x0, byte(typeCodeSmallUlong), uint8(code)})
-	if err != nil {
-		return err
-	}
-
-	return writeList(wr, fields...)
-}
-
-func writeArray(wr byteWriter, of amqpType, fields ...[]byte) error {
+func writeArray(wr writer, of amqpType, fields ...[]byte) error {
 	const isArray = true
 	return writeSlice(wr, isArray, of, fields...)
 }
 
-func writeList(wr byteWriter, fields ...[]byte) error {
+func writeList(wr writer, fields ...[]byte) error {
 	const isArray = false
 	return writeSlice(wr, isArray, 0, fields...)
 }
 
-func writeSlice(wr byteWriter, isArray bool, of amqpType, fields ...[]byte) error {
+func writeSlice(wr writer, isArray bool, of amqpType, fields ...[]byte) error {
 	var size int
 	for _, field := range fields {
 		size += len(field)
@@ -651,8 +715,8 @@ func writeSlice(wr byteWriter, isArray bool, of amqpType, fields ...[]byte) erro
 	return nil
 }
 
-func readStringArray(r byteReader) ([]string, error) {
-	lElems, _, err := readSlice(r)
+func readStringArray(r reader) ([]string, error) {
+	lElems, _, err := readHeaderSlice(r)
 	if err != nil {
 		return nil, err
 	}
@@ -674,8 +738,8 @@ func readStringArray(r byteReader) ([]string, error) {
 	return strs, nil
 }
 
-func readSymbolArray(r byteReader) ([]Symbol, error) {
-	lElems, _, err := readSlice(r)
+func readSymbolArray(r reader) ([]Symbol, error) {
+	lElems, _, err := readHeaderSlice(r)
 	if err != nil {
 		return nil, err
 	}
@@ -697,7 +761,7 @@ func readSymbolArray(r byteReader) ([]Symbol, error) {
 	return strs, nil
 }
 
-func readString(r byteReader) (string, error) {
+func readString(r reader) (string, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return "", err
@@ -707,7 +771,7 @@ func readString(r byteReader) (string, error) {
 	return string(vari), err
 }
 
-func readBinary(r byteReader) ([]byte, error) {
+func readBinary(r reader) ([]byte, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return nil, err
@@ -719,7 +783,7 @@ func readBinary(r byteReader) ([]byte, error) {
 
 var errInvalidLength = errorNew("length field is larger than frame")
 
-func readVariableType(r byteReader, of amqpType) ([]byte, error) {
+func readVariableType(r reader, of amqpType) ([]byte, error) {
 	var buf []byte
 	switch of {
 	case typeCodeNull:
@@ -750,7 +814,7 @@ func readVariableType(r byteReader, of amqpType) ([]byte, error) {
 	return buf, err
 }
 
-func readSlice(r byteReader) (elements int, length int, _ error) {
+func readHeaderSlice(r reader) (elements int, length int, _ error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return 0, 0, err
@@ -799,7 +863,7 @@ func readSlice(r byteReader) (elements int, length int, _ error) {
 	return elements, length, nil
 }
 
-func readAny(r byteReader) (interface{}, error) {
+func readAny(r reader) (interface{}, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return nil, err
@@ -835,7 +899,7 @@ func readAny(r byteReader) (interface{}, error) {
 	}
 }
 
-func readTimestamp(r byteReader) (time.Time, error) {
+func readTimestamp(r reader) (time.Time, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return time.Time{}, err
@@ -854,7 +918,7 @@ func readTimestamp(r byteReader) (time.Time, error) {
 	return time.Unix(int64(n)/1000, int64(rem)*1000000).UTC(), err
 }
 
-func readInt(r byteReader) (value int, _ error) {
+func readInt(r reader) (value int, _ error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return 0, err
@@ -902,7 +966,7 @@ func readInt(r byteReader) (value int, _ error) {
 	}
 }
 
-func readBool(r byteReader) (bool, error) {
+func readBool(r reader) (bool, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return false, err
@@ -928,7 +992,7 @@ func readBool(r byteReader) (bool, error) {
 
 var errNull = errorNew("error is null")
 
-func readUint(r byteReader) (value uint64, _ error) {
+func readUint(r reader) (value uint64, _ error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return 0, err
@@ -1071,14 +1135,14 @@ func (m milliseconds) marshal() ([]byte, error) {
 	return marshal(uint32((time.Duration)(m).Nanoseconds() / 1000000))
 }
 
-func (m *milliseconds) unmarshal(r byteReader) error {
+func (m *milliseconds) unmarshal(r reader) error {
 	var n uint32
 	_, err := unmarshal(r, &n)
 	*m = milliseconds(time.Duration(n) * time.Millisecond)
 	return err
 }
 
-func writeMapHeader(wr byteWriter, elements int) error {
+func writeMapHeader(wr writer, elements int) error {
 	if elements < math.MaxUint8 {
 		err := wr.WriteByte(byte(typeCodeMap8))
 		if err != nil {
@@ -1094,7 +1158,7 @@ func writeMapHeader(wr byteWriter, elements int) error {
 	return binary.Write(wr, binary.BigEndian, uint32(elements))
 }
 
-func writeMapElement(wr byteWriter, key, value interface{}) error {
+func writeMapElement(wr writer, key, value interface{}) error {
 	keyBytes, err := marshal(key)
 	if err != nil {
 		return err
@@ -1111,25 +1175,25 @@ func writeMapElement(wr byteWriter, key, value interface{}) error {
 	return err
 }
 
-type limitByteReader struct {
-	byteReader
+type limitReader struct {
+	reader
 	limit uint32
 	read  uint32
 }
 
 var errLimitReached = errorNew("limit reached")
 
-func (r *limitByteReader) Read(p []byte) (int, error) {
+func (r *limitReader) Read(p []byte) (int, error) {
 	if r.read >= r.limit {
 		return 0, errLimitReached
 	}
-	n, err := r.byteReader.Read(p)
+	n, err := r.reader.Read(p)
 	r.read += uint32(n)
 	return n, err
 }
 
 type mapReader struct {
-	r     *limitByteReader
+	r     *limitReader
 	count int // elements (2 * # of pairs)
 	read  int
 }
@@ -1156,7 +1220,7 @@ func (mr *mapReader) next(key, value interface{}) error {
 	return nil
 }
 
-func newMapReader(r byteReader) (*mapReader, error) {
+func newMapReader(r reader) (*mapReader, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return nil, err
@@ -1191,7 +1255,7 @@ func newMapReader(r byteReader) (*mapReader, error) {
 	}
 
 	return &mapReader{
-		r:     &limitByteReader{byteReader: r, limit: n},
+		r:     &limitReader{reader: r, limit: n},
 		count: int(b),
 	}, nil
 }

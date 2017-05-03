@@ -11,7 +11,7 @@ const (
 
 type saslCode int
 
-func (s *saslCode) unmarshal(r byteReader) error {
+func (s *saslCode) unmarshal(r reader) error {
 	_, err := unmarshal(r, (*int)(s))
 	return err
 }
@@ -22,37 +22,34 @@ const (
 )
 
 // ConnSASLPlain enables SASL PLAIN authentication for the connection.
+//
+// SASL PLAIN transmits credentials in plain text and should only be used
+// on TLS/SSL enabled connection.
 func ConnSASLPlain(username, password string) ConnOption {
+	// TODO: how widely used is hostname? should it be supported
 	return func(c *Conn) error {
+		// make handlers map if no other mechanism has
 		if c.saslHandlers == nil {
 			c.saslHandlers = make(map[Symbol]stateFunc)
 		}
-		c.saslHandlers[saslMechanismPLAIN] = (&saslHandlerPlain{
-			c:        c,
-			username: username,
-			password: password,
-		}).init
+
+		// add the handler the the map
+		c.saslHandlers[saslMechanismPLAIN] = func() stateFunc {
+			// send saslInit with PLAIN payload
+			c.txFrame(frame{
+				typ: frameTypeSASL,
+				body: &saslInit{
+					Mechanism:       "PLAIN",
+					InitialResponse: []byte("\x00" + username + "\x00" + password),
+					Hostname:        "",
+				},
+			})
+
+			// go to c.saslOutcome to handle the server response
+			return c.saslOutcome
+		}
 		return nil
 	}
-}
-
-type saslHandlerPlain struct {
-	c        *Conn
-	username string
-	password string
-}
-
-func (h *saslHandlerPlain) init() stateFunc {
-	h.c.txFrame(frame{
-		typ: frameTypeSASL,
-		body: &saslInit{
-			Mechanism:       "PLAIN",
-			InitialResponse: []byte("\x00" + h.username + "\x00" + h.password),
-			Hostname:        "",
-		},
-	})
-
-	return h.c.saslOutcome
 }
 
 /*
@@ -93,7 +90,7 @@ type saslMechanisms struct {
 	Mechanisms []Symbol
 }
 
-func (sm *saslMechanisms) unmarshal(r byteReader) error {
+func (sm *saslMechanisms) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeSASLMechanism,
 		unmarshalField{field: &sm.Mechanisms, handleNull: required("SASLMechanisms.Mechanisms")},
 	)
@@ -116,7 +113,7 @@ type saslOutcome struct {
 	AdditionalData []byte
 }
 
-func (so *saslOutcome) unmarshal(r byteReader) error {
+func (so *saslOutcome) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeSASLOutcome, []unmarshalField{
 		{field: &so.Code, handleNull: required("SASLOutcome.Code")},
 		{field: &so.AdditionalData},

@@ -115,7 +115,7 @@ func (m *Message) Release() {
 
 // TODO: add support for sending Modified disposition
 
-func (m *Message) unmarshal(r byteReader) error {
+func (m *Message) unmarshal(r reader) error {
 	for r.Len() > 0 {
 		typ, err := peekMessageType(r.Bytes())
 		if err != nil {
@@ -208,7 +208,7 @@ func (h *MessageHeader) marshal() ([]byte, error) {
 	}...)
 }
 
-func (h *MessageHeader) unmarshal(r byteReader) error {
+func (h *MessageHeader) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeMessageHeader, []unmarshalField{
 		{field: &h.Durable},
 		{field: &h.Priority, handleNull: defaultUint8(&h.Priority, 4)},
@@ -273,7 +273,7 @@ func (p *MessageProperties) marshal() ([]byte, error) {
 	}...)
 }
 
-func (p *MessageProperties) unmarshal(r byteReader) error {
+func (p *MessageProperties) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeMessageProperties, []unmarshalField{
 		{field: &p.MessageID},
 		{field: &p.UserID},
@@ -331,7 +331,7 @@ func (sr *stateReceived) marshal() ([]byte, error) {
 	}...)
 }
 
-func (sr *stateReceived) unmarshal(r byteReader) error {
+func (sr *stateReceived) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeStateReceived, []unmarshalField{
 		{field: &sr.SectionNumber, handleNull: required("StateReceived.SectionNumber")},
 		{field: &sr.SectionOffset, handleNull: required("StateReceived.SectionOffset")},
@@ -350,7 +350,7 @@ func (sa *stateAccepted) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeStateAccepted)
 }
 
-func (sa *stateAccepted) unmarshal(r byteReader) error {
+func (sa *stateAccepted) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeStateAccepted)
 }
 
@@ -371,7 +371,7 @@ func (sr *stateRejected) marshal() ([]byte, error) {
 	)
 }
 
-func (sr *stateRejected) unmarshal(r byteReader) error {
+func (sr *stateRejected) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeStateRejected,
 		unmarshalField{field: &sr.Error},
 	)
@@ -389,7 +389,7 @@ func (sr *stateReleased) marshal() ([]byte, error) {
 	return marshalComposite(typeCodeStateReleased)
 }
 
-func (sr *stateReleased) unmarshal(r byteReader) error {
+func (sr *stateReleased) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeStateReleased)
 }
 
@@ -433,7 +433,7 @@ func (sm *stateModified) marshal() ([]byte, error) {
 	}...)
 }
 
-func (sm *stateModified) unmarshal(r byteReader) error {
+func (sm *stateModified) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeStateModified, []unmarshalField{
 		{field: &sm.DeliveryFailed},
 		{field: &sm.UndeliverableHere},

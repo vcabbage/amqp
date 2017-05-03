@@ -1,6 +1,7 @@
 package amqp
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"math"
@@ -75,9 +76,9 @@ func parseProtoHeader(r io.Reader) (protoHeader, error) {
 	return p, nil
 }
 
-// parseFrame reads and unmarshals an AMQP frame.
-func parseFrame(r byteReader) (frameBody, error) {
-	pType, err := peekPerformType(r)
+// parseFrameBody reads and unmarshals an AMQP frame.
+func parseFrameBody(r reader) (frameBody, error) {
+	pType, err := peekFrameBodyType(r)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +115,7 @@ func parseFrame(r byteReader) (frameBody, error) {
 	return t, err
 }
 
+// frame is the decoded representation of a frame
 type frame struct {
 	typ     uint8     // AMQP/SASL
 	channel uint16    // channel this frame is for
@@ -146,11 +148,13 @@ func writeFrame(wr io.Writer, fr frame) error {
 		Channel:    fr.channel,
 	}
 
-	err = binary.Write(wr, binary.BigEndian, header)
+	var buf bytes.Buffer
+	err = binary.Write(&buf, binary.BigEndian, header)
 	if err != nil {
 		return err
 	}
 
-	_, err = wr.Write(data)
+	// frame needs to network as a single chunk
+	_, err = wr.Write(append(buf.Bytes(), data...)) // TODO: have a connWriter, like connReader
 	return err
 }
