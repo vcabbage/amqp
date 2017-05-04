@@ -11,7 +11,7 @@ import (
 )
 
 func FuzzConn(data []byte) int {
-	conn, err := New(testconn.New(data),
+	client, err := New(testconn.New(data),
 		ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
 		ConnIdleTimeout(10*time.Millisecond),
 	)

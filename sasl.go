@@ -36,7 +36,7 @@ func ConnSASLPlain(username, password string) ConnOption {
 		// add the handler the the map
 		c.saslHandlers[saslMechanismPLAIN] = func() stateFunc {
 			// send saslInit with PLAIN payload
-			c.wantWriteFrame(frame{
+			c.err = c.writeFrame(frame{
 				typ: frameTypeSASL,
 				body: &saslInit{
 					Mechanism:       "PLAIN",
@@ -44,6 +44,9 @@ func ConnSASLPlain(username, password string) ConnOption {
 					Hostname:        "",
 				},
 			})
+			if c.err != nil {
+				return nil
+			}
 
 			// go to c.saslOutcome to handle the server response
 			return c.saslOutcome

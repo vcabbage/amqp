@@ -149,8 +149,8 @@ type conn struct {
 	rxFrame chan frame       // AMQP frames received by connReader
 
 	// connWriter
-	txProto chan protoID // protoHeaders to be sent by connWriter
-	txFrame chan frame   // AMQP frames to be sent by connWriter
+	txFrame chan frame // AMQP frames to be sent by connWriter
+	txBuf   bytes.Buffer
 }
 
 func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
@@ -166,7 +166,6 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 		rxFrame:          make(chan frame),
 		newSession:       make(chan *Session),
 		delSession:       make(chan *Session),
-		txProto:          make(chan protoID),
 		txFrame:          make(chan frame),
 	}
 
@@ -177,9 +176,8 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 		}
 	}
 
-	// start reader/writer
+	// start reader
 	go c.connReader()
-	go c.connWriter()
 
 	// run connection establishment state machine
 	for state := c.negotiateProto; state != nil; {
@@ -192,10 +190,11 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 		return nil, c.err
 	}
 
-	// start multiplexor
+	// start multiplexor and writer
 	go c.mux()
+	go c.connWriter()
 
-	return c, c.err
+	return c, nil
 }
 
 func (c *conn) close() error {
@@ -419,8 +418,6 @@ func (c *conn) connWriter() {
 		keepalive = ticker.C
 	}
 
-	buf := new(bytes.Buffer)
-
 	var err error
 	for {
 		if err != nil {
@@ -431,35 +428,44 @@ func (c *conn) connWriter() {
 		select {
 		// frame write request
 		case fr := <-c.txFrame:
-			if c.connectTimeout != 0 {
-				c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
-			}
-			buf.Reset()
-			err = writeFrame(buf, fr)
-			if err != nil {
-				continue
-			}
-
-			if uint64(buf.Len()) > uint64(c.peerMaxFrameSize) {
-				err = errorErrorf("frame larger than peer ")
-				continue
-			}
-
-			_, err = c.net.Write(buf.Bytes())
-
-		case pID := <-c.txProto:
-			if c.connectTimeout != 0 {
-				c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
-			}
-			_, err = c.net.Write([]byte{'A', 'M', 'Q', 'P', byte(pID), 1, 0, 0})
+			err = c.writeFrame(fr)
 
 		// keepalive timer
-		case <-keepalive:
+		case <-keepalive: // TODO: this should be in connReader?
 			// TODO: reset timer on non-keepalive transmit
 			_, err = c.net.Write(keepaliveFrame)
 		case <-c.done:
+			return
 		}
 	}
+}
+
+// writeFrame writes a frame to the network, may only be used
+// by connWriter after initial negotiation.
+func (c *conn) writeFrame(fr frame) error {
+	if c.connectTimeout != 0 {
+		c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
+	}
+	c.txBuf.Reset()
+	err := writeFrame(&c.txBuf, fr)
+	if err != nil {
+		return err
+	}
+
+	if uint64(c.txBuf.Len()) > uint64(c.peerMaxFrameSize) {
+		return errorErrorf("frame larger than peer ")
+	}
+
+	_, err = c.net.Write(c.txBuf.Bytes())
+	return err
+}
+
+func (c *conn) writeProtoHeader(pID protoID) error {
+	if c.connectTimeout != 0 {
+		c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
+	}
+	_, err := c.net.Write([]byte{'A', 'M', 'Q', 'P', byte(pID), 1, 0, 0})
+	return err
 }
 
 // keepaliveFrame is an AMQP frame with no body, used for keepalives
@@ -468,13 +474,6 @@ var keepaliveFrame = []byte{0x00, 0x00, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00}
 func (c *conn) wantWriteFrame(fr frame) {
 	select {
 	case c.txFrame <- fr:
-	case <-c.done:
-	}
-}
-
-func (c *conn) wantWriteProtoHeader(p protoID) {
-	select {
-	case c.txProto <- p:
 	case <-c.done:
 	}
 }
@@ -511,7 +510,10 @@ const (
 // headers, validation, and returns the protoID specific next state.
 func (c *conn) exchangeProtoHeader(pID protoID) stateFunc {
 	// write the proto header
-	c.wantWriteProtoHeader(pID)
+	c.err = c.writeProtoHeader(pID)
+	if c.err != nil {
+		return nil
+	}
 
 	// read response header
 	var deadline <-chan time.Time
@@ -591,7 +593,7 @@ func (c *conn) startTLS() stateFunc {
 // openAMQP round trips the AMQP open performative
 func (c *conn) openAMQP() stateFunc {
 	// send open frame
-	c.wantWriteFrame(frame{
+	c.err = c.writeFrame(frame{
 		typ: frameTypeAMQP,
 		body: &performOpen{
 			ContainerID:  randString(),
@@ -602,6 +604,9 @@ func (c *conn) openAMQP() stateFunc {
 		},
 		channel: 0,
 	})
+	if c.err != nil {
+		return nil
+	}
 
 	// get the response
 	fr, err := c.readFrame()

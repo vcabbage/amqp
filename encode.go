@@ -142,61 +142,58 @@ type marshalField struct {
 // omit set to true will be encoded as null or omitted altogether if there are
 // no non-null fields after them.
 func marshalComposite(wr writer, code amqpType, fields ...marshalField) error {
-	if len(fields) == 0 {
-		// write header only
+	// lastSetIdx is the last index to have a non-omitted field.
+	// start at -1 as it's possible to have no fields in a composite
+	lastSetIdx := -1
+
+	// marshal each field into it's index in rawFields,
+	// null fields are skipped, leaving the index nil.
+	for i, f := range fields {
+		if f.omit {
+			continue
+		}
+		lastSetIdx = i
+	}
+
+	// write header only
+	if lastSetIdx == -1 {
 		_, err := wr.Write([]byte{0x0, byte(typeCodeSmallUlong), byte(code), byte(typeCodeList0)})
 		return err
 	}
-
-	var (
-		rawFields = make([][]byte, len(fields)) // sized to the total number of fields
-
-		// lastSetIdx is the last index to have a non-omitted field.
-		// start at -1 as it's possible to have no fields in a composite
-		lastSetIdx = -1
-	)
 
 	buf := bufPool.Get().(*bytes.Buffer)
 	defer bufPool.Put(buf)
 	buf.Reset()
 
-	// marshal each field into it's index in rawFields,
-	// null fields are skipped, leaving the index nil.
-	var err error
-	for i, f := range fields {
+	// write null to each index up to lastSetIdx
+	for _, f := range fields[:lastSetIdx+1] {
 		if f.omit {
+			buf.WriteByte(byte(typeCodeNull))
 			continue
 		}
-
-		err = marshal(buf, f.value)
+		err := marshal(buf, f.value)
 		if err != nil {
 			return err
-		}
-
-		rawFields[i] = append([]byte(nil), buf.Bytes()...) // TODO: is there a cleaner way to do this?
-		buf.Reset()
-
-		lastSetIdx = i
-	}
-
-	// write null to each index up to lastSetIdx
-	for i := 0; i < lastSetIdx+1; i++ {
-		if rawFields[i] == nil {
-			rawFields[i] = []byte{byte(typeCodeNull)}
 		}
 	}
 
 	// write header
-	_, err = wr.Write([]byte{0x0, byte(typeCodeSmallUlong), uint8(code)})
+	_, err := wr.Write([]byte{0x0, byte(typeCodeSmallUlong), uint8(code)})
 	if err != nil {
 		return err
 	}
 
 	// write fields
-	return writeList(wr, rawFields[:lastSetIdx+1]...)
+	err = writeList(wr, lastSetIdx+1, buf.Len())
+	if err != nil {
+		return err
+	}
+
+	_, err = buf.WriteTo(wr)
+	return err
 }
 
-func writeSymbolArray(w writer, symbols []Symbol) error {
+func writeSymbolArray(wr writer, symbols []Symbol) error {
 	ofType := typeCodeSym8
 	for _, symbol := range symbols {
 		if len(symbol) > math.MaxUint8 {
@@ -208,18 +205,20 @@ func writeSymbolArray(w writer, symbols []Symbol) error {
 	buf := bufPool.Get().(*bytes.Buffer)
 	defer bufPool.Put(buf)
 
-	var elems [][]byte
 	for _, symbol := range symbols {
-		buf.Reset()
 		err := writeSymbol(buf, symbol, ofType)
 		if err != nil {
 			return err
 		}
-
-		elems = append(elems, append([]byte(nil), buf.Bytes()...))
 	}
 
-	return writeArray(w, ofType, elems...)
+	err := writeArray(wr, ofType, len(symbols), buf.Len())
+	if err != nil {
+		return err
+	}
+
+	_, err = buf.WriteTo(wr)
+	return err
 }
 
 func writeSymbol(wr writer, sym Symbol, typ amqpType) error {
@@ -295,22 +294,17 @@ func writeBinary(wr writer, bin []byte) error {
 	}
 }
 
-func writeArray(wr writer, of amqpType, fields ...[]byte) error {
+func writeArray(wr writer, of amqpType, numFields int, size int) error {
 	const isArray = true
-	return writeSlice(wr, isArray, of, fields...)
+	return writeSlice(wr, isArray, of, numFields, size)
 }
 
-func writeList(wr writer, fields ...[]byte) error {
+func writeList(wr writer, numFields int, size int) error {
 	const isArray = false
-	return writeSlice(wr, isArray, 0, fields...)
+	return writeSlice(wr, isArray, 0, numFields, size)
 }
 
-func writeSlice(wr writer, isArray bool, of amqpType, fields ...[]byte) error {
-	var size int
-	for _, field := range fields {
-		size += len(field)
-	}
-
+func writeSlice(wr writer, isArray bool, of amqpType, numFields int, size int) error {
 	size8 := typeCodeList8
 	size32 := typeCodeList32
 	if isArray {
@@ -318,23 +312,23 @@ func writeSlice(wr writer, isArray bool, of amqpType, fields ...[]byte) error {
 		size32 = typeCodeArray32
 	}
 
-	switch l := len(fields); {
+	switch {
 	// list0
-	case l == 0:
+	case numFields == 0:
 		if isArray {
 			return errorNew("invalid array length 0")
 		}
 		return wr.WriteByte(byte(typeCodeList0))
 
 	// list8
-	case l < 256 && size < 256:
-		_, err := wr.Write([]byte{byte(size8), uint8(size + 1), uint8(l)})
+	case numFields < 256 && size < 256:
+		_, err := wr.Write([]byte{byte(size8), uint8(size + 1), uint8(numFields)})
 		if err != nil {
 			return err
 		}
 
 	// list32
-	case l < math.MaxUint32 && size < math.MaxUint32:
+	case numFields < math.MaxUint32 && size < math.MaxUint32:
 		err := wr.WriteByte(byte(size32))
 		if err != nil {
 			return err
@@ -343,7 +337,7 @@ func writeSlice(wr writer, isArray bool, of amqpType, fields ...[]byte) error {
 		if err != nil {
 			return err
 		}
-		err = binary.Write(wr, binary.BigEndian, uint32(l))
+		err = binary.Write(wr, binary.BigEndian, uint32(numFields))
 		if err != nil {
 			return err
 		}
@@ -354,14 +348,6 @@ func writeSlice(wr writer, isArray bool, of amqpType, fields ...[]byte) error {
 
 	if isArray {
 		err := wr.WriteByte(byte(of))
-		if err != nil {
-			return err
-		}
-	}
-
-	// Write fields
-	for _, field := range fields {
-		_, err := wr.Write(field)
 		if err != nil {
 			return err
 		}
