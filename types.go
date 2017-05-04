@@ -140,7 +140,7 @@ const (
 // protoHeader in a structure appropriate for use with binary.Read()
 type protoHeader struct {
 	Proto    [4]byte
-	ProtoID  uint8
+	ProtoID  protoID
 	Major    uint8
 	Minor    uint8
 	Revision uint8

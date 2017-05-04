@@ -36,7 +36,7 @@ func ConnSASLPlain(username, password string) ConnOption {
 		// add the handler the the map
 		c.saslHandlers[saslMechanismPLAIN] = func() stateFunc {
 			// send saslInit with PLAIN payload
-			c.txFrame(frame{
+			c.wantWriteFrame(frame{
 				typ: frameTypeSASL,
 				body: &saslInit{
 					Mechanism:       "PLAIN",

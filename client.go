@@ -60,46 +60,9 @@ func Dial(addr string, opts ...ConnOption) (*Client, error) {
 
 // New establishes an AMQP client connection on a pre-established
 // net.Conn.
-func New(netConn net.Conn, opts ...ConnOption) (*Client, error) {
-	c := &conn{
-		net:              netConn,
-		maxFrameSize:     defaultMaxFrameSize,
-		peerMaxFrameSize: defaultMaxFrameSize,
-		channelMax:       defaultChannelMax,
-		idleTimeout:      defaultIdleTimeout,
-		done:             make(chan struct{}),
-		readErr:          make(chan error, 1), // buffered to ensure connReader doesn't leak
-		rxProto:          make(chan protoHeader),
-		rxFrame:          make(chan frame),
-		newSession:       make(chan *Session),
-		delSession:       make(chan *Session),
-	}
-
-	// apply options
-	for _, opt := range opts {
-		if err := opt(c); err != nil {
-			return nil, err
-		}
-	}
-
-	// start connReader
-	go c.connReader()
-
-	// run connection establishment state machine
-	for state := c.negotiateProto; state != nil; {
-		state = state()
-	}
-
-	// check if err occurred
-	if c.err != nil {
-		c.close()
-		return nil, c.err
-	}
-
-	// start multiplexor
-	go c.mux()
-
-	return &Client{conn: c}, nil
+func New(conn net.Conn, opts ...ConnOption) (*Client, error) {
+	c, err := newConn(conn, opts...)
+	return &Client{conn: c}, err
 }
 
 // Close disconnects the connection.
@@ -118,14 +81,10 @@ func (c *Client) NewSession() (*Session, error) {
 	}
 
 	// send Begin to server
-	err := s.txFrame(&performBegin{
+	s.txFrame(&performBegin{
 		NextOutgoingID: 0,
 		IncomingWindow: 1,
 	})
-	if err != nil {
-		s.Close()
-		return nil, err
-	}
 
 	// wait for response
 	var fr frame
@@ -184,8 +143,8 @@ func (s *Session) Close() error {
 	}
 }
 
-func (s *Session) txFrame(p frameBody) error {
-	return s.conn.txFrame(frame{
+func (s *Session) txFrame(p frameBody) {
+	s.conn.wantWriteFrame(frame{
 		typ:     frameTypeAMQP,
 		channel: s.channel,
 		body:    p,
@@ -251,10 +210,7 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 
 	l.senderDeliveryCount = resp.InitialDeliveryCount
 
-	return &Receiver{
-		link: l,
-		buf:  bufPool.New().(*bytes.Buffer),
-	}, nil
+	return &Receiver{link: l}, nil
 }
 
 func (s *Session) mux() {
@@ -389,16 +345,15 @@ func LinkCredit(credit uint32) LinkOption { // TODO: make receiver specific?
 // Receiver receives messages on a single AMQP link.
 type Receiver struct {
 	link *link
-
-	buf *bytes.Buffer
+	buf  bytes.Buffer
 }
 
 // sendFlow transmits a flow frame with enough credits to bring the sender's
 // link credits up to l.link.linkCredit.
-func (r *Receiver) sendFlow() error {
+func (r *Receiver) sendFlow() {
 	newLinkCredit := r.link.linkCredit - (r.link.linkCredit - r.link.creditUsed)
 	r.link.senderDeliveryCount += r.link.creditUsed
-	err := r.link.session.txFrame(&performFlow{
+	r.link.session.txFrame(&performFlow{
 		IncomingWindow: 2147483647,
 		NextOutgoingID: 0,
 		OutgoingWindow: 0,
@@ -407,7 +362,6 @@ func (r *Receiver) sendFlow() error {
 		LinkCredit:     &newLinkCredit,
 	})
 	r.link.creditUsed = 0
-	return err
 }
 
 // Receive returns the next message from the sender.
@@ -422,10 +376,7 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 outer:
 	for {
 		if r.link.creditUsed > r.link.linkCredit/2 {
-			err := r.sendFlow()
-			if err != nil {
-				return nil, err
-			}
+			r.sendFlow()
 		}
 
 		var fr frameBody
@@ -461,14 +412,12 @@ outer:
 		}
 	}
 
-	_, err := unmarshal(r.buf, msg)
+	_, err := unmarshal(&r.buf, msg)
 	return msg, err
 }
 
 // Close closes the Receiver and AMQP link.
 func (r *Receiver) Close() error {
 	r.link.close()
-	bufPool.Put(r.buf)
-	r.buf = nil
 	return r.link.err
 }

@@ -27,19 +27,14 @@ var bufPool = sync.Pool{
 	},
 }
 
-// writeFrame encodes and writes fr to wr.
-func writeFrame(wr io.Writer, fr frame) error {
+// writesFrame encodes fr into buf.
+func writeFrame(buf *bytes.Buffer, fr frame) error {
 	header := frameHeader{
 		Size:       0, // overwrite later
 		DataOffset: 2, // see frameHeader.DataOffset comment
 		FrameType:  fr.typ,
 		Channel:    fr.channel,
 	}
-
-	// get a buffer
-	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
-	buf.Reset()
 
 	// write header
 	err := binary.Write(buf, binary.BigEndian, header)
@@ -63,10 +58,7 @@ func writeFrame(wr io.Writer, fr frame) error {
 
 	// write correct size
 	binary.BigEndian.PutUint32(bufBytes, uint32(len(bufBytes)))
-
-	// frame needs be written to network as a single chunk
-	_, err = wr.Write(bufBytes) // TODO: have a connWriter, like connReader
-	return err
+	return nil
 }
 
 type marshaler interface {
@@ -150,6 +142,12 @@ type marshalField struct {
 // omit set to true will be encoded as null or omitted altogether if there are
 // no non-null fields after them.
 func marshalComposite(wr writer, code amqpType, fields ...marshalField) error {
+	if len(fields) == 0 {
+		// write header only
+		_, err := wr.Write([]byte{0x0, byte(typeCodeSmallUlong), byte(code), byte(typeCodeList0)})
+		return err
+	}
+
 	var (
 		rawFields = make([][]byte, len(fields)) // sized to the total number of fields
 
@@ -207,7 +205,7 @@ func writeSymbolArray(w writer, symbols []Symbol) error {
 		}
 	}
 
-	buf := bufPool.New().(*bytes.Buffer)
+	buf := bufPool.Get().(*bytes.Buffer)
 	defer bufPool.Put(buf)
 
 	var elems [][]byte

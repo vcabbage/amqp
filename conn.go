@@ -140,11 +140,62 @@ type conn struct {
 	done     chan struct{} // indicates the connection is done
 
 	// mux
-	readErr    chan error       // connReader notifications of an error
-	rxProto    chan protoHeader // protoHeaders received by connReader
-	rxFrame    chan frame       // AMQP frames received by connReader
-	newSession chan *Session    // new Sessions are requested from mux by reading off this channel
-	delSession chan *Session    // session completion is indicated to mux by sending the Session on this channel
+	newSession chan *Session // new Sessions are requested from mux by reading off this channel
+	delSession chan *Session // session completion is indicated to mux by sending the Session on this channel
+	connErr    chan error    // connReader/Writer notifications of an error
+
+	// connReader
+	rxProto chan protoHeader // protoHeaders received by connReader
+	rxFrame chan frame       // AMQP frames received by connReader
+
+	// connWriter
+	txProto chan protoID // protoHeaders to be sent by connWriter
+	txFrame chan frame   // AMQP frames to be sent by connWriter
+}
+
+func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
+	c := &conn{
+		net:              netConn,
+		maxFrameSize:     defaultMaxFrameSize,
+		peerMaxFrameSize: defaultMaxFrameSize,
+		channelMax:       defaultChannelMax,
+		idleTimeout:      defaultIdleTimeout,
+		done:             make(chan struct{}),
+		connErr:          make(chan error, 2), // buffered to ensure connReader/Writer won't leak
+		rxProto:          make(chan protoHeader),
+		rxFrame:          make(chan frame),
+		newSession:       make(chan *Session),
+		delSession:       make(chan *Session),
+		txProto:          make(chan protoID),
+		txFrame:          make(chan frame),
+	}
+
+	// apply options
+	for _, opt := range opts {
+		if err := opt(c); err != nil {
+			return nil, err
+		}
+	}
+
+	// start reader/writer
+	go c.connReader()
+	go c.connWriter()
+
+	// run connection establishment state machine
+	for state := c.negotiateProto; state != nil; {
+		state = state()
+	}
+
+	// check if err occurred
+	if c.err != nil {
+		c.close()
+		return nil, c.err
+	}
+
+	// start multiplexor
+	go c.mux()
+
+	return c, c.err
 }
 
 func (c *conn) close() error {
@@ -167,9 +218,6 @@ func (c *conn) closeDone() {
 	c.doneOnce.Do(func() { close(c.done) })
 }
 
-// keepaliveFrame is an AMQP frame with no body, used for keepalives
-var keepaliveFrame = []byte{0x00, 0x00, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00}
-
 // mux is start in it's own goroutine after initial connection establishment.
 //  It handles muxing of sessions, keepalives, and connection errors.
 func (c *conn) mux() {
@@ -178,17 +226,6 @@ func (c *conn) mux() {
 
 	// map channel to sessions
 	sessions := make(map[uint16]*Session)
-
-	// if conn.peerIdleTimeout is 0, keepalive will be nil and
-	// no keepalives will be sent
-	var keepalive <-chan time.Time
-
-	// per spec, keepalives should be sent every 0.5 * idle timeout
-	if kaInterval := c.peerIdleTimeout / 2; kaInterval > 0 {
-		ticker := time.NewTicker(kaInterval)
-		defer ticker.Stop()
-		keepalive = ticker.C
-	}
 
 	// we hold the errMu lock until error or done
 	c.errMu.Lock()
@@ -203,7 +240,7 @@ func (c *conn) mux() {
 
 		select {
 		// error from connReader
-		case c.err = <-c.readErr:
+		case c.err = <-c.connErr:
 
 		// new frame from connReader
 		case fr := <-c.rxFrame:
@@ -232,11 +269,6 @@ func (c *conn) mux() {
 		case s := <-c.delSession:
 			delete(sessions, s.channel)
 
-		// keepalive timer
-		case <-keepalive:
-			// TODO: reset timer on non-keepalive transmit
-			_, c.err = c.net.Write(keepaliveFrame)
-
 		// connection is complete
 		case <-c.done:
 			return
@@ -264,9 +296,7 @@ func (f *frameReader) Read(p []byte) (int, error) {
 // connReader reads from the net.Conn, decodes frames, and passes them
 // up via the conn.rxFrame and conn.rxProto channels.
 func (c *conn) connReader() {
-	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
-	buf.Reset()
+	buf := new(bytes.Buffer)
 
 	var (
 		negotiating     = true      // true during conn establishment, we should check for protoHeaders
@@ -295,7 +325,7 @@ func (c *conn) connReader() {
 					continue
 				}
 
-				c.readErr <- err
+				c.connErr <- err
 				return
 			}
 		}
@@ -309,7 +339,7 @@ func (c *conn) connReader() {
 		if negotiating && bytes.Equal(buf.Bytes()[:4], []byte{'A', 'M', 'Q', 'P'}) {
 			p, err := parseProtoHeader(buf)
 			if err != nil {
-				c.readErr <- err
+				c.connErr <- err
 				return
 			}
 
@@ -335,7 +365,7 @@ func (c *conn) connReader() {
 			var err error
 			currentHeader, err = parseFrameHeader(buf)
 			if err != nil {
-				c.readErr <- err
+				c.connErr <- err
 				return
 			}
 			frameInProgress = true
@@ -343,7 +373,7 @@ func (c *conn) connReader() {
 
 		// check size is reasonable
 		if currentHeader.Size > math.MaxInt32 { // make max size configurable
-			c.readErr <- errorNew("payload too large")
+			c.connErr <- errorNew("payload too large")
 			return
 		}
 
@@ -364,7 +394,7 @@ func (c *conn) connReader() {
 		payload := bytes.NewBuffer(buf.Next(bodySize))
 		parsedBody, err := parseFrameBody(payload)
 		if err != nil {
-			c.readErr <- err
+			c.connErr <- err
 			return
 		}
 
@@ -374,6 +404,78 @@ func (c *conn) connReader() {
 			return
 		case c.rxFrame <- frame{channel: currentHeader.Channel, body: parsedBody}:
 		}
+	}
+}
+
+func (c *conn) connWriter() {
+	// if conn.peerIdleTimeout is 0, keepalive will be nil and
+	// no keepalives will be sent
+	var keepalive <-chan time.Time
+
+	// per spec, keepalives should be sent every 0.5 * idle timeout
+	if kaInterval := c.peerIdleTimeout / 2; kaInterval > 0 {
+		ticker := time.NewTicker(kaInterval)
+		defer ticker.Stop()
+		keepalive = ticker.C
+	}
+
+	buf := new(bytes.Buffer)
+
+	var err error
+	for {
+		if err != nil {
+			c.connErr <- err
+			return
+		}
+
+		select {
+		// frame write request
+		case fr := <-c.txFrame:
+			if c.connectTimeout != 0 {
+				c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
+			}
+			buf.Reset()
+			err = writeFrame(buf, fr)
+			if err != nil {
+				continue
+			}
+
+			if uint64(buf.Len()) > uint64(c.peerMaxFrameSize) {
+				err = errorErrorf("frame larger than peer ")
+				continue
+			}
+
+			_, err = c.net.Write(buf.Bytes())
+
+		case pID := <-c.txProto:
+			if c.connectTimeout != 0 {
+				c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
+			}
+			_, err = c.net.Write([]byte{'A', 'M', 'Q', 'P', byte(pID), 1, 0, 0})
+
+		// keepalive timer
+		case <-keepalive:
+			// TODO: reset timer on non-keepalive transmit
+			_, err = c.net.Write(keepaliveFrame)
+		case <-c.done:
+		}
+	}
+}
+
+// keepaliveFrame is an AMQP frame with no body, used for keepalives
+var keepaliveFrame = []byte{0x00, 0x00, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00}
+
+func (c *conn) wantWriteFrame(fr frame) {
+	select {
+	case c.txFrame <- fr:
+	case <-c.done:
+	}
+}
+
+func (c *conn) wantWriteProtoHeader(p protoID) {
+	select {
+	case c.txProto <- p:
+	case <-c.done:
 	}
 }
 
@@ -396,25 +498,20 @@ func (c *conn) negotiateProto() stateFunc {
 	}
 }
 
+type protoID uint8
+
 // protocol IDs received in protoHeaders
 const (
-	protoAMQP = 0x0
-	protoTLS  = 0x2
-	protoSASL = 0x3
+	protoAMQP protoID = 0x0
+	protoTLS  protoID = 0x2
+	protoSASL protoID = 0x3
 )
 
 // exchangeProtoHeader performs the round trip exchange of protocol
 // headers, validation, and returns the protoID specific next state.
-func (c *conn) exchangeProtoHeader(protoID uint8) stateFunc {
+func (c *conn) exchangeProtoHeader(pID protoID) stateFunc {
 	// write the proto header
-	if c.connectTimeout != 0 {
-		c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
-	}
-	_, c.err = c.net.Write([]byte{'A', 'M', 'Q', 'P', protoID, 1, 0, 0})
-	if c.err != nil {
-		c.err = errorWrapf(c.err, "writing to network")
-		return nil
-	}
+	c.wantWriteProtoHeader(pID)
 
 	// read response header
 	var deadline <-chan time.Time
@@ -424,7 +521,7 @@ func (c *conn) exchangeProtoHeader(protoID uint8) stateFunc {
 	var p protoHeader
 	select {
 	case p = <-c.rxProto:
-	case c.err = <-c.readErr:
+	case c.err = <-c.connErr:
 		return nil
 	case fr := <-c.rxFrame:
 		c.err = errorErrorf("unexpected frame %#v", fr)
@@ -434,13 +531,13 @@ func (c *conn) exchangeProtoHeader(protoID uint8) stateFunc {
 		return nil
 	}
 
-	if protoID != p.ProtoID {
-		c.err = errorErrorf("unexpected protocol header %#00x, expected %#00x", p.ProtoID, protoID)
+	if pID != p.ProtoID {
+		c.err = errorErrorf("unexpected protocol header %#00x, expected %#00x", p.ProtoID, pID)
 		return nil
 	}
 
 	// go to the proto specific state
-	switch protoID {
+	switch pID {
 	case protoAMQP:
 		return c.openAMQP
 	case protoTLS:
@@ -491,20 +588,10 @@ func (c *conn) startTLS() stateFunc {
 	return c.negotiateProto
 }
 
-// txFrame encodes and transmits a frame on the connection
-func (c *conn) txFrame(fr frame) error {
-	// BUG: This should respect c.peerMaxFrameSize. Should not affect current functionality;
-	//      only transfer frames should be larger than min-max frame size (512).
-	if c.connectTimeout != 0 {
-		c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
-	}
-	return writeFrame(c.net, fr) // TODO: buffer?
-}
-
 // openAMQP round trips the AMQP open performative
 func (c *conn) openAMQP() stateFunc {
 	// send open frame
-	c.err = c.txFrame(frame{
+	c.wantWriteFrame(frame{
 		typ: frameTypeAMQP,
 		body: &performOpen{
 			ContainerID:  randString(),
@@ -515,9 +602,6 @@ func (c *conn) openAMQP() stateFunc {
 		},
 		channel: 0,
 	})
-	if c.err != nil {
-		return nil
-	}
 
 	// get the response
 	fr, err := c.readFrame()
@@ -610,16 +694,15 @@ func (c *conn) readFrame() (frame, error) {
 	if c.connectTimeout != 0 {
 		deadline = time.After(c.connectTimeout)
 	}
+
 	var fr frame
 	select {
 	case fr = <-c.rxFrame:
 		return fr, nil
-	case err := <-c.readErr:
+	case err := <-c.connErr:
 		return fr, err
 	case p := <-c.rxProto:
 		return fr, errorErrorf("unexpected protocol header %#v", p)
-
-	// fail if we don't get a response after 1 second
 	case <-deadline:
 		return fr, ErrTimeout // TODO: move to connReader
 	}
