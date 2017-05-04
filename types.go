@@ -1,16 +1,163 @@
 package amqp
 
-import "time"
+import (
+	"bytes"
+	"encoding/binary"
+	"math"
+	"reflect"
+	"time"
+)
 
-// peekFrameBodyType peeks at the frame body's type code without advancing r.
-func peekFrameBodyType(r reader) (amqpType, error) {
-	payload := r.Bytes()
+type amqpType uint8
 
-	if r.Len() < 3 || payload[0] != 0 || amqpType(payload[1]) != typeCodeSmallUlong {
-		return 0, errorNew("invalid frame body header")
-	}
+// Type codes
+const (
+	typeCodeNull amqpType = 0x40
 
-	return amqpType(payload[2]), nil
+	// Bool
+	typeCodeBool      amqpType = 0x56 // boolean with the octet 0x00 being false and octet 0x01 being true
+	typeCodeBoolTrue  amqpType = 0x41
+	typeCodeBoolFalse amqpType = 0x42
+
+	// Unsigned
+	typeCodeUbyte      amqpType = 0x50 // 8-bit unsigned integer (1)
+	typeCodeUshort     amqpType = 0x60 // 16-bit unsigned integer in network byte order (2)
+	typeCodeUint       amqpType = 0x70 // 32-bit unsigned integer in network byte order (4)
+	typeCodeSmallUint  amqpType = 0x52 // unsigned integer value in the range 0 to 255 inclusive (1)
+	typeCodeUint0      amqpType = 0x43 // the uint value 0 (0)
+	typeCodeUlong      amqpType = 0x80 // 64-bit unsigned integer in network byte order (8)
+	typeCodeSmallUlong amqpType = 0x53 // unsigned long value in the range 0 to 255 inclusive (1)
+	typeCodeUlong0     amqpType = 0x44 // the ulong value 0 (0)
+
+	// Signed
+	typeCodeByte      amqpType = 0x51 // 8-bit two's-complement integer (1)
+	typeCodeShort     amqpType = 0x61 // 16-bit two's-complement integer in network byte order (2)
+	typeCodeInt       amqpType = 0x71 // 32-bit two's-complement integer in network byte order (4)
+	typeCodeSmallint  amqpType = 0x54 // 8-bit two's-complement integer (1)
+	typeCodeLong      amqpType = 0x81 // 64-bit two's-complement integer in network byte order (8)
+	typeCodeSmalllong amqpType = 0x55 // 8-bit two's-complement integer
+
+	// Decimal
+	typeCodeFloat      amqpType = 0x72 // IEEE 754-2008 binary32 (4)
+	typeCodeDouble     amqpType = 0x82 // IEEE 754-2008 binary64 (8)
+	typeCodeDecimal32  amqpType = 0x74 // IEEE 754-2008 decimal32 using the Binary Integer Decimal encoding (4)
+	typeCodeDecimal64  amqpType = 0x84 // IEEE 754-2008 decimal64 using the Binary Integer Decimal encoding (8)
+	typeCodeDecimal128 amqpType = 0x94 // IEEE 754-2008 decimal128 using the Binary Integer Decimal encoding (16)
+
+	// Other
+	typeCodeChar      amqpType = 0x73 // a UTF-32BE encoded Unicode character (4)
+	typeCodeTimestamp amqpType = 0x83 // 64-bit two's-complement integer representing milliseconds since the unix epoch
+	typeCodeUUID      amqpType = 0x98 // UUID as defined in section 4.1.2 of RFC-4122
+
+	// Variable Length
+	typeCodeVbin8  amqpType = 0xa0 // up to 2^8 - 1 octets of binary data (1 + variable)
+	typeCodeVbin32 amqpType = 0xb0 // up to 2^32 - 1 octets of binary data (4 + variable)
+	typeCodeStr8   amqpType = 0xa1 // up to 2^8 - 1 octets worth of UTF-8 Unicode (with no byte order mark) (1 + variable)
+	typeCodeStr32  amqpType = 0xb1 // up to 2^32 - 1 octets worth of UTF-8 Unicode (with no byte order mark) (4 +variable)
+	typeCodeSym8   amqpType = 0xa3 // up to 2^8 - 1 seven bit ASCII characters representing a symbolic value (1 + variable)
+	typeCodeSym32  amqpType = 0xb3 // up to 2^32 - 1 seven bit ASCII characters representing a symbolic value (4 + variable)
+
+	// Compound
+	typeCodeList0   amqpType = 0x45 // the empty list (i.e. the list with no elements) (0)
+	typeCodeList8   amqpType = 0xc0 // up to 2^8 - 1 list elements with total size less than 2^8 octets (1 + compound)
+	typeCodeList32  amqpType = 0xd0 // up to 2^32 - 1 list elements with total size less than 2^32 octets (4 + compound)
+	typeCodeMap8    amqpType = 0xc1 // up to 2^8 - 1 octets of encoded map data (1 + compound)
+	typeCodeMap32   amqpType = 0xd1 // up to 2^32 - 1 octets of encoded map data (4 + compound)
+	typeCodeArray8  amqpType = 0xe0 // up to 2^8 - 1 array elements with total size less than 2^8 octets (1 + array)
+	typeCodeArray32 amqpType = 0xf0 // up to 2^32 - 1 array elements with total size less than 2^32 octets (4 + array)
+
+	// Composites
+	typeCodeOpen        amqpType = 0x10
+	typeCodeBegin       amqpType = 0x11
+	typeCodeAttach      amqpType = 0x12
+	typeCodeFlow        amqpType = 0x13
+	typeCodeTransfer    amqpType = 0x14
+	typeCodeDisposition amqpType = 0x15
+	typeCodeDetach      amqpType = 0x16
+	typeCodeEnd         amqpType = 0x17
+	typeCodeClose       amqpType = 0x18
+
+	typeCodeSource amqpType = 0x28
+	typeCodeTarget amqpType = 0x29
+	typeCodeError  amqpType = 0x1d
+
+	typeCodeMessageHeader         amqpType = 0x70
+	typeCodeDeliveryAnnotations   amqpType = 0x71
+	typeCodeMessageAnnotations    amqpType = 0x72
+	typeCodeMessageProperties     amqpType = 0x73
+	typeCodeApplicationProperties amqpType = 0x74
+	typeCodeApplicationData       amqpType = 0x75
+	typeCodeAMQPSequence          amqpType = 0x76
+	typeCodeAMQPValue             amqpType = 0x77
+	typeCodeFooter                amqpType = 0x78
+
+	typeCodeStateReceived amqpType = 0x23
+	typeCodeStateAccepted amqpType = 0x24
+	typeCodeStateRejected amqpType = 0x25
+	typeCodeStateReleased amqpType = 0x26
+	typeCodeStateModified amqpType = 0x27
+
+	typeCodeSASLMechanism amqpType = 0x40
+	typeCodeSASLInit      amqpType = 0x41
+	typeCodeSASLChallenge amqpType = 0x42
+	typeCodeSASLResponse  amqpType = 0x43
+	typeCodeSASLOutcome   amqpType = 0x44
+)
+
+// Frame structure:
+//
+//     header (8 bytes)
+//       0-3: SIZE (total size, at least 8 bytes for header, uint32)
+//       4:   DOFF (data offset,at least 2, count of 4 bytes words, uint8)
+//       5:   TYPE (frame type)
+//                0x0: AMQP
+//                0x1: SASL
+//       6-7: type dependent (channel for AMQP)
+//     extended header (opt)
+//     body (opt)
+
+// frameHeader in a structure appropriate for use with binary.Read()
+type frameHeader struct {
+	// size: an unsigned 32-bit integer that MUST contain the total frame size of the frame header,
+	// extended header, and frame body. The frame is malformed if the size is less than the size of
+	// the frame header (8 bytes).
+	Size uint32
+	// doff: gives the position of the body within the frame. The value of the data offset is an
+	// unsigned, 8-bit integer specifying a count of 4-byte words. Due to the mandatory 8-byte
+	// frame header, the frame is malformed if the value is less than 2.
+	DataOffset uint8
+	FrameType  uint8
+	Channel    uint16
+}
+
+const (
+	frameTypeAMQP = 0x0
+	frameTypeSASL = 0x1
+
+	frameHeaderSize = 8
+)
+
+// protoHeader in a structure appropriate for use with binary.Read()
+type protoHeader struct {
+	Proto    [4]byte
+	ProtoID  uint8
+	Major    uint8
+	Minor    uint8
+	Revision uint8
+}
+
+// frame is the decoded representation of a frame
+type frame struct {
+	typ     uint8     // AMQP/SASL
+	channel uint16    // channel this frame is for
+	body    frameBody // body of the frame
+}
+
+// frameBody is the interface all frame bodies must implement
+type frameBody interface {
+	// if the frame is for a link, link() should return (link#, true),
+	// otherwise it should return (0, false)
+	link() (handle uint32, ok bool)
 }
 
 /*
@@ -1228,4 +1375,632 @@ func (c *performClose) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeClose,
 		unmarshalField{field: &c.Error},
 	)
+}
+
+// Message is an AMQP message.
+type Message struct {
+	// The header section carries standard delivery details about the transfer
+	// of a message through the AMQP network.
+	Header MessageHeader
+	// If the header section is omitted the receiver MUST assume the appropriate
+	// default values (or the meaning implied by no value being set) for the
+	// fields within the header unless other target or node specific defaults
+	// have otherwise been set.
+
+	// The delivery-annotations section is used for delivery-specific non-standard
+	// properties at the head of the message. Delivery annotations convey information
+	// from the sending peer to the receiving peer.
+	DeliveryAnnotations map[interface{}]interface{}
+	// If the recipient does not understand the annotation it cannot be acted upon
+	// and its effects (such as any implied propagation) cannot be acted upon.
+	// Annotations might be specific to one implementation, or common to multiple
+	// implementations. The capabilities negotiated on link attach and on the source
+	// and target SHOULD be used to establish which annotations a peer supports. A
+	// registry of defined annotations and their meanings is maintained [AMQPDELANN].
+	// The symbolic key "rejected" is reserved for the use of communicating error
+	// information regarding rejected messages. Any values associated with the
+	// "rejected" key MUST be of type error.
+	//
+	// If the delivery-annotations section is omitted, it is equivalent to a
+	// delivery-annotations section containing an empty map of annotations.
+
+	// The message-annotations section is used for properties of the message which
+	// are aimed at the infrastructure.
+	Annotations map[interface{}]interface{}
+	// The message-annotations section is used for properties of the message which
+	// are aimed at the infrastructure and SHOULD be propagated across every
+	// delivery step. Message annotations convey information about the message.
+	// Intermediaries MUST propagate the annotations unless the annotations are
+	// explicitly augmented or modified (e.g., by the use of the modified outcome).
+	//
+	// The capabilities negotiated on link attach and on the source and target can
+	// be used to establish which annotations a peer understands; however, in a
+	// network of AMQP intermediaries it might not be possible to know if every
+	// intermediary will understand the annotation. Note that for some annotations
+	// it might not be necessary for the intermediary to understand their purpose,
+	// i.e., they could be used purely as an attribute which can be filtered on.
+	//
+	// A registry of defined annotations and their meanings is maintained [AMQPMESSANN].
+	//
+	// If the message-annotations section is omitted, it is equivalent to a
+	// message-annotations section containing an empty map of annotations.
+
+	// The properties section is used for a defined set of standard properties of
+	// the message.
+	Properties MessageProperties
+	// The properties section is part of the bare message; therefore,
+	// if retransmitted by an intermediary, it MUST remain unaltered.
+
+	// The application-properties section is a part of the bare message used for
+	// structured application data. Intermediaries can use the data within this
+	// structure for the purposes of filtering or routing.
+	ApplicationProperties map[string]interface{}
+	// The keys of this map are restricted to be of type string (which excludes
+	// the possibility of a null key) and the values are restricted to be of
+	// simple types only, that is, excluding map, list, and array types.
+
+	// Message payload.
+	Data []byte
+	// A data section contains opaque binary data.
+	// TODO: this could be data(s), amqp-sequence(s), amqp-value rather than singe data:
+	// "The body consists of one of the following three choices: one or more data
+	//  sections, one or more amqp-sequence sections, or a single amqp-value section."
+
+	// The footer section is used for details about the message or delivery which
+	// can only be calculated or evaluated once the whole bare message has been
+	// constructed or seen (for example message hashes, HMACs, signatures and
+	// encryption details).
+	Footer map[interface{}]interface{}
+	// TODO: implement custom type with validation
+
+	link       *link  // link the message was received on
+	deliveryID uint32 // used when sending disposition
+}
+
+// sendDisposition sends a disposition frame to the peer
+func (m *Message) sendDisposition(state interface{}) {
+	// TODO: prevent client sending twice?
+	m.link.session.txFrame(&performDisposition{
+		Role:    true,
+		First:   m.deliveryID,
+		Settled: true,
+		State:   state,
+	})
+}
+
+// Accept notifies the server that the message has been
+// accepted and does not require redelivery.
+func (m *Message) Accept() {
+	m.sendDisposition(&stateAccepted{})
+}
+
+// Reject notifies the server that the message is invalid.
+func (m *Message) Reject() {
+	m.sendDisposition(&stateRejected{})
+}
+
+// Release releases the message back to the server. The message
+// may be redelivered to this or another consumer.
+func (m *Message) Release() {
+	m.sendDisposition(&stateReleased{})
+}
+
+// TODO: add support for sending Modified disposition
+
+func (m *Message) unmarshal(r reader) error {
+	for r.Len() > 0 {
+		typ, err := peekMessageType(r.Bytes())
+		if err != nil {
+			return err
+		}
+
+		var (
+			section       interface{}
+			discardHeader = true
+		)
+		switch amqpType(typ) {
+		case typeCodeMessageHeader:
+			discardHeader = false
+			section = &m.Header
+		case typeCodeDeliveryAnnotations:
+			section = &m.DeliveryAnnotations
+		case typeCodeMessageAnnotations:
+			section = &m.Annotations
+		case typeCodeMessageProperties:
+			discardHeader = false
+			section = &m.Properties
+		case typeCodeApplicationProperties:
+			section = &m.ApplicationProperties
+		case typeCodeApplicationData:
+			section = &m.Data
+		case typeCodeFooter:
+			section = &m.Footer
+		default:
+			return errorErrorf("unknown message section %x", typ)
+		}
+
+		if discardHeader {
+			r.Next(3)
+		}
+
+		_, err = unmarshal(r, section)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// peekMessageType reads the message type without
+// modifying any data.
+func peekMessageType(buf []byte) (uint8, error) {
+	if len(buf) < 3 {
+		return 0, errorNew("invalid message")
+	}
+
+	if buf[0] != 0 {
+		return 0, errorErrorf("invalid composite header %0x", buf[0])
+	}
+
+	v, err := readInt(bytes.NewBuffer(buf[1:]))
+	if err != nil {
+		return 0, err
+	}
+	return uint8(v), err
+}
+
+/*
+<type name="header" class="composite" source="list" provides="section">
+    <descriptor name="amqp:header:list" code="0x00000000:0x00000070"/>
+    <field name="durable" type="boolean" default="false"/>
+    <field name="priority" type="ubyte" default="4"/>
+    <field name="ttl" type="milliseconds"/>
+    <field name="first-acquirer" type="boolean" default="false"/>
+    <field name="delivery-count" type="uint" default="0"/>
+</type>
+*/
+
+// MessageHeader carries standard delivery details about the transfer
+// of a message.
+type MessageHeader struct {
+	Durable       bool
+	Priority      uint8
+	TTL           time.Duration // from milliseconds
+	FirstAcquirer bool
+	DeliveryCount uint32
+}
+
+func (h *MessageHeader) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeMessageHeader, []marshalField{
+		{value: h.Durable, omit: !h.Durable},
+		{value: h.Priority, omit: h.Priority == 4},
+		{value: milliseconds(h.TTL), omit: h.TTL == 0},
+		{value: h.FirstAcquirer, omit: !h.FirstAcquirer},
+		{value: h.DeliveryCount, omit: h.DeliveryCount == 0},
+	}...)
+}
+
+func (h *MessageHeader) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeMessageHeader, []unmarshalField{
+		{field: &h.Durable},
+		{field: &h.Priority, handleNull: defaultUint8(&h.Priority, 4)},
+		{field: (*milliseconds)(&h.TTL)},
+		{field: &h.FirstAcquirer},
+		{field: &h.DeliveryCount},
+	}...)
+}
+
+/*
+<type name="properties" class="composite" source="list" provides="section">
+    <descriptor name="amqp:properties:list" code="0x00000000:0x00000073"/>
+    <field name="message-id" type="*" requires="message-id"/>
+    <field name="user-id" type="binary"/>
+    <field name="to" type="*" requires="address"/>
+    <field name="subject" type="string"/>
+    <field name="reply-to" type="*" requires="address"/>
+    <field name="correlation-id" type="*" requires="message-id"/>
+    <field name="content-type" type="symbol"/>
+    <field name="content-encoding" type="symbol"/>
+    <field name="absolute-expiry-time" type="timestamp"/>
+    <field name="creation-time" type="timestamp"/>
+    <field name="group-id" type="string"/>
+    <field name="group-sequence" type="sequence-no"/>
+    <field name="reply-to-group-id" type="string"/>
+</type>
+*/
+
+// MessageProperties is the defined set of properties for AMQP messages.
+type MessageProperties struct {
+	// TODO: add useful descriptions from spec
+
+	MessageID          interface{} // uint64, UUID, []byte, or string
+	UserID             []byte
+	To                 string
+	Subject            string
+	ReplyTo            string
+	CorrelationID      interface{} // uint64, UUID, []byte, or string
+	ContentType        Symbol
+	ContentEncoding    Symbol
+	AbsoluteExpiryTime time.Time
+	CreationTime       time.Time
+	GroupID            string
+	GroupSequence      uint32 // RFC-1982 sequence number
+	ReplyToGroupID     string
+}
+
+func (p *MessageProperties) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeMessageProperties, []marshalField{
+		{value: p.MessageID, omit: p.MessageID != nil},
+		{value: p.UserID, omit: len(p.UserID) == 0},
+		{value: p.To, omit: p.To == ""},
+		{value: p.Subject, omit: p.Subject == ""},
+		{value: p.ReplyTo, omit: p.ReplyTo == ""},
+		{value: p.CorrelationID, omit: p.CorrelationID == nil},
+		{value: p.ContentType, omit: p.ContentType == ""},
+		{value: p.ContentEncoding, omit: p.ContentEncoding == ""},
+		{value: p.AbsoluteExpiryTime, omit: p.AbsoluteExpiryTime.IsZero()},
+		{value: p.CreationTime, omit: p.CreationTime.IsZero()},
+		{value: p.GroupID, omit: p.GroupID == ""},
+		{value: p.ReplyToGroupID, omit: p.ReplyToGroupID == ""},
+	}...)
+}
+
+func (p *MessageProperties) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeMessageProperties, []unmarshalField{
+		{field: &p.MessageID},
+		{field: &p.UserID},
+		{field: &p.To},
+		{field: &p.Subject},
+		{field: &p.ReplyTo},
+		{field: &p.CorrelationID},
+		{field: &p.ContentType},
+		{field: &p.ContentEncoding},
+		{field: &p.AbsoluteExpiryTime},
+		{field: &p.CreationTime},
+		{field: &p.GroupID},
+		{field: &p.GroupSequence},
+		{field: &p.ReplyToGroupID},
+	}...)
+}
+
+/*
+<type name="received" class="composite" source="list" provides="delivery-state">
+    <descriptor name="amqp:received:list" code="0x00000000:0x00000023"/>
+    <field name="section-number" type="uint" mandatory="true"/>
+    <field name="section-offset" type="ulong" mandatory="true"/>
+</type>
+*/
+
+type stateReceived struct {
+	// When sent by the sender this indicates the first section of the message
+	// (with section-number 0 being the first section) for which data can be resent.
+	// Data from sections prior to the given section cannot be retransmitted for
+	// this delivery.
+	//
+	// When sent by the receiver this indicates the first section of the message
+	// for which all data might not yet have been received.
+	SectionNumber uint32
+
+	// When sent by the sender this indicates the first byte of the encoded section
+	// data of the section given by section-number for which data can be resent
+	// (with section-offset 0 being the first byte). Bytes from the same section
+	// prior to the given offset section cannot be retransmitted for this delivery.
+	//
+	// When sent by the receiver this indicates the first byte of the given section
+	// which has not yet been received. Note that if a receiver has received all of
+	// section number X (which contains N bytes of data), but none of section number
+	// X + 1, then it can indicate this by sending either Received(section-number=X,
+	// section-offset=N) or Received(section-number=X+1, section-offset=0). The state
+	// Received(section-number=0, section-offset=0) indicates that no message data
+	// at all has been transferred.
+	SectionOffset uint64
+}
+
+func (sr *stateReceived) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateReceived, []marshalField{
+		{value: sr.SectionNumber, omit: false},
+		{value: sr.SectionOffset, omit: false},
+	}...)
+}
+
+func (sr *stateReceived) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeStateReceived, []unmarshalField{
+		{field: &sr.SectionNumber, handleNull: required("StateReceived.SectionNumber")},
+		{field: &sr.SectionOffset, handleNull: required("StateReceived.SectionOffset")},
+	}...)
+}
+
+/*
+<type name="accepted" class="composite" source="list" provides="delivery-state, outcome">
+    <descriptor name="amqp:accepted:list" code="0x00000000:0x00000024"/>
+</type>
+*/
+
+type stateAccepted struct{}
+
+func (sa *stateAccepted) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateAccepted)
+}
+
+func (sa *stateAccepted) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeStateAccepted)
+}
+
+/*
+<type name="rejected" class="composite" source="list" provides="delivery-state, outcome">
+    <descriptor name="amqp:rejected:list" code="0x00000000:0x00000025"/>
+    <field name="error" type="error"/>
+</type>
+*/
+
+type stateRejected struct {
+	Error *Error
+}
+
+func (sr *stateRejected) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateRejected,
+		marshalField{value: sr.Error, omit: sr.Error == nil},
+	)
+}
+
+func (sr *stateRejected) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeStateRejected,
+		unmarshalField{field: &sr.Error},
+	)
+}
+
+/*
+<type name="released" class="composite" source="list" provides="delivery-state, outcome">
+    <descriptor name="amqp:released:list" code="0x00000000:0x00000026"/>
+</type>
+*/
+
+type stateReleased struct{}
+
+func (sr *stateReleased) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateReleased)
+}
+
+func (sr *stateReleased) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeStateReleased)
+}
+
+/*
+<type name="modified" class="composite" source="list" provides="delivery-state, outcome">
+    <descriptor name="amqp:modified:list" code="0x00000000:0x00000027"/>
+    <field name="delivery-failed" type="boolean"/>
+    <field name="undeliverable-here" type="boolean"/>
+    <field name="message-annotations" type="fields"/>
+</type>
+*/
+
+type stateModified struct {
+	// count the transfer as an unsuccessful delivery attempt
+	//
+	// If the delivery-failed flag is set, any messages modified
+	// MUST have their delivery-count incremented.
+	DeliveryFailed bool
+
+	// prevent redelivery
+	//
+	// If the undeliverable-here is set, then any messages released MUST NOT
+	// be redelivered to the modifying link endpoint.
+	UndeliverableHere bool
+
+	// message attributes
+	// Map containing attributes to combine with the existing message-annotations
+	// held in the message's header section. Where the existing message-annotations
+	// of the message contain an entry with the same key as an entry in this field,
+	// the value in this field associated with that key replaces the one in the
+	// existing headers; where the existing message-annotations has no such value,
+	// the value in this map is added.
+	MessageAnnotations map[Symbol]interface{}
+}
+
+func (sm *stateModified) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeStateModified, []marshalField{
+		{value: sm.DeliveryFailed, omit: !sm.DeliveryFailed},
+		{value: sm.UndeliverableHere, omit: !sm.UndeliverableHere},
+		{value: sm.MessageAnnotations, omit: sm.MessageAnnotations == nil},
+	}...)
+}
+
+func (sm *stateModified) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeStateModified, []unmarshalField{
+		{field: &sm.DeliveryFailed},
+		{field: &sm.UndeliverableHere},
+		{field: &sm.MessageAnnotations},
+	}...)
+}
+
+/*
+<type name="sasl-init" class="composite" source="list" provides="sasl-frame">
+    <descriptor name="amqp:sasl-init:list" code="0x00000000:0x00000041"/>
+    <field name="mechanism" type="symbol" mandatory="true"/>
+    <field name="initial-response" type="binary"/>
+    <field name="hostname" type="string"/>
+</type>
+*/
+
+type saslInit struct {
+	Mechanism       Symbol
+	InitialResponse []byte
+	Hostname        string
+}
+
+func (si *saslInit) link() (uint32, bool) {
+	return 0, false
+}
+
+func (si *saslInit) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeSASLInit, []marshalField{
+		{value: si.Mechanism, omit: false},
+		{value: si.InitialResponse, omit: len(si.InitialResponse) == 0},
+		{value: si.Hostname, omit: len(si.Hostname) == 0},
+	}...)
+}
+
+/*
+<type name="sasl-mechanisms" class="composite" source="list" provides="sasl-frame">
+    <descriptor name="amqp:sasl-mechanisms:list" code="0x00000000:0x00000040"/>
+    <field name="sasl-server-mechanisms" type="symbol" multiple="true" mandatory="true"/>
+</type>
+*/
+
+type saslMechanisms struct {
+	Mechanisms []Symbol
+}
+
+func (sm *saslMechanisms) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeSASLMechanism,
+		unmarshalField{field: &sm.Mechanisms, handleNull: required("SASLMechanisms.Mechanisms")},
+	)
+}
+
+func (*saslMechanisms) link() (uint32, bool) {
+	return 0, false
+}
+
+/*
+<type name="sasl-outcome" class="composite" source="list" provides="sasl-frame">
+    <descriptor name="amqp:sasl-outcome:list" code="0x00000000:0x00000044"/>
+    <field name="code" type="sasl-code" mandatory="true"/>
+    <field name="additional-data" type="binary"/>
+</type>
+*/
+
+type saslOutcome struct {
+	Code           saslCode
+	AdditionalData []byte
+}
+
+func (so *saslOutcome) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeSASLOutcome, []unmarshalField{
+		{field: &so.Code, handleNull: required("SASLOutcome.Code")},
+		{field: &so.AdditionalData},
+	}...)
+}
+
+func (*saslOutcome) link() (uint32, bool) {
+	return 0, false
+}
+
+// Symbol is an AMQP symbolic string.
+type Symbol string
+
+func (s Symbol) marshal(wr writer) error {
+	l := len(s)
+
+	var err error
+	switch {
+	// List8
+	case l < 256:
+		_, err = wr.Write(append([]byte{byte(typeCodeSym8), byte(l)}, []byte(s)...))
+
+	// List32
+	case l < math.MaxUint32:
+		err = binary.Write(wr, binary.BigEndian, uint32(l))
+		if err != nil {
+			return err
+		}
+		_, err = wr.Write([]byte(s))
+	default:
+		return errorNew("too long")
+	}
+
+	return err
+}
+
+type milliseconds time.Duration
+
+func (m milliseconds) marshal(wr writer) error {
+	return marshal(wr, uint32((time.Duration)(m).Nanoseconds()/1000000))
+}
+
+func (m *milliseconds) unmarshal(r reader) error {
+	var n uint32
+	_, err := unmarshal(r, &n)
+	*m = milliseconds(time.Duration(n) * time.Millisecond)
+	return err
+}
+
+// mapAnyAny is used to decode AMQP maps who's keys are undefined or
+// inconsistently typed.
+type mapAnyAny map[interface{}]interface{}
+
+func (m *mapAnyAny) unmarshal(r reader) error {
+	mr, err := newMapReader(r)
+	if err != nil {
+		return err
+	}
+
+	mm := make(mapAnyAny, mr.pairs())
+	for mr.more() {
+		var key interface{}
+		var value interface{}
+		err = mr.next(&key, &value)
+		if err != nil {
+			return err
+		}
+
+		// https://golang.org/ref/spec#Map_types:
+		// The comparison operators == and != must be fully defined
+		// for operands of the key type; thus the key type must not
+		// be a function, map, or slice.
+		switch reflect.ValueOf(key).Kind() {
+		case reflect.Slice, reflect.Func, reflect.Map:
+			return errorNew("invalid map key")
+		}
+
+		mm[key] = value
+	}
+	*m = mm
+
+	return nil
+}
+
+// mapStringAny is used to decode AMQP maps that have string keys
+type mapStringAny map[string]interface{}
+
+func (m *mapStringAny) unmarshal(r reader) error {
+	mr, err := newMapReader(r)
+	if err != nil {
+		return err
+	}
+
+	mm := make(mapStringAny, mr.pairs())
+	for mr.more() {
+		var key string
+		var value interface{}
+		err = mr.next(&key, &value)
+		if err != nil {
+			return err
+		}
+		mm[key] = value
+	}
+	*m = mm
+	return nil
+}
+
+// mapStringAny is used to decode AMQP maps that have Symbol keys
+type mapSymbolAny map[Symbol]interface{}
+
+func (f *mapSymbolAny) unmarshal(r reader) error {
+	mr, err := newMapReader(r)
+	if err != nil {
+		return err
+	}
+
+	m := make(mapSymbolAny, mr.pairs())
+	for mr.more() {
+		var key Symbol
+		var value interface{}
+		err = mr.next(&key, &value)
+		if err != nil {
+			return err
+		}
+		m[key] = value
+	}
+	*f = m
+	return nil
 }

@@ -18,9 +18,9 @@ func FuzzConn(data []byte) int {
 	if err != nil {
 		return 0
 	}
-	defer conn.Close()
+	defer client.Close()
 
-	s, err := conn.NewSession()
+	s, err := client.NewSession()
 	if err != nil {
 		return 0
 	}
