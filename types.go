@@ -351,7 +351,7 @@ type performAttach struct {
 	//
 	// The role being played by the peer, i.e., whether the peer is the sender or the
 	// receiver of messages on the link.
-	Role bool // required, true=receiver / false=sender
+	Role role
 
 	// settlement policy for the sender
 	//
@@ -493,6 +493,22 @@ func (a *performAttach) unmarshal(r reader) error {
 		{field: &a.DesiredCapabilities},
 		{field: &a.Properties},
 	}...)
+}
+
+type role bool
+
+const (
+	roleSender   role = false
+	roleReceiver role = true
+)
+
+func (rl *role) unmarshal(r reader) error {
+	_, err := unmarshal(r, (*bool)(rl))
+	return err
+}
+
+func (rl *role) marshal(wr writer) error {
+	return marshal(wr, (*bool)(rl))
 }
 
 type deliveryState interface{} // TODO: http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-transactions-v1.0-os.html#type-declared
@@ -1172,7 +1188,7 @@ type performDisposition struct {
 	//
 	// The role identifies whether the disposition frame contains information about
 	// sending link endpoints or receiving link endpoints.
-	Role bool // required, true=receiver / false=sender
+	Role role
 
 	// lower bound of deliveries
 	//
@@ -1477,33 +1493,45 @@ func (m *Message) Release() {
 // TODO: add support for sending Modified disposition
 
 func (m *Message) unmarshal(r reader) error {
+	// loop, decoding sections until bytes have been consumed
 	for r.Len() > 0 {
+		// determine type
 		typ, err := peekMessageType(r.Bytes())
 		if err != nil {
 			return err
 		}
 
 		var (
-			section       interface{}
+			section interface{}
+			// section header is read from r before
+			// unmarshaling section is set to true
 			discardHeader = true
 		)
 		switch amqpType(typ) {
+
 		case typeCodeMessageHeader:
 			discardHeader = false
 			section = &m.Header
+
 		case typeCodeDeliveryAnnotations:
 			section = &m.DeliveryAnnotations
+
 		case typeCodeMessageAnnotations:
 			section = &m.Annotations
+
 		case typeCodeMessageProperties:
 			discardHeader = false
 			section = &m.Properties
+
 		case typeCodeApplicationProperties:
 			section = &m.ApplicationProperties
+
 		case typeCodeApplicationData:
 			section = &m.Data
+
 		case typeCodeFooter:
 			section = &m.Footer
+
 		default:
 			return errorErrorf("unknown message section %x", typ)
 		}

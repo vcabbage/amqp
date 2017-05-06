@@ -116,96 +116,96 @@ type unmarshaler interface {
 // map[interface{}]interface{}), will be decoded via conversion to the mapStringAny,
 // mapSymbolAny, and mapAnyAny types.
 //
-// If the decoding function returns errNull, the null return value will
+// If the decoding function returns errNull, the isNull return value will
 // be true and err will be nil.
-func unmarshal(r reader, i interface{}) (null bool, err error) {
+func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 	defer func() {
 		// prevent errNull from being passed up
 		if err == errNull {
-			null = true
+			isNull = true
 			err = nil
 		}
 	}()
 
 	switch t := i.(type) {
 	case unmarshaler:
-		return null, t.unmarshal(r)
+		return isNull, t.unmarshal(r)
 	case *int:
 		val, err := readInt(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = val
 	case *uint64:
 		val, err := readUint(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = uint64(val)
 	case *uint32:
 		val, err := readUint(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = uint32(val)
 	case *uint16:
 		val, err := readUint(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = uint16(val)
 	case *uint8:
 		val, err := readUint(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = uint8(val)
 	case *string:
 		val, err := readString(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = val
 	case *[]Symbol:
 		sa, err := readSymbolArray(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = sa
 	case *Symbol:
 		s, err := readString(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = Symbol(s)
 	case *[]byte:
 		val, err := readBinary(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = val
 	case *bool:
 		b, err := readBool(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = b
 	case *time.Time:
 		ts, err := readTimestamp(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = ts
 	case *map[interface{}]interface{}:
-		return null, (*mapAnyAny)(t).unmarshal(r)
+		return isNull, (*mapAnyAny)(t).unmarshal(r)
 	case *map[string]interface{}:
-		return null, (*mapStringAny)(t).unmarshal(r)
+		return isNull, (*mapStringAny)(t).unmarshal(r)
 	case *map[Symbol]interface{}:
-		return null, (*mapSymbolAny)(t).unmarshal(r)
+		return isNull, (*mapSymbolAny)(t).unmarshal(r)
 	case *interface{}:
 		v, err := readAny(r)
 		if err != nil {
-			return null, err
+			return isNull, err
 		}
 		*t = v
 	default:
@@ -217,9 +217,9 @@ func unmarshal(r reader, i interface{}) (null bool, err error) {
 			}
 			return unmarshal(r, indirect.Interface())
 		}
-		return null, errorErrorf("unable to unmarshal %T", i)
+		return isNull, errorErrorf("unable to unmarshal %T", i)
 	}
-	return null, nil
+	return isNull, nil
 }
 
 // unmarshalComposite is a helper for us in a composite's unmarshal() function.
@@ -250,8 +250,7 @@ func unmarshalComposite(r reader, typ amqpType, fields ...unmarshalField) error 
 			return errorWrapf(err, "unmarshaling field %d", i)
 		}
 
-		// If the field is null and handleNull is set,
-		// call it.
+		// If the field is null and handleNull is set, call it.
 		if null && fields[i].handleNull != nil {
 			err = fields[i].handleNull()
 			if err != nil {
@@ -523,21 +522,71 @@ func readAny(r reader) (interface{}, error) {
 	}
 
 	switch amqpType(b) {
-	case typeCodeBool, typeCodeBoolTrue, typeCodeBoolFalse:
+	// bool
+	case
+		typeCodeBool,
+		typeCodeBoolTrue,
+		typeCodeBoolFalse:
 		return readBool(r)
-	case typeCodeUbyte, typeCodeUshort, typeCodeUint, typeCodeSmallUint, typeCodeUint0, typeCodeUlong, typeCodeSmallUlong, typeCodeUlong0:
+
+	// unsigned integers
+	case
+		typeCodeUbyte,
+		typeCodeUshort,
+		typeCodeUint,
+		typeCodeSmallUint,
+		typeCodeUint0,
+		typeCodeUlong,
+		typeCodeSmallUlong,
+		typeCodeUlong0:
 		return readUint(r)
-	case typeCodeByte, typeCodeShort, typeCodeInt, typeCodeSmallint, typeCodeLong, typeCodeSmalllong:
+
+	// signed integers
+	case
+		typeCodeByte,
+		typeCodeShort,
+		typeCodeInt,
+		typeCodeSmallint,
+		typeCodeLong,
+		typeCodeSmalllong:
 		return readInt(r)
-	case typeCodeFloat, typeCodeDouble, typeCodeDecimal32, typeCodeDecimal64, typeCodeDecimal128, typeCodeChar, typeCodeUUID,
-		typeCodeList0, typeCodeList8, typeCodeList32, typeCodeMap8, typeCodeMap32, typeCodeArray8, typeCodeArray32:
-		return nil, errorErrorf("%0x not implemented", b)
-	case typeCodeVbin8, typeCodeVbin32:
+
+	// binary
+	case
+		typeCodeVbin8,
+		typeCodeVbin32:
 		return readBinary(r)
-	case typeCodeStr8, typeCodeStr32, typeCodeSym8, typeCodeSym32:
+
+	// strings
+	case
+		typeCodeStr8,
+		typeCodeStr32,
+		typeCodeSym8,
+		typeCodeSym32:
 		return readString(r)
+
+	// timestamp
 	case typeCodeTimestamp:
 		return readTimestamp(r)
+
+	// not-implemented
+	case
+		typeCodeFloat,
+		typeCodeDouble,
+		typeCodeDecimal32,
+		typeCodeDecimal64,
+		typeCodeDecimal128,
+		typeCodeChar,
+		typeCodeUUID,
+		typeCodeList0,
+		typeCodeList8,
+		typeCodeList32,
+		typeCodeMap8,
+		typeCodeMap32,
+		typeCodeArray8,
+		typeCodeArray32:
+		return nil, errorErrorf("%0x not implemented", b)
+
 	default:
 		return nil, errorErrorf("unknown type %0x", b)
 	}

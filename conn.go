@@ -11,11 +11,12 @@ import (
 	"time"
 )
 
-// connection defaults
+// Connection defaults
 const (
-	defaultMaxFrameSize = 512
-	defaultChannelMax   = 1
-	defaultIdleTimeout  = 1 * time.Minute
+	DefaultMaxFrameSize = 512
+	DefaultIdleTimeout  = 1 * time.Minute
+
+	defaultChannelMax = 1
 )
 
 // Errors
@@ -156,10 +157,10 @@ type conn struct {
 func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 	c := &conn{
 		net:              netConn,
-		maxFrameSize:     defaultMaxFrameSize,
-		peerMaxFrameSize: defaultMaxFrameSize,
+		maxFrameSize:     DefaultMaxFrameSize,
+		peerMaxFrameSize: DefaultMaxFrameSize,
 		channelMax:       defaultChannelMax,
-		idleTimeout:      defaultIdleTimeout,
+		idleTimeout:      DefaultIdleTimeout,
 		done:             make(chan struct{}),
 		connErr:          make(chan error, 2), // buffered to ensure connReader/Writer won't leak
 		rxProto:          make(chan protoHeader),
@@ -275,7 +276,9 @@ func (c *conn) mux() {
 	}
 }
 
-// frameReader reads one frame at a time
+// frameReader returns io.EOF on each read, this allows
+// ReadFrom to work with a net.conn without blocking until
+// the connection is closed
 type frameReader struct {
 	r io.Reader // underlying reader
 }
@@ -454,20 +457,26 @@ func (c *conn) writeFrame(fr frame) error {
 	if c.connectTimeout != 0 {
 		c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
 	}
+
+	// writeFrame into txBuf
 	c.txBuf.Reset()
 	err := writeFrame(&c.txBuf, fr)
 	if err != nil {
 		return err
 	}
 
+	// validate we're not exceeding peer's max frame size
 	if uint64(c.txBuf.Len()) > uint64(c.peerMaxFrameSize) {
 		return errorErrorf("frame larger than peer ")
 	}
 
+	// write to network
 	_, err = c.net.Write(c.txBuf.Bytes())
 	return err
 }
 
+// writeProtoHeader writes an AMQP protocol header to the
+// network
 func (c *conn) writeProtoHeader(pID protoID) error {
 	if c.connectTimeout != 0 {
 		c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
@@ -479,6 +488,8 @@ func (c *conn) writeProtoHeader(pID protoID) error {
 // keepaliveFrame is an AMQP frame with no body, used for keepalives
 var keepaliveFrame = []byte{0x00, 0x00, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00}
 
+// wantWriteFrame is used by sessions and links to send frame to
+// connWriter.
 func (c *conn) wantWriteFrame(fr frame) {
 	select {
 	case c.txFrame <- fr:
@@ -549,7 +560,7 @@ func (c *conn) exchangeProtoHeader(pID protoID) stateFunc {
 	}
 }
 
-// readProtoHeader reads a protocol header packetc.rxProto.
+// readProtoHeader reads a protocol header packet from c.rxProto.
 func (c *conn) readProtoHeader() (protoHeader, error) {
 	var deadline <-chan time.Time
 	if c.connectTimeout != 0 {
@@ -710,7 +721,7 @@ func (c *conn) saslOutcome() stateFunc {
 
 // readFrame is used during connection establishment to read a single frame.
 //
-// After setup, Client.mux handles incoming frames.
+// After setup, conn.mux handles incoming frames.
 func (c *conn) readFrame() (frame, error) {
 	var deadline <-chan time.Time
 	if c.connectTimeout != 0 {
