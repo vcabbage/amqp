@@ -1453,36 +1453,25 @@ type Message struct {
 	Footer map[interface{}]interface{}
 	// TODO: implement custom type with validation
 
-	link       *link  // link the message was received on
-	deliveryID uint32 // used when sending disposition
-}
-
-// sendDisposition sends a disposition frame to the peer
-func (m *Message) sendDisposition(state interface{}) {
-	// TODO: prevent client sending twice?
-	m.link.session.txFrame(&performDisposition{
-		Role:    true,
-		First:   m.deliveryID,
-		Settled: true,
-		State:   state,
-	})
+	receiver *Receiver  // Receiver the message was received from
+	id       deliveryID // used when sending disposition
 }
 
 // Accept notifies the server that the message has been
 // accepted and does not require redelivery.
 func (m *Message) Accept() {
-	m.sendDisposition(&stateAccepted{})
+	m.receiver.acceptMessage(m.id)
 }
 
 // Reject notifies the server that the message is invalid.
 func (m *Message) Reject() {
-	m.sendDisposition(&stateRejected{})
+	m.receiver.rejectMessage(m.id)
 }
 
 // Release releases the message back to the server. The message
 // may be redelivered to this or another consumer.
 func (m *Message) Release() {
-	m.sendDisposition(&stateReleased{})
+	m.receiver.releaseMessage(m.id)
 }
 
 // TODO: add support for sending Modified disposition

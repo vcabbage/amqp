@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"net/url"
+	"time"
 )
 
 // Client is an AMQP client connection.
@@ -164,6 +165,15 @@ func randString() string { // TODO: random string gen off SO, replace
 func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	l := newLink(s)
 
+	r := &Receiver{
+		link:        l,
+		batching:    DefaultLinkBatching,
+		batchMaxAge: DefaultLinkBatchMaxAge,
+	}
+	// add receiver to link so it can be configured via
+	// link options.
+	l.receiver = r
+
 	// configure options
 	for _, o := range opts {
 		err := o(l)
@@ -210,7 +220,13 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 
 	l.senderDeliveryCount = resp.InitialDeliveryCount
 
-	return &Receiver{link: l}, nil
+	if r.batching {
+		// buffer dispositions chan to prevent disposition sends from blocking
+		r.dispositions = make(chan messageDisposition, l.linkCredit)
+		go r.dispositionBatcher()
+	}
+
+	return r, nil
 }
 
 func (s *Session) mux() {
@@ -272,6 +288,7 @@ type link struct {
 	linkCredit uint32         // maximum number of messages allowed between flow updates
 	rx         chan frameBody // sessions sends frames for this link on this channel
 	session    *Session       // parent session
+	receiver   *Receiver      // allows link options to modify Receiver
 
 	creditUsed          uint32 // currently used credits
 	senderDeliveryCount uint32 // number of messages sent/received
@@ -280,10 +297,17 @@ type link struct {
 	err                 error // err returned on Close()
 }
 
+// Default link options
+const (
+	DefaultLinkCredit      = 1
+	DefaultLinkBatching    = true
+	DefaultLinkBatchMaxAge = 5 * time.Second
+)
+
 // newLink is used by Session.mux to create new links
 func newLink(s *Session) *link {
 	return &link{
-		linkCredit: 1,
+		linkCredit: DefaultLinkCredit,
 		session:    s,
 	}
 }
@@ -291,7 +315,17 @@ func newLink(s *Session) *link {
 // close closes and requests deletion of the link.
 //
 // No operations on link are valid after close.
-func (l *link) close() {
+func (l *link) close(ctx context.Context) {
+	// "A peer closes a link by sending the detach frame with the
+	// handle for the specified link, and the closed flag set to
+	// true. The partner will destroy the corresponding link
+	// endpoint, and reply with its own detach frame with the
+	// closed flag set to true.
+	//
+	// Note that one peer MAY send a closing detach while its
+	// partner is sending a non-closing detach. In this case,
+	// the partner MUST signal that it has closed the link by
+	// reattaching and then sending a closing detach."
 	if l.detachSent {
 		return
 	}
@@ -302,22 +336,37 @@ func (l *link) close() {
 	})
 	l.detachSent = true
 
-	if !l.detachReceived {
-	outer:
-		for {
-			// TODO: timeout
-			select {
-			case <-l.session.conn.done:
-				l.err = l.session.conn.err
-			case fr := <-l.rx:
-				if fr, ok := fr.(*performDetach); ok && fr.Closed {
-					break outer
-				}
-			}
+	// already received detach from remote
+	if l.detachReceived {
+		select {
+		case l.session.deallocateHandle <- l:
+		case <-l.session.conn.done:
+			l.err = l.session.conn.err
 		}
+		return
 	}
 
-	l.session.deallocateHandle <- l
+	// wait for remote to detach
+outer:
+	for {
+		// TODO: timeout
+		select {
+		// read from link until we get the detach with Close == true,
+		// other frames are discarded.
+		case fr := <-l.rx:
+			if fr, ok := fr.(*performDetach); ok && fr.Closed {
+				break outer
+			}
+			// connection has ended
+		case <-l.session.conn.done:
+			l.err = l.session.conn.err
+		}
+	}
+	select {
+	case l.session.deallocateHandle <- l:
+	case <-l.session.conn.done:
+		l.err = l.session.conn.err
+	}
 }
 
 // LinkOption is an function for configuring an AMQP links.
@@ -335,17 +384,41 @@ func LinkSource(source string) LinkOption {
 
 // LinkCredit specifies the maximum number of unacknowledged messages
 // the sender can transmit.
-func LinkCredit(credit uint32) LinkOption { // TODO: make receiver specific?
+func LinkCredit(credit uint32) LinkOption {
 	return func(l *link) error {
 		l.linkCredit = credit
 		return nil
 	}
 }
 
+// LinkBatching toggles batching of message disposition.
+//
+// When enabled, accepting a message does not send the disposition
+// to the server until the batch is equal to link credit or the
+// batch max age expires.
+func LinkBatching(enable bool) LinkOption {
+	return func(l *link) error {
+		l.receiver.batching = enable
+		return nil
+	}
+}
+
+// LinkBatchMaxAge sets the maximum time between the start
+// of a disposition batch and sending the batch to the server.
+func LinkMatchMaxAge(d time.Duration) LinkOption {
+	return func(l *link) error {
+		l.receiver.batchMaxAge = d
+		return nil
+	}
+}
+
 // Receiver receives messages on a single AMQP link.
 type Receiver struct {
-	link *link
-	buf  bytes.Buffer
+	link         *link
+	buf          bytes.Buffer
+	batching     bool                    // enable batching of message dispositions
+	batchMaxAge  time.Duration           // maximum time between the start n batch and sending the batch to the server
+	dispositions chan messageDisposition // message dispositions are sent on this channel when batching is enabled
 }
 
 // sendFlow transmits a flow frame with enough credits to bring the sender's
@@ -370,7 +443,7 @@ func (r *Receiver) sendFlow() {
 func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 	r.buf.Reset()
 
-	msg := &Message{link: r.link}
+	msg := &Message{receiver: r}
 
 	first := true
 outer:
@@ -392,7 +465,7 @@ outer:
 			r.link.creditUsed++
 
 			if first && fr.DeliveryID != nil {
-				msg.deliveryID = *fr.DeliveryID
+				msg.id = (deliveryID)(*fr.DeliveryID)
 				first = false
 			}
 
@@ -406,7 +479,7 @@ outer:
 			}
 
 			r.link.detachReceived = true
-			r.link.close()
+			r.link.close(ctx)
 
 			return nil, ErrDetach{fr.Error}
 		}
@@ -418,6 +491,137 @@ outer:
 
 // Close closes the Receiver and AMQP link.
 func (r *Receiver) Close() error {
-	r.link.close()
+	// TODO: Should this timeout? Close() take a context? Use one of the
+	// other timeouts?
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	r.link.close(ctx)
+	cancel()
 	return r.link.err
+}
+
+type messageDisposition struct {
+	id          deliveryID
+	disposition disposition
+}
+
+type deliveryID uint32
+
+type disposition int
+
+const (
+	dispositionAccept disposition = iota
+	dispositionReject
+	dispositionRelease
+)
+
+func (r *Receiver) dispositionBatcher() {
+	// batch operations:
+	// Keep track of the first and last delivery ID, incrementing as
+	// Accept() is called. After last-first == linkCredit, send disposition.
+	// If Reject()/Release() is called, send one disposition for previously
+	// accepted, and one for the rejected/released message. If messages are
+	// accepted out of order, send any existing batch and the current message.
+	var (
+		batchSize    = r.link.linkCredit
+		batchStarted bool
+		first        deliveryID
+		last         deliveryID
+	)
+
+	// disposition should be sent at least every batchMaxAge
+	batchTimer := time.NewTimer(r.batchMaxAge)
+	defer batchTimer.Stop()
+
+	for {
+		select {
+		case msgDis := <-r.dispositions:
+
+			// not accepted or batch out of order
+			if msgDis.disposition != dispositionAccept || (batchStarted && last+1 != msgDis.id) {
+				// send the current batch, if any
+				if batchStarted {
+					r.sendDisposition(first, &last, dispositionAccept)
+					batchStarted = false
+				}
+
+				// send the current message
+				r.sendDisposition(msgDis.id, nil, msgDis.disposition)
+				continue
+			}
+
+			if batchStarted {
+				// increment last
+				last++
+			} else {
+				// start new batch
+				batchStarted = true
+				first = msgDis.id
+				last = msgDis.id
+				batchTimer.Reset(r.batchMaxAge)
+			}
+
+			// send batch if current size == batchSize
+			if uint32(last-first+1) >= batchSize {
+				r.sendDisposition(first, &last, dispositionAccept)
+				batchStarted = false
+				if !batchTimer.Stop() {
+					<-batchTimer.C // batch timer must be drained if stop returns false
+				}
+			}
+
+		// maxBatchAge elapsed, send batch
+		case <-batchTimer.C:
+			r.sendDisposition(first, &last, dispositionAccept)
+			batchStarted = false
+			batchTimer.Stop()
+
+		case <-r.link.session.conn.done: // TODO: this should exit if link or session is closed
+			return
+		}
+	}
+}
+
+// sendDisposition sends a disposition frame to the peer
+func (r *Receiver) sendDisposition(first deliveryID, last *deliveryID, disp disposition) {
+	fr := &performDisposition{
+		Role:    true,
+		First:   uint32(first),
+		Last:    (*uint32)(last),
+		Settled: true,
+	}
+
+	switch disp {
+	case dispositionAccept:
+		fr.State = new(stateAccepted)
+	case dispositionReject:
+		fr.State = new(stateRejected)
+	case dispositionRelease:
+		fr.State = new(stateReleased)
+	}
+
+	r.link.session.txFrame(fr)
+}
+
+func (r *Receiver) acceptMessage(id deliveryID) {
+	if r.batching {
+		r.dispositions <- messageDisposition{id: id, disposition: dispositionAccept}
+		return
+	}
+	r.sendDisposition(id, nil, dispositionAccept)
+}
+
+func (r *Receiver) rejectMessage(id deliveryID) {
+	if r.batching {
+		r.dispositions <- messageDisposition{id: id, disposition: dispositionReject}
+		return
+	}
+	r.sendDisposition(id, nil, dispositionReject)
+}
+
+func (r *Receiver) releaseMessage(id deliveryID) {
+	if r.batching {
+		r.dispositions <- messageDisposition{id: id, disposition: dispositionRelease}
+		return
+	}
+	r.sendDisposition(id, nil, dispositionRelease)
 }

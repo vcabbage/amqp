@@ -81,7 +81,7 @@ func ConnIdleTimeout(d time.Duration) ConnOption {
 }
 
 // ConnMaxFrameSize sets the maximum frame size that
-// the connection will send our receive.
+// the connection will accept.
 //
 // Must be 512 or greater.
 //
@@ -149,8 +149,8 @@ type conn struct {
 	rxFrame chan frame       // AMQP frames received by connReader
 
 	// connWriter
-	txFrame chan frame // AMQP frames to be sent by connWriter
-	txBuf   bytes.Buffer
+	txFrame chan frame   // AMQP frames to be sent by connWriter
+	txBuf   bytes.Buffer // buffer for marshaling frames before transmitting
 }
 
 func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
@@ -275,16 +275,12 @@ func (c *conn) mux() {
 	}
 }
 
-// frameReader reads one frame at a time, up to n bytes
+// frameReader reads one frame at a time
 type frameReader struct {
 	r io.Reader // underlying reader
-	n int64     // max bytes per Read call
 }
 
 func (f *frameReader) Read(p []byte) (int, error) {
-	if f.n < int64(len(p)) {
-		p = p[:f.n]
-	}
 	n, err := f.r.Read(p)
 	if err != nil {
 		return n, err
@@ -304,14 +300,14 @@ func (c *conn) connReader() {
 	)
 
 	// frameReader facilitates reading directly into buf
-	fr := &frameReader{r: c.net, n: int64(c.maxFrameSize)}
+	fr := &frameReader{r: c.net}
 
 	for {
 		// we need to read more if buf doesn't contain the complete frame
 		// or there's not enough in buf to parse the header
 		if frameInProgress || buf.Len() < frameHeaderSize {
 			c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
-			_, err := buf.ReadFrom(fr) // TODO: send error on frame too large
+			_, err := buf.ReadFrom(fr)
 			if err != nil {
 				if atomic.LoadInt32(&c.pauseRead) == 1 {
 					// need to stop reading during TLS negotiation,
@@ -407,13 +403,17 @@ func (c *conn) connReader() {
 }
 
 func (c *conn) connWriter() {
-	// if conn.peerIdleTimeout is 0, keepalive will be nil and
-	// no keepalives will be sent
-	var keepalive <-chan time.Time
+	var (
+		// keepalives are sent at a rate of 1/2 idle timeout
+		keepaliveInterval = c.peerIdleTimeout / 2
+		// 0 disables keepalives
+		keepalivesEnabled = keepaliveInterval > 0
+		// set if enable, nil if not; nil channels block forever
+		keepalive <-chan time.Time
+	)
 
-	// per spec, keepalives should be sent every 0.5 * idle timeout
-	if kaInterval := c.peerIdleTimeout / 2; kaInterval > 0 {
-		ticker := time.NewTicker(kaInterval)
+	if keepalivesEnabled {
+		ticker := time.NewTicker(keepaliveInterval)
 		defer ticker.Stop()
 		keepalive = ticker.C
 	}
@@ -431,9 +431,17 @@ func (c *conn) connWriter() {
 			err = c.writeFrame(fr)
 
 		// keepalive timer
-		case <-keepalive: // TODO: this should be in connReader?
-			// TODO: reset timer on non-keepalive transmit
+		case <-keepalive:
 			_, err = c.net.Write(keepaliveFrame)
+			// It would be slightly more efficient in terms of network
+			// resources to reset the timer each time a frame is sent.
+			// However, keepalives are small (8 bytes) and the interval
+			// is usually on the order of minutes. It does not seem
+			// worth it to add extra operations in the write path to
+			// avoid. (To properly reset a timer it needs to be stopped,
+			// possibly drained, then reset.)
+
+		// connection complete
 		case <-c.done:
 			return
 		}
@@ -516,20 +524,9 @@ func (c *conn) exchangeProtoHeader(pID protoID) stateFunc {
 	}
 
 	// read response header
-	var deadline <-chan time.Time
-	if c.connectTimeout != 0 {
-		deadline = time.After(c.connectTimeout)
-	}
-	var p protoHeader
-	select {
-	case p = <-c.rxProto:
-	case c.err = <-c.connErr:
-		return nil
-	case fr := <-c.rxFrame:
-		c.err = errorErrorf("unexpected frame %#v", fr)
-		return nil
-	case <-deadline: // TODO: move to connReader
-		c.err = ErrTimeout
+	p, err := c.readProtoHeader()
+	if err != nil {
+		c.err = err
 		return nil
 	}
 
@@ -549,6 +546,25 @@ func (c *conn) exchangeProtoHeader(pID protoID) stateFunc {
 	default:
 		c.err = errorErrorf("unknown protocol ID %#02x", p.ProtoID)
 		return nil
+	}
+}
+
+// readProtoHeader reads a protocol header packetc.rxProto.
+func (c *conn) readProtoHeader() (protoHeader, error) {
+	var deadline <-chan time.Time
+	if c.connectTimeout != 0 {
+		deadline = time.After(c.connectTimeout)
+	}
+	var p protoHeader
+	select {
+	case p = <-c.rxProto:
+		return p, nil
+	case err := <-c.connErr:
+		return p, err
+	case fr := <-c.rxFrame:
+		return p, errorErrorf("unexpected frame %#v", fr)
+	case <-deadline:
+		return p, ErrTimeout
 	}
 }
 
@@ -625,6 +641,7 @@ func (c *conn) openAMQP() stateFunc {
 		c.peerMaxFrameSize = o.MaxFrameSize
 	}
 	if o.IdleTimeout > 0 {
+		// TODO: reject very small idle timeouts
 		c.peerIdleTimeout = o.IdleTimeout
 	}
 	if o.ChannelMax < c.channelMax {
@@ -658,7 +675,7 @@ func (c *conn) negotiateSASL() stateFunc {
 	}
 
 	// no match
-	c.err = errorErrorf("no supported auth mechanism (%v)", sm.Mechanisms) // TODO: send some sort of "auth not supported" frame?
+	c.err = errorErrorf("no supported auth mechanism (%v)", sm.Mechanisms) // TODO: send "auth not supported" frame?
 	return nil
 }
 
