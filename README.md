@@ -22,6 +22,12 @@ API is subject to change until 1.0.0. If you choose to use this library, please 
 
 ---
 
+## Install
+
+```
+go get -u pack.ag/amqp
+```
+
 ## Example Usage
 
 ``` go
@@ -37,7 +43,9 @@ import (
 
 func main() {
 	// Create client
-	client, err := amqp.Dial("amqps://my-namespace.servicebus.windows.net", amqp.ConnSASLPlain("access-key-name", "access-key"))
+	client, err := amqp.Dial("amqps://my-namespace.servicebus.windows.net",
+		amqp.ConnSASLPlain("access-key-name", "access-key"),
+	)
 	if err != nil {
 		log.Fatal("Dialing AMQP server:", err)
 	}
@@ -55,7 +63,7 @@ func main() {
 		amqp.LinkCredit(10),
 	)
 	if err != nil {
-		fmt.Println(err)
+		log.Fatal("Creating receiver link:", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

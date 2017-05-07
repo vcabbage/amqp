@@ -10,7 +10,9 @@ import (
 
 func Example() {
 	// Create client
-	client, err := amqp.Dial("amqps://my-namespace.servicebus.windows.net", amqp.ConnSASLPlain("access-key-name", "access-key"))
+	client, err := amqp.Dial("amqps://my-namespace.servicebus.windows.net",
+		amqp.ConnSASLPlain("access-key-name", "access-key"),
+	)
 	if err != nil {
 		log.Fatal("Dialing AMQP server:", err)
 	}
@@ -28,7 +30,7 @@ func Example() {
 		amqp.LinkCredit(10),
 	)
 	if err != nil {
-		fmt.Println(err)
+		log.Fatal("Creating receiver link:", err)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
