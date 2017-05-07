@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// Connection defaults
+// Default connection options
 const (
 	DefaultMaxFrameSize = 512
 	DefaultIdleTimeout  = 1 * time.Minute
