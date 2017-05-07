@@ -1289,6 +1289,7 @@ func (d *performDetach) unmarshal(r reader) error {
 	}...)
 }
 
+// ErrorCondition is one of the error conditions defined in the AMQP spec.
 type ErrorCondition string
 
 func (ec ErrorCondition) marshal(wr writer) error {

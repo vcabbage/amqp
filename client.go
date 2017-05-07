@@ -432,7 +432,7 @@ func LinkBatching(enable bool) LinkOption {
 
 // LinkBatchMaxAge sets the maximum time between the start
 // of a disposition batch and sending the batch to the server.
-func LinkMatchMaxAge(d time.Duration) LinkOption {
+func LinkBatchMaxAge(d time.Duration) LinkOption {
 	return func(l *link) error {
 		l.receiver.batchMaxAge = d
 		return nil
