@@ -1,6 +1,6 @@
 # **pack.ag/amqp**
 
-[![Go Report Card](https://goreportcard.com/badge/vcabbage/amqp)](https://goreportcard.com/report/vcabbage/amqp)
+[![Go Report Card](https://goreportcard.com/badge/pack.ag/amqp)](https://goreportcard.com/report/pack.ag/amqp)
 [![Coverage Status](https://coveralls.io/repos/github/vcabbage/amqp/badge.svg?branch=master)](https://coveralls.io/github/vcabbage/amqp?branch=master)
 [![Build Status](https://travis-ci.org/vcabbage/amqp.svg?branch=master)](https://travis-ci.org/vcabbage/amqp)
 [![Build status](https://ci.appveyor.com/api/projects/status/blah/branch/master?svg=true)](https://ci.appveyor.com/project/vcabbage/amqp/branch/master)
