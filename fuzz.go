@@ -140,6 +140,10 @@ func FuzzUnmarshal(data []byte) int {
 		new(*map[Symbol]interface{}),
 		new(interface{}),
 		new(*interface{}),
+		new(ErrorCondition),
+		new(*ErrorCondition),
+		new(role),
+		new(*role),
 	}
 
 	for _, t := range types {

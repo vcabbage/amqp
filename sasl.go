@@ -11,7 +11,7 @@ const (
 
 // SASL Mechanisms
 const (
-	saslMechanismPLAIN Symbol = "PLAIN"
+	saslMechanismPLAIN symbol = "PLAIN"
 )
 
 type saslCode int
@@ -30,7 +30,7 @@ func ConnSASLPlain(username, password string) ConnOption {
 	return func(c *conn) error {
 		// make handlers map if no other mechanism has
 		if c.saslHandlers == nil {
-			c.saslHandlers = make(map[Symbol]stateFunc)
+			c.saslHandlers = make(map[symbol]stateFunc)
 		}
 
 		// add the handler the the map

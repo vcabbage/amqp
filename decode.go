@@ -166,18 +166,18 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 			return isNull, err
 		}
 		*t = val
-	case *[]Symbol:
+	case *[]symbol:
 		sa, err := readSymbolArray(r)
 		if err != nil {
 			return isNull, err
 		}
 		*t = sa
-	case *Symbol:
+	case *symbol:
 		s, err := readString(r)
 		if err != nil {
 			return isNull, err
 		}
-		*t = Symbol(s)
+		*t = symbol(s)
 	case *[]byte:
 		val, err := readBinary(r)
 		if err != nil {
@@ -200,7 +200,7 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 		return isNull, (*mapAnyAny)(t).unmarshal(r)
 	case *map[string]interface{}:
 		return isNull, (*mapStringAny)(t).unmarshal(r)
-	case *map[Symbol]interface{}:
+	case *map[symbol]interface{}:
 		return isNull, (*mapSymbolAny)(t).unmarshal(r)
 	case *interface{}:
 		v, err := readAny(r)
@@ -322,7 +322,7 @@ func defaultUint8(n *uint8, defaultValue uint8) nullHandler {
 
 // defaultSymbol returns a nullHandler that sets s to defaultValue
 // if the field is null.
-func defaultSymbol(s *Symbol, defaultValue Symbol) nullHandler {
+func defaultSymbol(s *symbol, defaultValue symbol) nullHandler {
 	return func() error {
 		*s = defaultValue
 		return nil
@@ -383,7 +383,7 @@ func readStringArray(r reader) ([]string, error) {
 	return strs, nil
 }
 
-func readSymbolArray(r reader) ([]Symbol, error) {
+func readSymbolArray(r reader) ([]symbol, error) {
 	lElems, _, err := readHeaderSlice(r)
 	if err != nil {
 		return nil, err
@@ -394,14 +394,14 @@ func readSymbolArray(r reader) ([]Symbol, error) {
 		return nil, err
 	}
 
-	var strs []Symbol
+	var strs []symbol
 	for i := 0; i < lElems; i++ {
 		vari, err := readVariableType(r, amqpType(b))
 		if err != nil {
 			return nil, err
 		}
 
-		strs = append(strs, Symbol(vari))
+		strs = append(strs, symbol(vari))
 	}
 	return strs, nil
 }

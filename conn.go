@@ -121,7 +121,7 @@ type conn struct {
 	tlsConfig      *tls.Config // TLS config, default used if nil (ServerName set to Client.hostname)
 
 	// SASL
-	saslHandlers map[Symbol]stateFunc // map of supported handlers keyed by SASL mechanism, SASL not negotiated if nil
+	saslHandlers map[symbol]stateFunc // map of supported handlers keyed by SASL mechanism, SASL not negotiated if nil
 	saslComplete bool                 // SASL negotiation complete
 
 	// local settings

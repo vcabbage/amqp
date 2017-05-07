@@ -118,7 +118,7 @@ func marshal(wr writer, i interface{}) error {
 		err = binary.Write(wr, binary.BigEndian, t)
 	case uint8:
 		_, err = wr.Write([]byte{byte(typeCodeUbyte), t})
-	case []Symbol:
+	case []symbol:
 		err = writeSymbolArray(wr, t)
 	case string:
 		err = writeString(wr, t)
@@ -193,7 +193,7 @@ func marshalComposite(wr writer, code amqpType, fields ...marshalField) error {
 	return err
 }
 
-func writeSymbolArray(wr writer, symbols []Symbol) error {
+func writeSymbolArray(wr writer, symbols []symbol) error {
 	ofType := typeCodeSym8
 	for _, symbol := range symbols {
 		if len(symbol) > math.MaxUint8 {
@@ -221,7 +221,7 @@ func writeSymbolArray(wr writer, symbols []Symbol) error {
 	return err
 }
 
-func writeSymbol(wr writer, sym Symbol, typ amqpType) error {
+func writeSymbol(wr writer, sym symbol, typ amqpType) error {
 	if !utf8.ValidString(string(sym)) {
 		return errorNew("not a valid UTF-8 string")
 	}

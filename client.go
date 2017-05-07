@@ -631,7 +631,7 @@ func (r *Receiver) dispositionBatcher() {
 // sendDisposition sends a disposition frame to the peer
 func (r *Receiver) sendDisposition(first deliveryID, last *deliveryID, disp disposition) {
 	fr := &performDisposition{
-		Role:    true,
+		Role:    roleReceiver,
 		First:   uint32(first),
 		Last:    (*uint32)(last),
 		Settled: true,

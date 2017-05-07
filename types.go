@@ -182,11 +182,11 @@ type performOpen struct {
 	MaxFrameSize        uint32        // default: 4294967295
 	ChannelMax          uint16        // default: 65535
 	IdleTimeout         time.Duration // from milliseconds
-	OutgoingLocales     []Symbol
-	IncomingLocales     []Symbol
-	OfferedCapabilities []Symbol
-	DesiredCapabilities []Symbol
-	Properties          map[Symbol]interface{}
+	OutgoingLocales     []symbol
+	IncomingLocales     []symbol
+	OfferedCapabilities []symbol
+	DesiredCapabilities []symbol
+	Properties          map[symbol]interface{}
 }
 
 func (o *performOpen) link() (uint32, bool) {
@@ -262,16 +262,16 @@ type performBegin struct {
 
 	// the extension capabilities the sender supports
 	// http://www.amqp.org/specification/1.0/session-capabilities
-	OfferedCapabilities []Symbol
+	OfferedCapabilities []symbol
 
 	// the extension capabilities the sender can use if the receiver supports them
 	// The sender MUST NOT attempt to use any capability other than those it
 	// has declared in desired-capabilities field.
-	DesiredCapabilities []Symbol
+	DesiredCapabilities []symbol
 
 	// session properties
 	// http://www.amqp.org/specification/1.0/session-properties
-	Properties map[Symbol]interface{}
+	Properties map[symbol]interface{}
 }
 
 func (b *performBegin) link() (uint32, bool) {
@@ -440,17 +440,17 @@ type performAttach struct {
 
 	// the extension capabilities the sender supports
 	// http://www.amqp.org/specification/1.0/link-capabilities
-	OfferedCapabilities []Symbol
+	OfferedCapabilities []symbol
 
 	// the extension capabilities the sender can use if the receiver supports them
 	//
 	// The sender MUST NOT attempt to use any capability other than those it
 	// has declared in desired-capabilities field.
-	DesiredCapabilities []Symbol
+	DesiredCapabilities []symbol
 
 	// link properties
 	// http://www.amqp.org/specification/1.0/link-properties
-	Properties map[Symbol]interface{}
+	Properties map[symbol]interface{}
 }
 
 func (a *performAttach) link() (uint32, bool) {
@@ -507,8 +507,8 @@ func (rl *role) unmarshal(r reader) error {
 	return err
 }
 
-func (rl *role) marshal(wr writer) error {
-	return marshal(wr, (*bool)(rl))
+func (rl role) marshal(wr writer) error {
+	return marshal(wr, (bool)(rl))
 }
 
 type deliveryState interface{} // TODO: http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-transactions-v1.0-os.html#type-declared
@@ -584,7 +584,7 @@ type source struct {
 	// connection-close: The expiry timer starts when most recently associated connection
 	//                   is closed.
 	// never: The terminus never expires.
-	ExpiryPolicy Symbol
+	ExpiryPolicy symbol
 
 	// duration that an expiring source will be retained
 	//
@@ -628,14 +628,14 @@ type source struct {
 	//					distribution-modes. That is, the value MUST be of the same type as
 	//					would be valid in a field defined with the following attributes:
 	//						type="symbol" multiple="true" requires="distribution-mode"
-	DynamicNodeProperties map[Symbol]interface{} // TODO: implement custom type with validation
+	DynamicNodeProperties map[symbol]interface{} // TODO: implement custom type with validation
 
 	// the distribution mode of the link
 	//
 	// This field MUST be set by the sending end of the link if the endpoint supports more
 	// than one distribution-mode. This field MAY be set by the receiving end of the link
 	// to indicate a preference when a node supports multiple distribution modes.
-	DistributionMode Symbol
+	DistributionMode symbol
 
 	// a set of predicates to filter the messages admitted onto the link
 	//
@@ -643,7 +643,7 @@ type source struct {
 	// actually in place (including any filters defaulted at the node). The receiving
 	// endpoint MUST check that the filter in place meets its needs and take responsibility
 	// for detaching if it does not.
-	Filter map[Symbol]interface{} // TODO: implement custom type with validation
+	Filter map[symbol]interface{} // TODO: implement custom type with validation
 
 	// default outcome for unsettled transfers
 	//
@@ -661,12 +661,12 @@ type source struct {
 	//
 	// When present, the values MUST be a symbolic descriptor of a valid outcome,
 	// e.g., "amqp:accepted:list".
-	Outcomes []Symbol
+	Outcomes []symbol
 
 	// the extension capabilities the sender supports/desires
 	//
 	// http://www.amqp.org/specification/1.0/source-capabilities
-	Capabilities []Symbol
+	Capabilities []symbol
 }
 
 func (s *source) marshal(wr writer) error {
@@ -746,7 +746,7 @@ type target struct {
 	// connection-close: The expiry timer starts when most recently associated connection
 	//                   is closed.
 	// never: The terminus never expires.
-	ExpiryPolicy Symbol
+	ExpiryPolicy symbol
 
 	// duration that an expiring target will be retained
 	//
@@ -790,12 +790,12 @@ type target struct {
 	//					distribution-modes. That is, the value MUST be of the same type as
 	//					would be valid in a field defined with the following attributes:
 	//						type="symbol" multiple="true" requires="distribution-mode"
-	DynamicNodeProperties map[Symbol]interface{} // TODO: implement custom type with validation
+	DynamicNodeProperties map[symbol]interface{} // TODO: implement custom type with validation
 
 	// the extension capabilities the sender supports/desires
 	//
 	// http://www.amqp.org/specification/1.0/target-capabilities
-	Capabilities []Symbol
+	Capabilities []symbol
 }
 
 func (t *target) marshal(wr writer) error {
@@ -934,7 +934,7 @@ type performFlow struct {
 
 	// link state properties
 	// http://www.amqp.org/specification/1.0/link-state-properties
-	Properties map[Symbol]interface{}
+	Properties map[symbol]interface{}
 }
 
 func (f *performFlow) link() (uint32, bool) {
@@ -1289,6 +1289,53 @@ func (d *performDetach) unmarshal(r reader) error {
 	}...)
 }
 
+type ErrorCondition string
+
+func (ec ErrorCondition) marshal(wr writer) error {
+	return marshal(wr, (symbol)(ec))
+}
+
+func (ec *ErrorCondition) unmarshal(r reader) error {
+	_, err := unmarshal(r, (*symbol)(ec))
+	return err
+}
+
+// Error Conditions
+const (
+	// AMQP Errors
+	ErrorInternalError         ErrorCondition = "amqp:internal-error"
+	ErrorNotFound              ErrorCondition = "amqp:not-found"
+	ErrorUnauthorizedAccess    ErrorCondition = "amqp:unauthorized-access"
+	ErrorDecodeError           ErrorCondition = "amqp:decode-error"
+	ErrorResourceLimitExceeded ErrorCondition = "amqp:resource-limit-exceeded"
+	ErrorNotAllowed            ErrorCondition = "amqp:not-allowed"
+	ErrorInvalidField          ErrorCondition = "amqp:invalid-field"
+	ErrorNotImplemented        ErrorCondition = "amqp:not-implemented"
+	ErrorResourceLocked        ErrorCondition = "amqp:resource-locked"
+	ErrorPreconditionFailed    ErrorCondition = "amqp:precondition-failed"
+	ErrorResourceDeleted       ErrorCondition = "amqp:resource-deleted"
+	ErrorIllegalState          ErrorCondition = "amqp:illegal-state"
+	ErrorFrameSizeTooSmall     ErrorCondition = "amqp:frame-size-too-small"
+
+	// Connection Errors
+	ErrorConnectionForced   ErrorCondition = "amqp:connection:forced"
+	ErrorFramingError       ErrorCondition = "amqp:connection:framing-error"
+	ErrorConnectionRedirect ErrorCondition = "amqp:connection:redirect"
+
+	// Session Errors
+	ErrorWindowViolation  ErrorCondition = "amqp:session:window-violation"
+	ErrorErrantLink       ErrorCondition = "amqp:session:errant-link"
+	ErrorHandleInUse      ErrorCondition = "amqp:session:handle-in-use"
+	ErrorUnattachedHandle ErrorCondition = "amqp:session:unattached-handle"
+
+	// Link Errors
+	ErrorDetachForced          ErrorCondition = "amqp:link:detach-forced"
+	ErrorTransferLimitExceeded ErrorCondition = "amqp:link:transfer-limit-exceeded"
+	ErrorMessageSizeExceeded   ErrorCondition = "amqp:link:message-size-exceeded"
+	ErrorLinkRedirect          ErrorCondition = "amqp:link:redirect"
+	ErrorStolen                ErrorCondition = "amqp:link:stolen"
+)
+
 /*
 <type name="error" class="composite" source="list">
     <descriptor name="amqp:error:list" code="0x00000000:0x0000001d"/>
@@ -1303,7 +1350,7 @@ type Error struct {
 	// TODO: should this implement the error interface?
 
 	// A symbolic value indicating the error condition.
-	Condition Symbol
+	Condition ErrorCondition
 	// TODO: make enum
 
 	// descriptive text about the error condition
@@ -1313,7 +1360,7 @@ type Error struct {
 	Description string
 
 	// map carrying information about the error condition
-	Info map[Symbol]interface{}
+	Info map[string]interface{}
 	// TODO: make more user friendly
 }
 
@@ -1636,8 +1683,8 @@ type MessageProperties struct {
 	Subject            string
 	ReplyTo            string
 	CorrelationID      interface{} // uint64, UUID, []byte, or string
-	ContentType        Symbol
-	ContentEncoding    Symbol
+	ContentType        string
+	ContentEncoding    string
 	AbsoluteExpiryTime time.Time
 	CreationTime       time.Time
 	GroupID            string
@@ -1811,7 +1858,7 @@ type stateModified struct {
 	// the value in this field associated with that key replaces the one in the
 	// existing headers; where the existing message-annotations has no such value,
 	// the value in this map is added.
-	MessageAnnotations map[Symbol]interface{}
+	MessageAnnotations map[symbol]interface{}
 }
 
 func (sm *stateModified) marshal(wr writer) error {
@@ -1840,7 +1887,7 @@ func (sm *stateModified) unmarshal(r reader) error {
 */
 
 type saslInit struct {
-	Mechanism       Symbol
+	Mechanism       symbol
 	InitialResponse []byte
 	Hostname        string
 }
@@ -1865,7 +1912,7 @@ func (si *saslInit) marshal(wr writer) error {
 */
 
 type saslMechanisms struct {
-	Mechanisms []Symbol
+	Mechanisms []symbol
 }
 
 func (sm *saslMechanisms) unmarshal(r reader) error {
@@ -1902,10 +1949,10 @@ func (*saslOutcome) link() (uint32, bool) {
 	return 0, false
 }
 
-// Symbol is an AMQP symbolic string.
-type Symbol string
+// symbol is an AMQP symbolic string.
+type symbol string
 
-func (s Symbol) marshal(wr writer) error {
+func (s symbol) marshal(wr writer) error {
 	l := len(s)
 
 	var err error
@@ -2000,7 +2047,7 @@ func (m *mapStringAny) unmarshal(r reader) error {
 }
 
 // mapStringAny is used to decode AMQP maps that have Symbol keys
-type mapSymbolAny map[Symbol]interface{}
+type mapSymbolAny map[symbol]interface{}
 
 func (f *mapSymbolAny) unmarshal(r reader) error {
 	mr, err := newMapReader(r)
@@ -2010,7 +2057,7 @@ func (f *mapSymbolAny) unmarshal(r reader) error {
 
 	m := make(mapSymbolAny, mr.pairs())
 	for mr.more() {
-		var key Symbol
+		var key symbol
 		var value interface{}
 		err = mr.next(&key, &value)
 		if err != nil {
