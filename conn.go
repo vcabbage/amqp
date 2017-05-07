@@ -125,8 +125,8 @@ type conn struct {
 	saslComplete bool                 // SASL negotiation complete
 
 	// local settings
-	maxFrameSize uint32        // max frame size we accept
-	channelMax   uint16        // maximum number of channels we'll create
+	maxFrameSize uint32        // max frame size to accept
+	channelMax   uint16        // maximum number of channels to allow
 	hostname     string        // hostname of remote server (set explicitly or parsed from URL)
 	idleTimeout  time.Duration // maximum period between receiving frames
 
@@ -202,8 +202,8 @@ func (c *conn) close() error {
 	// TODO: shutdown AMQP
 	c.closeDone() // notify goroutines and blocked functions to exit
 
-	// Client.mux holds err lock until shutdown, we block until
-	// shutdown completes and we can return the error (if any)
+	// Client.mux holds err lock until shutdown, block until
+	// shutdown completes, then return the error (if any)
 	c.errMu.Lock()
 	defer c.errMu.Unlock()
 	err := c.net.Close()
@@ -227,7 +227,7 @@ func (c *conn) mux() {
 	// map channel to sessions
 	sessions := make(map[uint16]*Session)
 
-	// we hold the errMu lock until error or done
+	// hold the errMu lock until error or done
 	c.errMu.Lock()
 	defer c.errMu.Unlock()
 
@@ -258,7 +258,7 @@ func (c *conn) mux() {
 		// then add it to the sessions map. This allows us to control ID
 		// allocation and prevents the need to have shared map. Since new
 		// sessions are far less frequent than frames being sent to sessions,
-		// we can avoid the lock/unlock for session lookup.
+		// this avoids the lock/unlock for session lookup.
 		case c.newSession <- nextSession:
 			sessions[nextSession.channel] = nextSession
 
@@ -297,16 +297,16 @@ func (c *conn) connReader() {
 	buf := new(bytes.Buffer)
 
 	var (
-		negotiating     = true      // true during conn establishment, we should check for protoHeaders
+		negotiating     = true      // true during conn establishment, check for protoHeaders
 		currentHeader   frameHeader // keep track of the current header, for frames split across multiple TCP packets
-		frameInProgress bool        // true if we're in the middle of receiving data for currentHeader
+		frameInProgress bool        // true if in the middle of receiving data for currentHeader
 	)
 
 	// frameReader facilitates reading directly into buf
 	fr := &frameReader{r: c.net}
 
 	for {
-		// we need to read more if buf doesn't contain the complete frame
+		// need to read more if buf doesn't contain the complete frame
 		// or there's not enough in buf to parse the header
 		if frameInProgress || buf.Len() < frameHeaderSize {
 			c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
@@ -328,7 +328,7 @@ func (c *conn) connReader() {
 			}
 		}
 
-		// read more if we didn't get enough to parse header
+		// read more if buf doesn't contain enough to parse the header
 		if buf.Len() < frameHeaderSize {
 			continue
 		}
@@ -341,8 +341,7 @@ func (c *conn) connReader() {
 				return
 			}
 
-			// we know negotiation is complete once an AMQP proto frame
-			// is received
+			// negotiation is complete once an AMQP proto frame is received
 			if p.ProtoID == protoAMQP {
 				negotiating = false
 			}
@@ -357,8 +356,7 @@ func (c *conn) connReader() {
 			continue
 		}
 
-		// parse the header if we're not completeing an already
-		// parsed frame
+		// parse the header if a frame isn't in progress
 		if !frameInProgress {
 			var err error
 			currentHeader, err = parseFrameHeader(buf)
@@ -377,7 +375,7 @@ func (c *conn) connReader() {
 
 		bodySize := int(currentHeader.Size - frameHeaderSize)
 
-		// check if we have the full frame
+		// the full frame has been received
 		if buf.Len() < bodySize {
 			continue
 		}
@@ -465,7 +463,7 @@ func (c *conn) writeFrame(fr frame) error {
 		return err
 	}
 
-	// validate we're not exceeding peer's max frame size
+	// validate the frame isn't exceeding peer's max frame size
 	if uint64(c.txBuf.Len()) > uint64(c.peerMaxFrameSize) {
 		return errorErrorf("frame larger than peer ")
 	}

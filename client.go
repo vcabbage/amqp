@@ -323,7 +323,7 @@ type link struct {
 	// despite its name, the delivery-count is not a count but a sequence number
 	// initialized at an arbitrary point by the sender."
 	deliveryCount  uint32
-	detachSent     bool // we've sent a detach frame
+	detachSent     bool // detach frame has been sent
 	detachReceived bool
 	err            error // err returned on Close()
 }
@@ -375,7 +375,7 @@ outer:
 	for {
 		// TODO: timeout
 		select {
-		// read from link until we get the detach with Close == true,
+		// read from link until detach with Close == true is received,
 		// other frames are discarded.
 		case fr := <-l.rx:
 			if fr, ok := fr.(*performDetach); ok && fr.Closed {
