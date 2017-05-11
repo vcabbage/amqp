@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
+	"math"
 	"math/rand"
 	"net"
 	"net/url"
@@ -265,15 +265,15 @@ func (s *Session) mux() {
 
 		// incoming frame for link
 		case fr := <-s.rx:
+			// TODO: how should the two cases below be handled?
+			//       proto error or alright to ignore?
 			handle, ok := fr.body.link()
 			if !ok {
-				log.Printf("unexpected frame: %+v (%T)", fr, fr.body)
 				continue
 			}
 
 			link, ok := links[handle]
 			if !ok {
-				log.Printf("frame with unknown handle %d: %+v", handle, fr)
 				continue
 			}
 
@@ -285,14 +285,14 @@ func (s *Session) mux() {
 	}
 }
 
-// ErrDetach is returned by a link (Receiver) when a detach frame is received.
+// DetachError is returned by a link (Receiver) when a detach frame is received.
 //
 // RemoteError will be nil if the link was detached gracefully.
-type ErrDetach struct {
+type DetachError struct {
 	RemoteError *Error
 }
 
-func (e ErrDetach) Error() string {
+func (e DetachError) Error() string {
 	return fmt.Sprintf("link detached, reason: %+v", e.RemoteError)
 }
 
@@ -451,20 +451,17 @@ type Receiver struct {
 // sendFlow transmits a flow frame with enough credits to bring the sender's
 // link credits up to l.link.linkCredit.
 func (r *Receiver) sendFlow() {
-	// determine how much credit to issue to get sender back to linkCredit
-	newLinkCredit := r.link.linkCredit - (r.link.linkCredit - r.link.creditUsed)
-
 	// increment delivery count
 	r.link.deliveryCount += r.link.creditUsed
 
 	// send flow
 	r.link.session.txFrame(&performFlow{
-		IncomingWindow: 2147483647,
+		IncomingWindow: math.MaxUint32, // max number of transfer frames
 		NextOutgoingID: 0,
 		OutgoingWindow: 0,
 		Handle:         &r.link.handle,
 		DeliveryCount:  &r.link.deliveryCount,
-		LinkCredit:     &newLinkCredit,
+		LinkCredit:     &r.link.linkCredit, // max number of messages
 	})
 
 	// reset credit used
@@ -527,7 +524,7 @@ outer:
 			r.link.detachReceived = true
 			r.link.close(ctx)
 
-			return nil, ErrDetach{fr.Error}
+			return nil, DetachError{fr.Error}
 		}
 	}
 
