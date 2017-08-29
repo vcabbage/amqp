@@ -298,7 +298,7 @@ func writeSymbolArray(wr writer, symbols []symbol) error {
 	defer bufPool.Put(buf)
 
 	for _, symbol := range symbols {
-		err := writeSymbol(buf, symbol, ofType)
+		err := writeSymbolType(buf, symbol, ofType)
 		if err != nil {
 			return err
 		}
@@ -313,7 +313,16 @@ func writeSymbolArray(wr writer, symbols []symbol) error {
 	return err
 }
 
-func writeSymbol(wr writer, sym symbol, typ amqpType) error {
+func writeSymbol(wr writer, sym symbol) error {
+	ofType := typeCodeSym8
+	if len(sym) > math.MaxUint8 {
+		ofType = typeCodeSym32
+	}
+
+	return writeSymbolType(wr, sym, ofType)
+}
+
+func writeSymbolType(wr writer, sym symbol, typ amqpType) error {
 	if !utf8.ValidString(string(sym)) {
 		return errorNew("not a valid UTF-8 string")
 	}

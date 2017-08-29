@@ -2263,12 +2263,16 @@ func (s symbol) marshal(wr writer) error {
 
 	var err error
 	switch {
-	// List8
+	// Sym8
 	case l < 256:
 		_, err = wr.Write(append([]byte{byte(typeCodeSym8), byte(l)}, []byte(s)...))
 
-	// List32
+	// Sym32
 	case l < math.MaxUint32:
+		err = wr.WriteByte(uint8(typeCodeSym32))
+		if err != nil {
+			return err
+		}
 		err = binary.Write(wr, binary.BigEndian, uint32(l))
 		if err != nil {
 			return err
@@ -2544,4 +2548,21 @@ func (m ReceiverSettleMode) marshal(wr writer) error {
 func (m *ReceiverSettleMode) unmarshal(r reader) error {
 	_, err := unmarshal(r, (*uint8)(m))
 	return err
+}
+
+type describedType struct {
+	descriptor interface{}
+	value      interface{}
+}
+
+func (t describedType) marshal(wr writer) error {
+	err := wr.WriteByte(0x0) // descriptor constructor
+	if err != nil {
+		return err
+	}
+	err = marshal(wr, t.descriptor)
+	if err != nil {
+		return err
+	}
+	return marshal(wr, t.value)
 }

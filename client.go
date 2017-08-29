@@ -619,6 +619,7 @@ type link struct {
 	senderSettleMode   *SenderSettleMode
 	receiverSettleMode *ReceiverSettleMode
 	maxMessageSize     uint64
+	filters            map[symbol]interface{} // source filters sent during attach
 	peerMaxMessageSize uint64
 	detachSent         bool // detach frame has been sent
 	detachReceived     bool
@@ -684,6 +685,7 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		attach.Source = &source{
 			Address: l.address,
 			Dynamic: l.dynamicAddr,
+			Filter:  l.filters,
 		}
 	} else {
 		attach.Role = roleSender
@@ -1081,6 +1083,21 @@ func LinkReceiverSettle(mode ReceiverSettleMode) LinkOption {
 			return errorErrorf("invalid ReceiverSettlementMode %d", mode)
 		}
 		l.receiverSettleMode = &mode
+		return nil
+	}
+}
+
+// LinkSelectorFilter sets a selector filter (apache.org:selector-filter:string) on the link source.
+func LinkSelectorFilter(filter string) LinkOption {
+	const key = symbol("apache.org:selector-filter:string")
+	return func(l *link) error {
+		if l.filters == nil {
+			l.filters = make(map[symbol]interface{})
+		}
+		l.filters[key] = describedType{
+			descriptor: key,
+			value:      filter,
+		}
 		return nil
 	}
 }
