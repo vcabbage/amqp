@@ -1080,7 +1080,7 @@ type performTransfer struct {
 	// referring to the delivery) indicates that the delivery has attained a terminal
 	// state, then no future transfer or disposition sent by the sender can alter that
 	// terminal state.
-	State interface{} // TODO: add delivery states
+	State deliveryState
 
 	// indicates a resumed delivery
 	//
@@ -1135,7 +1135,8 @@ func (t *performTransfer) link() (uint32, bool) {
 }
 
 func (t *performTransfer) marshal(wr writer) error {
-	return marshalComposite(wr, typeCodeFlow, []marshalField{
+	err := marshalComposite(wr, typeCodeTransfer, []marshalField{
+		{value: t.Handle},
 		{value: t.DeliveryID, omit: t.DeliveryID == nil},
 		{value: t.DeliveryTag, omit: len(t.DeliveryTag) == 0},
 		{value: t.MessageFormat, omit: t.MessageFormat == nil},
@@ -1147,6 +1148,12 @@ func (t *performTransfer) marshal(wr writer) error {
 		{value: t.Aborted, omit: !t.Aborted},
 		{value: t.Batchable, omit: !t.Batchable},
 	}...)
+	if err != nil {
+		return err
+	}
+
+	_, err = wr.Write(t.Payload)
+	return err
 }
 
 func (t *performTransfer) unmarshal(r reader) error {
@@ -1210,7 +1217,7 @@ type performDisposition struct {
 	// indicates state of deliveries
 	//
 	// Communicates the state of all the deliveries referenced by this disposition.
-	State interface{}
+	State deliveryState
 
 	// batchable hint
 	//
@@ -1540,6 +1547,74 @@ func (m *Message) Release() {
 
 // TODO: add support for sending Modified disposition
 
+func (m *Message) marshal(wr writer) error {
+	err := m.Header.marshal(wr)
+	if err != nil {
+		return err
+	}
+
+	if m.DeliveryAnnotations != nil {
+		err = writeDescriptor(wr, typeCodeDeliveryAnnotations)
+		if err != nil {
+			return err
+		}
+		err = marshal(wr, m.DeliveryAnnotations)
+		if err != nil {
+			return err
+		}
+	}
+
+	if m.Annotations != nil {
+		err = writeDescriptor(wr, typeCodeMessageAnnotations)
+		if err != nil {
+			return err
+		}
+		err = marshal(wr, m.Annotations)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = marshal(wr, &m.Properties)
+	if err != nil {
+		return err
+	}
+
+	if m.ApplicationProperties != nil {
+		err = writeDescriptor(wr, typeCodeApplicationProperties)
+		if err != nil {
+			return err
+		}
+		err = marshal(wr, m.ApplicationProperties)
+		if err != nil {
+			return err
+		}
+	}
+
+	if m.Data != nil {
+		err = writeDescriptor(wr, typeCodeApplicationData)
+		if err != nil {
+			return err
+		}
+		err = marshal(wr, m.Data)
+		if err != nil {
+			return err
+		}
+	}
+	if m.Footer != nil {
+		err = writeDescriptor(wr, typeCodeFooter)
+		if err != nil {
+			return err
+		}
+		err = marshal(wr, m.Footer)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (m *Message) unmarshal(r reader) error {
 	// loop, decoding sections until bytes have been consumed
 	for r.Len() > 0 {
@@ -1600,10 +1675,16 @@ func (m *Message) unmarshal(r reader) error {
 // modifying any data.
 func peekMessageType(buf []byte) (uint8, error) {
 	if len(buf) < 3 {
+		if checkNull(buf) {
+			return 0, errNull
+		}
 		return 0, errorNew("invalid message")
 	}
 
 	if buf[0] != 0 {
+		if checkNull(buf) {
+			return 0, errNull
+		}
 		return 0, errorErrorf("invalid composite header %0x", buf[0])
 	}
 
@@ -1612,6 +1693,10 @@ func peekMessageType(buf []byte) (uint8, error) {
 		return 0, err
 	}
 	return uint8(v), err
+}
+
+func checkNull(buf []byte) bool {
+	return len(buf) > 0 && amqpType(buf[0]) == typeCodeNull
 }
 
 /*
@@ -1695,14 +1780,14 @@ type MessageProperties struct {
 
 func (p *MessageProperties) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeMessageProperties, []marshalField{
-		{value: p.MessageID, omit: p.MessageID != nil},
+		{value: p.MessageID, omit: p.MessageID == nil},
 		{value: p.UserID, omit: len(p.UserID) == 0},
 		{value: p.To, omit: p.To == ""},
 		{value: p.Subject, omit: p.Subject == ""},
 		{value: p.ReplyTo, omit: p.ReplyTo == ""},
 		{value: p.CorrelationID, omit: p.CorrelationID == nil},
-		{value: p.ContentType, omit: p.ContentType == ""},
-		{value: p.ContentEncoding, omit: p.ContentEncoding == ""},
+		{value: symbol(p.ContentType), omit: p.ContentType == ""},
+		{value: symbol(p.ContentEncoding), omit: p.ContentEncoding == ""},
 		{value: p.AbsoluteExpiryTime, omit: p.AbsoluteExpiryTime.IsZero()},
 		{value: p.CreationTime, omit: p.CreationTime.IsZero()},
 		{value: p.GroupID, omit: p.GroupID == ""},
