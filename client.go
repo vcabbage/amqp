@@ -113,10 +113,11 @@ func (c *Client) NewSession() (*Session, error) {
 //
 // A session multiplexes Receivers.
 type Session struct {
-	channel       uint16     // session's local channel
-	remoteChannel uint16     // session's remote channel
-	conn          *conn      // underlying conn
-	rx            chan frame // frames destined for this session are sent on this chan by conn.mux
+	channel       uint16               // session's local channel
+	remoteChannel uint16               // session's remote channel
+	conn          *conn                // underlying conn
+	rx            chan frame           // frames destined for this session are sent on this chan by conn.mux
+	tx            chan performTransfer // transfer frames to be sent; session must track disposition
 
 	allocateHandle   chan *link // link handles are allocated by sending a link on this channel, nil is sent on link.rx once allocated
 	deallocateHandle chan *link // link handles are deallocated by sending a link on this channel
@@ -127,6 +128,7 @@ func newSession(c *conn, channel uint16) *Session {
 		conn:             c,
 		channel:          channel,
 		rx:               make(chan frame),
+		tx:               make(chan performTransfer),
 		allocateHandle:   make(chan *link),
 		deallocateHandle: make(chan *link),
 	}
@@ -240,9 +242,210 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	return r, nil
 }
 
+type Sender struct {
+	link *link
+	buf  bytes.Buffer
+}
+
+func (s *Sender) receiveFlow(ctx context.Context) error {
+	// wait for the next frame
+	var fr frameBody
+	select {
+	case <-s.link.session.conn.done:
+		return s.link.session.conn.err
+	case fr = <-s.link.rx:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
+	switch fr := fr.(type) {
+	// message frame
+	case *performFlow:
+		s.link.creditUsed -= *fr.LinkCredit
+
+	// remote side is closing links
+	case *performDetach:
+		// don't currently support link detach and reattach
+		if !fr.Closed {
+			return errorErrorf("non-closing detach not supported: %+v", fr)
+		}
+
+		// set detach received and close link
+		s.link.detachReceived = true
+		s.link.close(ctx)
+
+		return DetachError{fr.Error}
+	}
+
+	return nil
+}
+
+func (s *Sender) Send(ctx context.Context, msg *Message) error {
+	err := msg.marshal(&s.buf)
+	if err != nil {
+		return err
+	}
+
+	messageFormat := uint32(0) // Only message-format "0" is defined in spec.
+	maxPayloadSize := int(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
+	deliveryTag := []byte(randString()[:32])
+
+	for s.buf.Len() > 0 {
+		// if linkCredit used, wait for more
+		if s.link.creditUsed >= s.link.linkCredit {
+			err := s.receiveFlow(ctx)
+			if err != nil {
+				return err
+			}
+		}
+
+		transfer := performTransfer{
+			Handle:        s.link.handle,
+			DeliveryTag:   deliveryTag,
+			MessageFormat: &messageFormat,
+			Payload:       s.buf.Next(maxPayloadSize),
+			More:          s.buf.Len() > 0,
+		}
+
+		select {
+		case s.link.session.tx <- transfer:
+		case <-s.link.session.conn.done:
+			return s.link.session.conn.err
+		}
+	}
+
+	// wait for response
+	var fr frameBody
+	select {
+	case <-s.link.session.conn.done:
+		return s.link.session.conn.err
+	case fr = <-s.link.rx:
+	}
+	resp, ok := fr.(*performDisposition)
+	if !ok {
+		return errorErrorf("unexpected transfer response: %#v", fr)
+	}
+
+	switch resp.State.(type) {
+	case *stateAccepted:
+		return nil
+	case *stateRejected, *stateReleased, *stateModified:
+		fmt.Printf("%#v\n", resp.State)
+		return errDeliveryFailed
+	case *stateReceived:
+		return errorNew("unexpected stateRejected message")
+	default:
+		return errorErrorf("unexpected disposition with state %T received", resp.State)
+	}
+}
+
+var errDeliveryFailed = errorNew("delivery failed") // TODO: replace with real error type
+
+const maxTransferFrameHeader = 66 // determined by calcMaxTransferFrameHeader
+
+func calcMaxTransferFrameHeader() int {
+	var buf bytes.Buffer
+
+	maxUint32 := uint32(math.MaxUint32)
+	maxUint8 := uint8(math.MaxUint8)
+	err := writeFrame(&buf, frame{
+		typ:     frameTypeAMQP,
+		channel: math.MaxUint16,
+		body: &performTransfer{
+			Handle:             maxUint32,
+			DeliveryID:         &maxUint32,
+			DeliveryTag:        bytes.Repeat([]byte{'a'}, 32),
+			MessageFormat:      &maxUint32,
+			Settled:            true,
+			More:               true,
+			ReceiverSettleMode: &maxUint8,
+			State:              nil, // TODO: determine whether state should be included in size
+			Resume:             true,
+			Aborted:            true,
+			Batchable:          true,
+			// Payload omitted as it is appended directly without any header
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println("maxTransferFrameHeader:", buf.Len())
+	return buf.Len()
+}
+
+// NewSender opens a new sender link on the session.
+func (s *Session) NewSender(opts ...LinkOption) (*Sender, error) {
+	l := newLink(s)
+
+	snd := &Sender{
+		link: l,
+	}
+
+	// configure options
+	for _, o := range opts {
+		err := o(l)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// set creditUsed to linkCredit since no credit has been issued
+	// to remote yet
+	l.creditUsed = l.linkCredit
+
+	// buffer rx to linkCredit so that conn.mux won't block
+	// attempting to send to a slow reader
+	l.rx = make(chan frameBody, l.linkCredit)
+
+	// request handle from Session.mux
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.err
+	case s.allocateHandle <- l:
+	}
+
+	// wait for handle allocation
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.err
+	case <-l.rx:
+	}
+
+	// send Attach frame
+	s.txFrame(&performAttach{
+		Name:   randString(),
+		Handle: l.handle,
+		Role:   roleSender,
+		Target: &target{
+			Address: l.sourceAddr,
+		},
+	})
+
+	// wait for response
+	var fr frameBody
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.err
+	case fr = <-l.rx:
+	}
+	_, ok := fr.(*performAttach)
+	if !ok {
+		return nil, errorErrorf("unexpected attach response: %#v", fr)
+	}
+
+	return snd, nil
+}
+
 func (s *Session) mux() {
-	links := make(map[uint32]*link) // mapping of handles to links
-	var nextHandle uint32           // next handle # to be allocated
+	var (
+		links      = make(map[uint32]*link) // mapping of handles to links
+		nextHandle uint32                   // next handle # to be allocated
+
+		idsByDeliveryTag    = make(map[string]uint32) //mapping of deliveryTags to deliveryIDs
+		handlesByDeliveryID = make(map[uint32]uint32) //mapping of deliveryIDs to handles
+		nextDeliveryID      uint32                    // next deliveryID
+	)
 
 	for {
 		select {
@@ -269,6 +472,35 @@ func (s *Session) mux() {
 			//       proto error or alright to ignore?
 			handle, ok := fr.body.link()
 			if !ok {
+				// Disposition frames can reference transfers from more than one
+				// link. Send this frame to all of them.
+				disposition, ok := fr.body.(*performDisposition)
+				if !ok {
+					continue
+				}
+
+				start := disposition.First
+				end := start
+				if disposition.Last != nil {
+					end = *disposition.Last
+				}
+				for deliveryID := start; deliveryID <= end; deliveryID++ {
+					handle, ok := handlesByDeliveryID[deliveryID]
+					if !ok {
+						continue
+					}
+					delete(handlesByDeliveryID, deliveryID)
+
+					link, ok := links[handle]
+					if !ok {
+						continue
+					}
+
+					select {
+					case <-s.conn.done:
+					case link.rx <- fr.body:
+					}
+				}
 				continue
 			}
 
@@ -281,6 +513,31 @@ func (s *Session) mux() {
 			case <-s.conn.done:
 			case link.rx <- fr.body:
 			}
+
+		case fr := <-s.tx:
+			id, ok := idsByDeliveryTag[string(fr.DeliveryTag)]
+			if !ok {
+				// no entry for tag, allocate new DeliveryID
+				id = nextDeliveryID
+				nextDeliveryID++
+
+				if fr.More {
+					idsByDeliveryTag[string(fr.DeliveryTag)] = id
+				}
+			} else {
+				// existing entry indicates this isn't the first message,
+				// clear values that are only required on first message
+				fr.DeliveryTag = nil
+				fr.MessageFormat = nil
+
+				if !fr.More {
+					delete(idsByDeliveryTag, string(fr.DeliveryTag))
+				}
+			}
+
+			handlesByDeliveryID[id] = fr.Handle
+			fr.DeliveryID = &id
+			s.txFrame(&fr)
 		}
 	}
 }
@@ -529,7 +786,7 @@ outer:
 	}
 
 	// unmarshal message
-	_, err := unmarshal(&r.buf, msg)
+	err := msg.unmarshal(&r.buf)
 	return msg, err
 }
 

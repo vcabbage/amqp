@@ -202,6 +202,32 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 		return isNull, (*mapStringAny)(t).unmarshal(r)
 	case *map[symbol]interface{}:
 		return isNull, (*mapSymbolAny)(t).unmarshal(r)
+	case *deliveryState:
+		typ, err := peekMessageType(r.Bytes())
+		if err != nil {
+			if err == errNull {
+				_, err = r.ReadByte() // if null, discard nullCode
+				return true, err
+			}
+			return false, err
+		}
+
+		switch amqpType(typ) {
+		case typeCodeStateAccepted:
+			*t = &stateAccepted{}
+		case typeCodeStateModified:
+			*t = &stateModified{}
+		case typeCodeStateReceived:
+			*t = &stateReceived{}
+		case typeCodeStateRejected:
+			*t = &stateRejected{}
+		case typeCodeStateReleased:
+			*t = &stateReleased{}
+		default:
+			return false, errorErrorf("unexpected type %d for deliveryState", typ)
+		}
+		return unmarshal(r, *t)
+
 	case *interface{}:
 		v, err := readAny(r)
 		if err != nil {

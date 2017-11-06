@@ -118,6 +118,8 @@ func marshal(wr writer, i interface{}) error {
 		err = binary.Write(wr, binary.BigEndian, t)
 	case uint8:
 		_, err = wr.Write([]byte{byte(typeCodeUbyte), t})
+	case *uint8:
+		_, err = wr.Write([]byte{byte(typeCodeUbyte), *t})
 	case []symbol:
 		err = writeSymbolArray(wr, t)
 	case string:
@@ -178,7 +180,7 @@ func marshalComposite(wr writer, code amqpType, fields ...marshalField) error {
 	}
 
 	// write header
-	_, err := wr.Write([]byte{0x0, byte(typeCodeSmallUlong), uint8(code)})
+	err := writeDescriptor(wr, code)
 	if err != nil {
 		return err
 	}
@@ -190,6 +192,11 @@ func marshalComposite(wr writer, code amqpType, fields ...marshalField) error {
 	}
 
 	_, err = buf.WriteTo(wr)
+	return err
+}
+
+func writeDescriptor(wr writer, code amqpType) error {
+	_, err := wr.Write([]byte{0x0, byte(typeCodeSmallUlong), uint8(code)})
 	return err
 }
 
