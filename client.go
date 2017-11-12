@@ -187,7 +187,7 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 
 	// set creditUsed to linkCredit since no credit has been issued
 	// to remote yet
-	l.creditUsed = l.linkCredit
+	r.creditUsed = l.linkCredit
 
 	// buffer rx to linkCredit so that conn.mux won't block
 	// attempting to send to a slow reader
@@ -255,13 +255,13 @@ func (s *Sender) receiveFlow(ctx context.Context) error {
 		return s.link.session.conn.err
 	case fr = <-s.link.rx:
 	case <-ctx.Done():
-		return ctx.Err()
+		return errorWrapf(ctx.Err(), "awaiting flow frame")
 	}
 
 	switch fr := fr.(type) {
 	// message frame
 	case *performFlow:
-		s.link.creditUsed -= *fr.LinkCredit
+		s.link.linkCredit = *fr.DeliveryCount + *fr.LinkCredit - s.link.deliveryCount
 
 	// remote side is closing links
 	case *performDetach:
@@ -286,57 +286,67 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 		return err
 	}
 
-	messageFormat := uint32(0) // Only message-format "0" is defined in spec.
-	maxPayloadSize := int(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
-	deliveryTag := []byte(randString()[:32])
+	var (
+		messageFormat  = uint32(0) // Only message-format "0" is defined in spec.
+		maxPayloadSize = int(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
+		deliveryTag    = []byte(randString()[:32])
+	)
 
 	for s.buf.Len() > 0 {
 		// if linkCredit used, wait for more
-		if s.link.creditUsed >= s.link.linkCredit {
+		if s.link.linkCredit < 1 {
 			err := s.receiveFlow(ctx)
 			if err != nil {
 				return err
 			}
 		}
 
-		transfer := performTransfer{
+		fr := performTransfer{
 			Handle:        s.link.handle,
 			DeliveryTag:   deliveryTag,
 			MessageFormat: &messageFormat,
-			Payload:       s.buf.Next(maxPayloadSize),
+			Payload:       append([]byte(nil), s.buf.Next(maxPayloadSize)...),
 			More:          s.buf.Len() > 0,
 		}
 
 		select {
-		case s.link.session.tx <- transfer:
+		case s.link.session.tx <- fr:
 		case <-s.link.session.conn.done:
 			return s.link.session.conn.err
+		case <-ctx.Done():
+			return errorWrapf(ctx.Err(), "awaiting send")
 		}
+
+		s.link.deliveryCount++
+		s.link.linkCredit--
 	}
 
-	// wait for response
-	var fr frameBody
-	select {
-	case <-s.link.session.conn.done:
-		return s.link.session.conn.err
-	case fr = <-s.link.rx:
-	}
-	resp, ok := fr.(*performDisposition)
-	if !ok {
-		return errorErrorf("unexpected transfer response: %#v", fr)
-	}
+	// // wait for response
+	// var fr frameBody
+	// select {
+	// case fr = <-s.link.rx:
+	// case <-s.link.session.conn.done:
+	// 	return s.link.session.conn.err
+	// case <-ctx.Done():
+	// 	return errorWrapf(ctx.Err(), "awaiting response")
+	// }
+	// resp, ok := fr.(*performDisposition)
+	// if !ok {
+	// 	return errorErrorf("unexpected transfer response: %#v", fr)
+	// }
 
-	switch resp.State.(type) {
-	case *stateAccepted:
-		return nil
-	case *stateRejected, *stateReleased, *stateModified:
-		fmt.Printf("%#v\n", resp.State)
-		return errDeliveryFailed
-	case *stateReceived:
-		return errorNew("unexpected stateRejected message")
-	default:
-		return errorErrorf("unexpected disposition with state %T received", resp.State)
-	}
+	// switch resp.State.(type) {
+	// case *stateAccepted:
+	// 	return nil
+	// case *stateRejected, *stateReleased, *stateModified:
+	// 	fmt.Printf("%#v\n", resp.State)
+	// 	return errDeliveryFailed
+	// case *stateReceived:
+	// 	return errorNew("unexpected stateRejected message")
+	// default:
+	// 	return errorErrorf("unexpected disposition with state %T received", resp.State)
+	// }
+	return nil
 }
 
 var errDeliveryFailed = errorNew("delivery failed") // TODO: replace with real error type
@@ -377,6 +387,7 @@ func calcMaxTransferFrameHeader() int {
 // NewSender opens a new sender link on the session.
 func (s *Session) NewSender(opts ...LinkOption) (*Sender, error) {
 	l := newLink(s)
+	l.linkCredit = 0
 
 	snd := &Sender{
 		link: l,
@@ -390,13 +401,9 @@ func (s *Session) NewSender(opts ...LinkOption) (*Sender, error) {
 		}
 	}
 
-	// set creditUsed to linkCredit since no credit has been issued
-	// to remote yet
-	l.creditUsed = l.linkCredit
-
-	// buffer rx to linkCredit so that conn.mux won't block
+	// buffer rx so that conn.mux won't block
 	// attempting to send to a slow reader
-	l.rx = make(chan frameBody, l.linkCredit)
+	l.rx = make(chan frameBody, 1)
 
 	// request handle from Session.mux
 	select {
@@ -571,8 +578,6 @@ type link struct {
 	session    *Session       // parent session
 	receiver   *Receiver      // allows link options to modify Receiver
 
-	creditUsed uint32 // currently used credits
-
 	// "The delivery-count is initialized by the sender when a link endpoint is created,
 	// and is incremented whenever a message is sent. Only the sender MAY independently
 	// modify this field. The receiver's value is calculated based on the last known
@@ -670,6 +675,10 @@ func LinkSource(source string) LinkOption {
 // the sender can transmit.
 func LinkCredit(credit uint32) LinkOption {
 	return func(l *link) error {
+		if l.receiver == nil {
+			return errorNew("LinkCredit is not valid for Sender")
+		}
+
 		l.linkCredit = credit
 		return nil
 	}
@@ -703,13 +712,14 @@ type Receiver struct {
 	batching     bool                    // enable batching of message dispositions
 	batchMaxAge  time.Duration           // maximum time between the start n batch and sending the batch to the server
 	dispositions chan messageDisposition // message dispositions are sent on this channel when batching is enabled
+	creditUsed   uint32                  // currently used credits
 }
 
 // sendFlow transmits a flow frame with enough credits to bring the sender's
 // link credits up to l.link.linkCredit.
 func (r *Receiver) sendFlow() {
 	// increment delivery count
-	r.link.deliveryCount += r.link.creditUsed
+	r.link.deliveryCount += r.creditUsed
 
 	// send flow
 	r.link.session.txFrame(&performFlow{
@@ -722,7 +732,7 @@ func (r *Receiver) sendFlow() {
 	})
 
 	// reset credit used
-	r.link.creditUsed = 0
+	r.creditUsed = 0
 }
 
 // Receive returns the next message from the sender.
@@ -737,7 +747,7 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 outer:
 	for {
 		// if linkCredit is half used, send more
-		if r.link.creditUsed > r.link.linkCredit/2 {
+		if r.creditUsed > r.link.linkCredit/2 {
 			r.sendFlow()
 		}
 
@@ -754,7 +764,7 @@ outer:
 		switch fr := fr.(type) {
 		// message frame
 		case *performTransfer:
-			r.link.creditUsed++
+			r.creditUsed++
 
 			// record the delivery ID if this is the first frame of the message
 			if first && fr.DeliveryID != nil {
