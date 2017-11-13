@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"net/url"
+	"sync"
 	"time"
 )
 
@@ -67,7 +68,7 @@ func New(conn net.Conn, opts ...ConnOption) (*Client, error) {
 
 // Close disconnects the connection.
 func (c *Client) Close() error {
-	return c.conn.close()
+	return c.conn.Close()
 }
 
 // NewSession opens a new AMQP session to the server.
@@ -76,7 +77,7 @@ func (c *Client) NewSession() (*Session, error) {
 	var s *Session
 	select {
 	case <-c.conn.done:
-		return nil, c.conn.err
+		return nil, c.conn.getErr()
 	case s = <-c.conn.newSession:
 	}
 
@@ -90,14 +91,14 @@ func (c *Client) NewSession() (*Session, error) {
 	var fr frame
 	select {
 	case <-c.conn.done:
-		return nil, c.conn.err
+		return nil, c.conn.getErr()
 	case fr = <-s.rx:
 	}
 
 	begin, ok := fr.body.(*performBegin)
 	if !ok {
 		s.Close() // deallocate session on error
-		return nil, errorErrorf("unexpected begin response: %+v", fr)
+		return nil, errorErrorf("unexpected begin response: %T - %+v", fr.body, fr.body)
 	}
 
 	// TODO: record negotiated settings
@@ -139,7 +140,7 @@ func (s *Session) Close() error {
 	// TODO: send end preformative (if Begin has been exchanged)
 	select {
 	case <-s.conn.done:
-		return s.conn.err
+		return s.conn.getErr()
 	case s.conn.delSession <- s:
 		return nil
 	}
@@ -154,83 +155,29 @@ func (s *Session) txFrame(p frameBody) {
 	})
 }
 
-func randString() string { // TODO: random string gen off SO, replace
+func randBytes(n int) []byte { // TODO: random string gen off SO, replace
 	var letterBytes = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
-	b := make([]byte, 40)
+	b := make([]byte, n)
 	for i := range b {
 		b[i] = letterBytes[rand.Int63()%int64(len(letterBytes))]
 	}
-	return string(b)
+	return b
 }
 
 // NewReceiver opens a new receiver link on the session.
 func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
-	l := newLink(s)
-
 	r := &Receiver{
-		link:        l,
 		batching:    DefaultLinkBatching,
 		batchMaxAge: DefaultLinkBatchMaxAge,
+		maxCredit:   DefaultLinkCredit,
 	}
 
-	// add receiver to link so it can be configured via
-	// link options.
-	l.receiver = r
-
-	// configure options
-	for _, o := range opts {
-		err := o(l)
-		if err != nil {
-			return nil, err
-		}
+	l, err := newLink(s, r, opts)
+	if err != nil {
+		return nil, err
 	}
 
-	// set creditUsed to linkCredit since no credit has been issued
-	// to remote yet
-	r.creditUsed = l.linkCredit
-
-	// buffer rx to linkCredit so that conn.mux won't block
-	// attempting to send to a slow reader
-	l.rx = make(chan frameBody, l.linkCredit)
-
-	// request handle from Session.mux
-	select {
-	case <-s.conn.done:
-		return nil, s.conn.err
-	case s.allocateHandle <- l:
-	}
-
-	// wait for handle allocation
-	select {
-	case <-s.conn.done:
-		return nil, s.conn.err
-	case <-l.rx:
-	}
-
-	// send Attach frame
-	s.txFrame(&performAttach{
-		Name:   randString(),
-		Handle: l.handle,
-		Role:   roleReceiver,
-		Source: &source{
-			Address: l.sourceAddr,
-		},
-	})
-
-	// wait for response
-	var fr frameBody
-	select {
-	case <-s.conn.done:
-		return nil, s.conn.err
-	case fr = <-l.rx:
-	}
-	resp, ok := fr.(*performAttach)
-	if !ok {
-		return nil, errorErrorf("unexpected attach response: %+v", fr)
-	}
-
-	// deliveryCount is a sequence number, must initialize to sender's initial sequence number
-	l.deliveryCount = resp.InitialDeliveryCount
+	r.link = l
 
 	// create dispositions channel and start dispositionBatcher if batching enabled
 	if r.batching {
@@ -247,39 +194,6 @@ type Sender struct {
 	buf  bytes.Buffer
 }
 
-func (s *Sender) receiveFlow(ctx context.Context) error {
-	// wait for the next frame
-	var fr frameBody
-	select {
-	case <-s.link.session.conn.done:
-		return s.link.session.conn.err
-	case fr = <-s.link.rx:
-	case <-ctx.Done():
-		return errorWrapf(ctx.Err(), "awaiting flow frame")
-	}
-
-	switch fr := fr.(type) {
-	// message frame
-	case *performFlow:
-		s.link.linkCredit = *fr.DeliveryCount + *fr.LinkCredit - s.link.deliveryCount
-
-	// remote side is closing links
-	case *performDetach:
-		// don't currently support link detach and reattach
-		if !fr.Closed {
-			return errorErrorf("non-closing detach not supported: %+v", fr)
-		}
-
-		// set detach received and close link
-		s.link.detachReceived = true
-		s.link.close(ctx)
-
-		return DetachError{fr.Error}
-	}
-
-	return nil
-}
-
 func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	err := msg.marshal(&s.buf)
 	if err != nil {
@@ -289,44 +203,36 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	var (
 		messageFormat  = uint32(0) // Only message-format "0" is defined in spec.
 		maxPayloadSize = int(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
-		deliveryTag    = []byte(randString()[:32])
 	)
 
-	for s.buf.Len() > 0 {
-		// if linkCredit used, wait for more
-		if s.link.linkCredit < 1 {
-			err := s.receiveFlow(ctx)
-			if err != nil {
-				return err
-			}
-		}
+	fr := performTransfer{
+		Handle:        s.link.handle,
+		DeliveryTag:   randBytes(32),
+		MessageFormat: &messageFormat,
+		More:          s.buf.Len() > 0,
+	}
 
-		fr := performTransfer{
-			Handle:        s.link.handle,
-			DeliveryTag:   deliveryTag,
-			MessageFormat: &messageFormat,
-			Payload:       append([]byte(nil), s.buf.Next(maxPayloadSize)...),
-			More:          s.buf.Len() > 0,
-		}
+	for fr.More {
+		fr.Payload = append([]byte(nil), s.buf.Next(maxPayloadSize)...)
+		fr.More = s.buf.Len() > 0
 
 		select {
-		case s.link.session.tx <- fr:
-		case <-s.link.session.conn.done:
-			return s.link.session.conn.err
+		case s.link.transfers <- fr:
+		case <-s.link.done:
+			return s.link.err
 		case <-ctx.Done():
 			return errorWrapf(ctx.Err(), "awaiting send")
 		}
-
-		s.link.deliveryCount++
-		s.link.linkCredit--
 	}
+
+	// TODO: Move below to link.mux
 
 	// // wait for response
 	// var fr frameBody
 	// select {
 	// case fr = <-s.link.rx:
 	// case <-s.link.session.conn.done:
-	// 	return s.link.session.conn.err
+	// 	return s.link.session.conn.getErr()
 	// case <-ctx.Done():
 	// 	return errorWrapf(ctx.Err(), "awaiting response")
 	// }
@@ -347,6 +253,14 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	// 	return errorErrorf("unexpected disposition with state %T received", resp.State)
 	// }
 	return nil
+}
+
+// Close closes the Sender and AMQP link.
+func (s *Sender) Close() error {
+	// TODO: Should this timeout? Close() take a context? Use one of the
+	// other timeouts?
+	s.link.Close()
+	return s.link.err
 }
 
 var errDeliveryFailed = errorNew("delivery failed") // TODO: replace with real error type
@@ -380,74 +294,24 @@ func calcMaxTransferFrameHeader() int {
 		panic(err)
 	}
 
-	fmt.Println("maxTransferFrameHeader:", buf.Len())
 	return buf.Len()
 }
 
 // NewSender opens a new sender link on the session.
 func (s *Session) NewSender(opts ...LinkOption) (*Sender, error) {
-	l := newLink(s)
-	l.linkCredit = 0
-
-	snd := &Sender{
-		link: l,
+	l, err := newLink(s, nil, opts)
+	if err != nil {
+		return nil, err
 	}
 
-	// configure options
-	for _, o := range opts {
-		err := o(l)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	// buffer rx so that conn.mux won't block
-	// attempting to send to a slow reader
-	l.rx = make(chan frameBody, 1)
-
-	// request handle from Session.mux
-	select {
-	case <-s.conn.done:
-		return nil, s.conn.err
-	case s.allocateHandle <- l:
-	}
-
-	// wait for handle allocation
-	select {
-	case <-s.conn.done:
-		return nil, s.conn.err
-	case <-l.rx:
-	}
-
-	// send Attach frame
-	s.txFrame(&performAttach{
-		Name:   randString(),
-		Handle: l.handle,
-		Role:   roleSender,
-		Target: &target{
-			Address: l.sourceAddr,
-		},
-	})
-
-	// wait for response
-	var fr frameBody
-	select {
-	case <-s.conn.done:
-		return nil, s.conn.err
-	case fr = <-l.rx:
-	}
-	_, ok := fr.(*performAttach)
-	if !ok {
-		return nil, errorErrorf("unexpected attach response: %#v", fr)
-	}
-
-	return snd, nil
+	return &Sender{link: l}, nil
 }
 
 func (s *Session) mux() {
 	var (
-		links      = make(map[uint32]*link) // mapping of handles to links
-		nextHandle uint32                   // next handle # to be allocated
+		links       = make(map[uint32]*link) // mapping of remote handles to links
+		linksByName = make(map[string]*link) // maping of names to links
+		nextHandle  uint32                   // next handle # to be allocated
 
 		idsByDeliveryTag    = make(map[string]uint32) //mapping of deliveryTags to deliveryIDs
 		handlesByDeliveryID = make(map[uint32]uint32) //mapping of deliveryIDs to handles
@@ -463,14 +327,14 @@ func (s *Session) mux() {
 		// handle allocation request
 		case l := <-s.allocateHandle:
 			// TODO: handle max session/wrapping
-			l.handle = nextHandle // allocate handle to the link
-			links[nextHandle] = l // add to mapping
-			nextHandle++          // increment the next handle
-			l.rx <- nil           // send nil on channel to indicate allocation complete
+			l.handle = nextHandle   // allocate handle to the link
+			linksByName[l.name] = l // add to mapping
+			nextHandle++            // increment the next handle
+			l.rx <- nil             // send nil on channel to indicate allocation complete
 
 		// handle deallocation request
 		case l := <-s.deallocateHandle:
-			delete(links, l.handle)
+			delete(links, l.remoteHandle)
 			close(l.rx) // close channel to indicate deallocation
 
 		// incoming frame for link
@@ -513,7 +377,22 @@ func (s *Session) mux() {
 
 			link, ok := links[handle]
 			if !ok {
-				continue
+				// This may be an attach response, in which case the link should be
+				// looked up by name, then added to the links map with the remote's
+				// handle contained in this attach frame.
+				attach, ok := fr.body.(*performAttach)
+				if !ok {
+					continue
+				}
+
+				link, ok = linksByName[attach.Name]
+				if !ok {
+					continue
+				}
+				delete(linksByName, attach.Name) // name no longer needed
+
+				link.remoteHandle = attach.Handle
+				links[link.remoteHandle] = link
 			}
 
 			select {
@@ -549,7 +428,7 @@ func (s *Session) mux() {
 	}
 }
 
-// DetachError is returned by a link (Receiver) when a detach frame is received.
+// DetachError is returned by a link (Receiver/Sender) when a detach frame is received.
 //
 // RemoteError will be nil if the link was detached gracefully.
 type DetachError struct {
@@ -569,14 +448,20 @@ const (
 
 // link is a unidirectional route.
 //
-// May be used for sending or receiving, currently only receive implemented.
+// May be used for sending or receiving.
 type link struct {
-	handle     uint32         // our handle
-	sourceAddr string         // address sent during attach
-	linkCredit uint32         // maximum number of messages allowed between flow updates
-	rx         chan frameBody // sessions sends frames for this link on this channel
-	session    *Session       // parent session
-	receiver   *Receiver      // allows link options to modify Receiver
+	name         string               // our name
+	handle       uint32               // our handle
+	remoteHandle uint32               // remote's handle
+	sourceAddr   string               // address sent during attach
+	rx           chan frameBody       // sessions sends frames for this link on this channel
+	transfers    chan performTransfer // sender uses for send; receiver uses for receive
+	close        chan struct{}
+	closeOnce    sync.Once
+	done         chan struct{}
+	doneOnce     sync.Once
+	session      *Session  // parent session
+	receiver     *Receiver // allows link options to modify Receiver
 
 	// "The delivery-count is initialized by the sender when a link endpoint is created,
 	// and is incremented whenever a message is sent. Only the sender MAY independently
@@ -585,23 +470,202 @@ type link struct {
 	// despite its name, the delivery-count is not a count but a sequence number
 	// initialized at an arbitrary point by the sender."
 	deliveryCount  uint32
-	detachSent     bool // detach frame has been sent
+	linkCredit     uint32 // maximum number of messages allowed between flow updates
+	detachSent     bool   // detach frame has been sent
 	detachReceived bool
 	err            error // err returned on Close()
 }
 
-// newLink is used by Receiver to create new links
-func newLink(s *Session) *link {
-	return &link{
-		linkCredit: DefaultLinkCredit,
-		session:    s,
+// newLink is used by Receiver and Sender to create new links
+func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
+	l := &link{
+		name:     string(randBytes(40)),
+		session:  s,
+		receiver: r,
+		close:    make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+
+	isReceiver := r != nil
+
+	// configure options
+	for _, o := range opts {
+		err := o(l)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// buffer rx to linkCredit so that conn.mux won't block
+	// attempting to send to a slow reader
+	if isReceiver {
+		l.rx = make(chan frameBody, l.linkCredit)
+	} else {
+		l.rx = make(chan frameBody, 1)
+	}
+
+	// request handle from Session.mux
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.getErr()
+	case s.allocateHandle <- l:
+	}
+
+	// wait for handle allocation
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.getErr()
+	case <-l.rx:
+	}
+
+	attach := &performAttach{
+		Name:   l.name,
+		Handle: l.handle,
+	}
+
+	if isReceiver {
+		attach.Role = roleReceiver
+		attach.Source = &source{Address: l.sourceAddr}
+	} else {
+		attach.Role = roleSender
+		attach.Target = &target{Address: l.sourceAddr}
+	}
+
+	// send Attach frame
+	s.txFrame(attach)
+
+	// wait for response
+	var fr frameBody
+	select {
+	case <-s.conn.done:
+		return nil, s.conn.getErr()
+	case fr = <-l.rx:
+	}
+	resp, ok := fr.(*performAttach)
+	if !ok {
+		return nil, errorErrorf("unexpected attach response: %#v", fr)
+	}
+
+	if isReceiver {
+		// deliveryCount is a sequence number, must initialize to sender's initial sequence number
+		l.deliveryCount = resp.InitialDeliveryCount
+		// buffer receiver so that link.mux doesn't block
+		l.transfers = make(chan performTransfer, l.receiver.maxCredit)
+	} else {
+		l.transfers = make(chan performTransfer)
+	}
+
+	go l.mux()
+
+	return l, nil
+}
+
+func (l *link) mux() {
+	defer l.detach()
+
+	var (
+		isReceiver = l.receiver != nil
+		isSender   = !isReceiver
+	)
+
+	for {
+		var outgoingTransfers chan performTransfer
+		if isSender && l.linkCredit > 0 {
+			outgoingTransfers = l.transfers
+		}
+
+		// if receiver and linkCredit is half used, send more
+		if isReceiver && l.linkCredit < l.receiver.maxCredit/2 {
+			var (
+				creditDiff    = l.receiver.maxCredit - l.linkCredit
+				deliveryCount = l.deliveryCount // copy because sent by pointer below; prevent race
+			)
+
+			// send flow
+			l.session.txFrame(&performFlow{
+				IncomingWindow: math.MaxUint32, // max number of transfer frames
+				NextOutgoingID: 0,
+				OutgoingWindow: 0,
+				Handle:         &l.handle,
+				DeliveryCount:  &deliveryCount,
+				LinkCredit:     &creditDiff, // max number of messages
+			})
+
+			// reset credit
+			l.linkCredit = l.receiver.maxCredit
+		}
+
+		select {
+		// send data
+		case fr := <-outgoingTransfers:
+			l.session.tx <- fr // TODO: don't block
+			l.deliveryCount++
+			l.linkCredit--
+
+		// received frame
+		case fr := <-l.rx:
+			switch fr := fr.(type) {
+			// message frame
+			case *performTransfer:
+				if isSender {
+					// TODO: send error to remote
+					l.err = errorErrorf("Sender received transfer frame")
+					return
+				}
+
+				l.transfers <- *fr
+
+				l.deliveryCount++
+				l.linkCredit--
+
+			// flow control frame
+			case *performFlow:
+				if isReceiver {
+					// TODO: send error to remote
+					l.err = errorErrorf("Receiver received flow frame")
+					return
+				}
+
+				l.linkCredit = *fr.DeliveryCount + *fr.LinkCredit - l.deliveryCount
+				l.deliveryCount = 0
+
+			// remote side is closing links
+			case *performDetach:
+				// don't currently support link detach and reattach
+				if !fr.Closed {
+					l.err = errorErrorf("non-closing detach not supported: %+v", fr)
+					return
+				}
+
+				// set detach received and close link
+				l.detachReceived = true
+
+				l.err = errorWrapf(DetachError{fr.Error}, "received detach frame")
+				return
+
+			default:
+				fmt.Printf("Unexpected frame: %T - %+v\n", fr, fr)
+			}
+
+		case <-l.close:
+			return
+		case <-l.session.conn.done:
+			l.err = l.session.conn.getErr()
+			return
+		}
 	}
 }
 
 // close closes and requests deletion of the link.
 //
 // No operations on link are valid after close.
-func (l *link) close(ctx context.Context) {
+func (l *link) Close() {
+	l.closeOnce.Do(func() { close(l.close) })
+	<-l.done
+}
+
+func (l *link) detach() {
+	defer l.doneOnce.Do(func() { close(l.done) })
 	// "A peer closes a link by sending the detach frame with the
 	// handle for the specified link, and the closed flag set to
 	// true. The partner will destroy the corresponding link
@@ -627,7 +691,7 @@ func (l *link) close(ctx context.Context) {
 		select {
 		case l.session.deallocateHandle <- l:
 		case <-l.session.conn.done:
-			l.err = l.session.conn.err
+			l.err = l.session.conn.getErr()
 		}
 		return
 	}
@@ -646,7 +710,7 @@ outer:
 
 		// connection has ended
 		case <-l.session.conn.done:
-			l.err = l.session.conn.err
+			l.err = l.session.conn.getErr()
 		}
 	}
 
@@ -654,7 +718,7 @@ outer:
 	select {
 	case l.session.deallocateHandle <- l:
 	case <-l.session.conn.done:
-		l.err = l.session.conn.err
+		l.err = l.session.conn.getErr()
 	}
 }
 
@@ -679,7 +743,7 @@ func LinkCredit(credit uint32) LinkOption {
 			return errorNew("LinkCredit is not valid for Sender")
 		}
 
-		l.linkCredit = credit
+		l.receiver.maxCredit = credit
 		return nil
 	}
 }
@@ -712,27 +776,7 @@ type Receiver struct {
 	batching     bool                    // enable batching of message dispositions
 	batchMaxAge  time.Duration           // maximum time between the start n batch and sending the batch to the server
 	dispositions chan messageDisposition // message dispositions are sent on this channel when batching is enabled
-	creditUsed   uint32                  // currently used credits
-}
-
-// sendFlow transmits a flow frame with enough credits to bring the sender's
-// link credits up to l.link.linkCredit.
-func (r *Receiver) sendFlow() {
-	// increment delivery count
-	r.link.deliveryCount += r.creditUsed
-
-	// send flow
-	r.link.session.txFrame(&performFlow{
-		IncomingWindow: math.MaxUint32, // max number of transfer frames
-		NextOutgoingID: 0,
-		OutgoingWindow: 0,
-		Handle:         &r.link.handle,
-		DeliveryCount:  &r.link.deliveryCount,
-		LinkCredit:     &r.link.linkCredit, // max number of messages
-	})
-
-	// reset credit used
-	r.creditUsed = 0
+	maxCredit    uint32                  // maximum allowed inflight messages
 }
 
 // Receive returns the next message from the sender.
@@ -744,54 +788,29 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 	msg := &Message{receiver: r} // message to be decoded into
 
 	first := true // receiving the first frame of the message
-outer:
 	for {
-		// if linkCredit is half used, send more
-		if r.creditUsed > r.link.linkCredit/2 {
-			r.sendFlow()
-		}
-
 		// wait for the next frame
-		var fr frameBody
+		var fr performTransfer
 		select {
-		case <-r.link.session.conn.done:
-			return nil, r.link.session.conn.err
-		case fr = <-r.link.rx:
+		case fr = <-r.link.transfers:
+		case <-r.link.done:
+			return nil, r.link.err
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}
 
-		switch fr := fr.(type) {
-		// message frame
-		case *performTransfer:
-			r.creditUsed++
+		// record the delivery ID if this is the first frame of the message
+		if first && fr.DeliveryID != nil {
+			msg.id = (deliveryID)(*fr.DeliveryID)
+			first = false
+		}
 
-			// record the delivery ID if this is the first frame of the message
-			if first && fr.DeliveryID != nil {
-				msg.id = (deliveryID)(*fr.DeliveryID)
-				first = false
-			}
+		// add the payload the the buffer
+		r.buf.Write(fr.Payload)
 
-			// add the payload the the buffer
-			r.buf.Write(fr.Payload)
-
-			// break out of loop if message is complete
-			if !fr.More {
-				break outer
-			}
-
-		// remote side is closing links
-		case *performDetach:
-			// don't currently support link detach and reattach
-			if !fr.Closed {
-				return nil, errorErrorf("non-closing detach not supported: %+v", fr)
-			}
-
-			// set detach received and close link
-			r.link.detachReceived = true
-			r.link.close(ctx)
-
-			return nil, DetachError{fr.Error}
+		// break out of loop if message is complete
+		if !fr.More {
+			break
 		}
 	}
 
@@ -804,9 +823,7 @@ outer:
 func (r *Receiver) Close() error {
 	// TODO: Should this timeout? Close() take a context? Use one of the
 	// other timeouts?
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
-	r.link.close(ctx)
-	cancel()
+	r.link.Close()
 	return r.link.err
 }
 
@@ -833,14 +850,15 @@ func (r *Receiver) dispositionBatcher() {
 	// accepted, and one for the rejected/released message. If messages are
 	// accepted out of order, send any existing batch and the current message.
 	var (
-		batchSize    = r.link.linkCredit
+		batchSize    = r.maxCredit
 		batchStarted bool
 		first        deliveryID
 		last         deliveryID
 	)
 
-	// disposition should be sent at least every batchMaxAge
-	batchTimer := time.NewTimer(r.batchMaxAge)
+	// create an unstarted timer
+	batchTimer := time.NewTimer(1 * time.Minute)
+	batchTimer.Stop()
 	defer batchTimer.Stop()
 
 	for {
