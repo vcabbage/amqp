@@ -135,10 +135,11 @@ type conn struct {
 	peerMaxFrameSize uint32        // maximum frame size peer will accept
 
 	// conn state
-	errMu    sync.Mutex    // mux holds errMu from start until shutdown completes; operations are sequential before mux is started
-	err      error         // error to be returned to client
-	doneOnce sync.Once     // only close done once
-	done     chan struct{} // indicates the connection is done
+	errMu     sync.Mutex    // mux holds errMu from start until shutdown completes; operations are sequential before mux is started
+	err       error         // error to be returned to client
+	doneOnce  sync.Once     // only close done once
+	done      chan struct{} // indicates the connection is done
+	closeOnce sync.Once
 
 	// mux
 	newSession chan *Session // new Sessions are requested from mux by reading off this channel
@@ -148,10 +149,12 @@ type conn struct {
 	// connReader
 	rxProto chan protoHeader // protoHeaders received by connReader
 	rxFrame chan frame       // AMQP frames received by connReader
+	rxDone  chan struct{}
 
 	// connWriter
 	txFrame chan frame   // AMQP frames to be sent by connWriter
 	txBuf   bytes.Buffer // buffer for marshaling frames before transmitting
+	txDone  chan struct{}
 }
 
 func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
@@ -165,9 +168,11 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 		connErr:          make(chan error, 2), // buffered to ensure connReader/Writer won't leak
 		rxProto:          make(chan protoHeader),
 		rxFrame:          make(chan frame),
+		rxDone:           make(chan struct{}),
 		newSession:       make(chan *Session),
 		delSession:       make(chan *Session),
 		txFrame:          make(chan frame),
+		txDone:           make(chan struct{}),
 	}
 
 	// apply options
@@ -187,7 +192,8 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 
 	// check if err occurred
 	if c.err != nil {
-		c.close()
+		close(c.txDone) // close here since connWriter hasn't been started yet
+		c.Close()
 		return nil, c.err
 	}
 
@@ -198,24 +204,44 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 	return c, nil
 }
 
-func (c *conn) close() error {
-	// TODO: shutdown AMQP
+func (c *conn) Close() error {
+	c.closeOnce.Do(func() { c.close() })
+	return c.err
+}
+
+func (c *conn) close() {
 	c.closeDone() // notify goroutines and blocked functions to exit
 
 	// Client.mux holds err lock until shutdown, block until
 	// shutdown completes, then return the error (if any)
 	c.errMu.Lock()
 	defer c.errMu.Unlock()
+
+	// wait for writing to stop, allows it to send the final close frame
+	<-c.txDone
+
 	err := c.net.Close()
 	if c.err == nil {
 		c.err = err
 	}
-	return c.err
+
+	// check rxDone after closing net, otherwise may block
+	// for up to c.idleTimeout
+	<-c.rxDone
 }
 
 // closeDone closes Client.done if it has not already been closed
 func (c *conn) closeDone() {
 	c.doneOnce.Do(func() { close(c.done) })
+}
+
+// getErr returns conn.err.
+//
+// Must only be called after conn.done is closed.
+func (c *conn) getErr() error {
+	c.errMu.Lock()
+	defer c.errMu.Unlock()
+	return c.err
 }
 
 // mux is start in it's own goroutine after initial connection establishment.
@@ -294,6 +320,8 @@ func (f *frameReader) Read(p []byte) (int, error) {
 // connReader reads from the net.Conn, decodes frames, and passes them
 // up via the conn.rxFrame and conn.rxProto channels.
 func (c *conn) connReader() {
+	defer close(c.rxDone)
+
 	buf := new(bytes.Buffer)
 
 	var (
@@ -321,6 +349,13 @@ func (c *conn) connReader() {
 					}
 					fr.r = c.net // conn wrapped with TLS
 					continue
+				}
+
+				// check if error was due to close in progress
+				select {
+				case <-c.done:
+					return
+				default:
 				}
 
 				c.connErr <- err
@@ -404,6 +439,8 @@ func (c *conn) connReader() {
 }
 
 func (c *conn) connWriter() {
+	defer close(c.txDone)
+
 	var (
 		// keepalives are sent at a rate of 1/2 idle timeout
 		keepaliveInterval = c.peerIdleTimeout / 2
@@ -444,6 +481,11 @@ func (c *conn) connWriter() {
 
 		// connection complete
 		case <-c.done:
+			// send close
+			c.writeFrame(frame{
+				typ:  frameTypeAMQP,
+				body: &performClose{},
+			})
 			return
 		}
 	}
@@ -621,7 +663,7 @@ func (c *conn) openAMQP() stateFunc {
 	c.err = c.writeFrame(frame{
 		typ: frameTypeAMQP,
 		body: &performOpen{
-			ContainerID:  randString(),
+			ContainerID:  string(randBytes(40)),
 			Hostname:     c.hostname,
 			MaxFrameSize: c.maxFrameSize,
 			ChannelMax:   c.channelMax,

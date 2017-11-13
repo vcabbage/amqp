@@ -3,6 +3,7 @@ package amqp
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"math"
 	"reflect"
 	"time"
@@ -1388,6 +1389,17 @@ func (e *Error) unmarshal(r reader) error {
 	}...)
 }
 
+func (e *Error) String() string {
+	if e == nil {
+		return "*Error(nil)"
+	}
+	return fmt.Sprintf("*Error{Condition: %s, Description: %s, Info: %v}",
+		e.Condition,
+		e.Description,
+		e.Info,
+	)
+}
+
 /*
 <type name="end" class="composite" source="list" provides="frame">
     <descriptor name="amqp:end:list" code="0x00000000:0x00000017"/>
@@ -1446,6 +1458,10 @@ func (c *performClose) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeClose,
 		unmarshalField{field: &c.Error},
 	)
+}
+
+func (c *performClose) String() string {
+	return fmt.Sprintf("*performClose{Error: %s}", c.Error)
 }
 
 // Message is an AMQP message.
