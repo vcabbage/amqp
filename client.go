@@ -98,7 +98,7 @@ func (c *Client) NewSession() (*Session, error) {
 	begin, ok := fr.body.(*performBegin)
 	if !ok {
 		s.Close() // deallocate session on error
-		return nil, errorErrorf("unexpected begin response: %T - %+v", fr.body, fr.body)
+		return nil, errorErrorf("unexpected begin response: %+v", fr.body)
 	}
 
 	// TODO: record negotiated settings
@@ -114,11 +114,11 @@ func (c *Client) NewSession() (*Session, error) {
 //
 // A session multiplexes Receivers.
 type Session struct {
-	channel       uint16               // session's local channel
-	remoteChannel uint16               // session's remote channel
-	conn          *conn                // underlying conn
-	rx            chan frame           // frames destined for this session are sent on this chan by conn.mux
-	tx            chan performTransfer // transfer frames to be sent; session must track disposition
+	channel       uint16         // session's local channel
+	remoteChannel uint16         // session's remote channel
+	conn          *conn          // underlying conn
+	rx            chan frame     // frames destined for this session are sent on this chan by conn.mux
+	tx            chan frameBody // transfer frames to be sent; session must track disposition
 
 	allocateHandle   chan *link // link handles are allocated by sending a link on this channel, nil is sent on link.rx once allocated
 	deallocateHandle chan *link // link handles are deallocated by sending a link on this channel
@@ -129,7 +129,7 @@ func newSession(c *conn, channel uint16) *Session {
 		conn:             c,
 		channel:          channel,
 		rx:               make(chan frame),
-		tx:               make(chan performTransfer),
+		tx:               make(chan frameBody),
 		allocateHandle:   make(chan *link),
 		deallocateHandle: make(chan *link),
 	}
@@ -225,33 +225,6 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 		}
 	}
 
-	// TODO: Move below to link.mux
-
-	// // wait for response
-	// var fr frameBody
-	// select {
-	// case fr = <-s.link.rx:
-	// case <-s.link.session.conn.done:
-	// 	return s.link.session.conn.getErr()
-	// case <-ctx.Done():
-	// 	return errorWrapf(ctx.Err(), "awaiting response")
-	// }
-	// resp, ok := fr.(*performDisposition)
-	// if !ok {
-	// 	return errorErrorf("unexpected transfer response: %#v", fr)
-	// }
-
-	// switch resp.State.(type) {
-	// case *stateAccepted:
-	// 	return nil
-	// case *stateRejected, *stateReleased, *stateModified:
-	// 	fmt.Printf("%#v\n", resp.State)
-	// 	return errDeliveryFailed
-	// case *stateReceived:
-	// 	return errorNew("unexpected stateRejected message")
-	// default:
-	// 	return errorErrorf("unexpected disposition with state %T received", resp.State)
-	// }
 	return nil
 }
 
@@ -401,29 +374,35 @@ func (s *Session) mux() {
 			}
 
 		case fr := <-s.tx:
-			id, ok := idsByDeliveryTag[string(fr.DeliveryTag)]
+			transfer, ok := fr.(*performTransfer)
+			if !ok {
+				s.txFrame(fr)
+				continue
+			}
+
+			id, ok := idsByDeliveryTag[string(transfer.DeliveryTag)]
 			if !ok {
 				// no entry for tag, allocate new DeliveryID
 				id = nextDeliveryID
 				nextDeliveryID++
 
-				if fr.More {
-					idsByDeliveryTag[string(fr.DeliveryTag)] = id
+				if transfer.More {
+					idsByDeliveryTag[string(transfer.DeliveryTag)] = id
 				}
 			} else {
 				// existing entry indicates this isn't the first message,
 				// clear values that are only required on first message
-				fr.DeliveryTag = nil
-				fr.MessageFormat = nil
+				transfer.DeliveryTag = nil
+				transfer.MessageFormat = nil
 
-				if !fr.More {
-					delete(idsByDeliveryTag, string(fr.DeliveryTag))
+				if !transfer.More {
+					delete(idsByDeliveryTag, string(transfer.DeliveryTag))
 				}
 			}
 
-			handlesByDeliveryID[id] = fr.Handle
-			fr.DeliveryID = &id
-			s.txFrame(&fr)
+			handlesByDeliveryID[id] = transfer.Handle
+			transfer.DeliveryID = &id
+			s.txFrame(transfer)
 		}
 	}
 }
@@ -597,10 +576,40 @@ func (l *link) mux() {
 
 		select {
 		// send data
-		case fr := <-outgoingTransfers:
-			l.session.tx <- fr // TODO: don't block
+		case tr := <-outgoingTransfers:
+			l.session.tx <- &tr // TODO: don't block
 			l.deliveryCount++
 			l.linkCredit--
+
+			// TODO: re-enable and fix this logic
+
+			// // wait for response
+			// var fr frameBody
+			// select {
+			// case fr = <-l.rx:
+			// case <-l.session.conn.done:
+			// 	l.err = l.session.conn.getErr()
+			// 	return
+			// }
+			// resp, ok := fr.(*performDisposition)
+			// if !ok {
+			// 	l.err = errorErrorf("unexpected transfer response: %#v", fr)
+			// 	return
+			// }
+
+			// switch resp.State.(type) {
+			// case *stateAccepted:
+			// case *stateRejected, *stateReleased, *stateModified:
+			// 	fmt.Printf("%#v\n", resp.State)
+			// 	l.err = errDeliveryFailed
+			// 	return
+			// case *stateReceived:
+			// 	l.err = errorNew("unexpected stateRejected message")
+			// 	return
+			// default:
+			// 	l.err = errorErrorf("unexpected disposition with state %T received", resp.State)
+			// 	return
+			// }
 
 		// received frame
 		case fr := <-l.rx:
@@ -680,10 +689,16 @@ func (l *link) detach() {
 		return
 	}
 
-	l.session.txFrame(&performDetach{
+	fr := &performDetach{
 		Handle: l.handle,
 		Closed: true,
-	})
+	}
+	select {
+	case l.session.tx <- fr:
+	case <-l.session.conn.done:
+		l.err = l.session.conn.getErr()
+		return
+	}
 	l.detachSent = true
 
 	// already received detach from remote

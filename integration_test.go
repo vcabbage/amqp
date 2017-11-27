@@ -5,20 +5,21 @@ package amqp_test
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"sync"
 	"testing"
 	"time"
 
-	"pack.ag/amqp"
-
 	"github.com/Azure/azure-sdk-for-go/arm/servicebus"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/adal"
 	"github.com/Azure/go-autorest/autorest/azure"
 	"github.com/fortytw2/leaktest"
+	"pack.ag/amqp"
 )
 
 var (
@@ -30,6 +31,8 @@ var (
 	namespace      = mustGetenv("SERVICEBUS_NAMESPACE")
 	accessKeyName  = mustGetenv("SERVICEBUS_ACCESS_KEY_NAME")
 	accessKey      = mustGetenv("SERVICEBUS_ACCESS_KEY")
+
+	tlsKeyLog = flag.String("tlskeylog", "", "path to write the TLS key log")
 )
 
 func TestIntegrationRoundTrip(t *testing.T) {
@@ -42,22 +45,22 @@ func TestIntegrationRoundTrip(t *testing.T) {
 	}{
 		{
 			label: "1 roundtrip, small payload",
-			data:  []string{"Hello there!"},
+			data:  []string{"1Hello there!"},
 		},
 		{
 			label: "3 roundtrip, small payload",
 			data: []string{
-				"Hey there!",
-				"Hi there!",
-				"Ho there!",
+				"2Hey there!",
+				"2Hi there!",
+				"2Ho there!",
 			},
 		},
 		{
 			label: "1000 roundtrip, small payload",
 			data: repeatStrings(1000,
-				"Hey there!",
-				"Hi there!",
-				"Ho there!",
+				"3Hey there!",
+				"3Hi there!",
+				"3Ho there!",
 			),
 		},
 	}
@@ -67,12 +70,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 			checkLeaks := leaktest.Check(t)
 
 			// Create client
-			client, err := amqp.Dial("amqps://"+namespace+".servicebus.windows.net",
-				amqp.ConnSASLPlain(accessKeyName, accessKey),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
+			client := newClient(t)
 			defer client.Close()
 
 			// Open a session
@@ -81,9 +79,13 @@ func TestIntegrationRoundTrip(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			timeout := time.Duration(len(tt.data)) * 500 * time.Millisecond // scale timeout by number of messages
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
+			// Create a sender
+			sender, err := session.NewSender(
+				amqp.LinkSource(queueName),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			// Perform test concurrently for speed and to catch races
 			var wg sync.WaitGroup
@@ -92,21 +94,14 @@ func TestIntegrationRoundTrip(t *testing.T) {
 			var sendErr error
 			go func() {
 				defer wg.Done()
-
-				// Create a sender
-				sender, err := session.NewSender(
-					amqp.LinkSource(queueName),
-				)
-				if err != nil {
-					sendErr = err
-					return
-				}
 				defer sender.Close()
 
 				for i, data := range tt.data {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					err = sender.Send(ctx, &amqp.Message{
 						Data: []byte(data),
 					})
+					cancel()
 					if err != nil {
 						sendErr = fmt.Errorf("Error after %d sends: %v", i, err)
 						return
@@ -131,7 +126,9 @@ func TestIntegrationRoundTrip(t *testing.T) {
 				defer receiver.Close()
 
 				for i, data := range tt.data {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 					msg, err := receiver.Receive(ctx)
+					cancel()
 					if err != nil {
 						receiveErr = fmt.Errorf("Error after %d receives: %v", i, err)
 						return
@@ -150,8 +147,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 
 			if sendErr != nil || receiveErr != nil {
 				t.Error("Send error:", sendErr)
-				t.Error("Receive error:", receiveErr)
-				t.Fatal()
+				t.Fatal("Receive error:", receiveErr)
 			}
 
 			client.Close() // close before leak check
@@ -180,7 +176,45 @@ func dump(i interface{}) {
 	enc.Encode(i)
 }
 
+func newClient(t testing.TB, opts ...amqp.ConnOption) *amqp.Client {
+	opts = append(opts,
+		amqp.ConnSASLPlain(accessKeyName, accessKey),
+	)
+
+	if *tlsKeyLog == "" {
+		client, err := amqp.Dial("amqps://"+namespace+".servicebus.windows.net", opts...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return client
+	}
+
+	f, err := os.OpenFile(*tlsKeyLog, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tlsConfig := &tls.Config{
+		KeyLogWriter: f,
+	}
+
+	tlsConn, err := tls.Dial("tcp", namespace+".servicebus.windows.net:5671", tlsConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	opts = append(opts,
+		amqp.ConnServerHostname(namespace+".servicebus.windows.net"),
+	)
+	client, err := amqp.New(tlsConn, opts...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
 func newTestQueue(tb testing.TB, suffix string) (string, servicebus.QueuesClient, func()) {
+	// TODO: Add entropy to queue name to prevent conflicts with multiple CI/local runs.
 	queueName := "integration-" + suffix
 
 	oauthConfig, err := adal.NewOAuthConfig(azure.PublicCloud.ActiveDirectoryEndpoint, tenantID)
