@@ -5,4 +5,4 @@ amqp.test
 *.log
 /cmd
 cover.out
-integration_tests.sh
+.envrc

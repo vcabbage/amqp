@@ -1,6 +1,7 @@
 package amqp
 
 import (
+	"bytes"
 	"encoding/binary"
 	"io"
 	"reflect"
@@ -16,6 +17,11 @@ type reader interface {
 	Bytes() []byte
 	Len() int
 	Next(int) []byte
+}
+
+type roReader interface {
+	io.Reader
+	io.ByteReader
 }
 
 // parseFrameHeader reads the header from r and returns the result.
@@ -595,6 +601,10 @@ func readAny(r reader) (interface{}, error) {
 	case typeCodeTimestamp:
 		return readTimestamp(r)
 
+	// composite
+	case 0x0:
+		return readComposite(r)
+
 	// not-implemented
 	case
 		typeCodeFloat,
@@ -618,6 +628,42 @@ func readAny(r reader) (interface{}, error) {
 	}
 }
 
+func readComposite(r reader) (interface{}, error) {
+	// create separate reader to determine type without advancing
+	// the original
+	peekReader := bytes.NewReader(r.Bytes())
+
+	byt, err := peekReader.ReadByte()
+	if err != nil {
+		return nil, err
+	}
+
+	// could be null instead of a composite header
+	if amqpType(byt) == typeCodeNull {
+		return nil, errNull
+	}
+
+	// compsites always start with 0x0
+	if byt != 0 {
+		return nil, errorErrorf("invalid composite header %0x", byt)
+	}
+
+	// next, the composite type is encoded as an AMQP uint8
+	v, err := readInt(peekReader)
+	if err != nil {
+		return nil, err
+	}
+
+	switch amqpType(v) {
+	case typeCodeError:
+		e := new(Error)
+		err := e.unmarshal(r)
+		return e, err
+	default:
+		return nil, errorErrorf("unmarshaling composite %0x not implemented", v)
+	}
+}
+
 func readTimestamp(r reader) (time.Time, error) {
 	b, err := r.ReadByte()
 	if err != nil {
@@ -637,7 +683,7 @@ func readTimestamp(r reader) (time.Time, error) {
 	return time.Unix(int64(n)/1000, int64(rem)*1000000).UTC(), err
 }
 
-func readInt(r reader) (value int, _ error) {
+func readInt(r roReader) (value int, _ error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return 0, err
