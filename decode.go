@@ -458,6 +458,29 @@ func readBinary(r reader) ([]byte, error) {
 	return vari, err
 }
 
+func readUUID(r reader) (UUID, error) {
+	var uuid UUID
+
+	b, err := r.ReadByte()
+	if err != nil {
+		return uuid, err
+	}
+
+	if amqpType(b) != typeCodeUUID {
+		return uuid, errorErrorf("type code %#00x is not a UUID", b)
+	}
+
+	n, err := r.Read(uuid[:])
+	if err != nil {
+		return uuid, err
+	}
+	if n != 16 {
+		return uuid, errInvalidLength
+	}
+
+	return uuid, nil
+}
+
 func readVariableType(r reader, of amqpType) ([]byte, error) {
 	var buf []byte
 	switch of {
@@ -605,6 +628,9 @@ func readAny(r reader) (interface{}, error) {
 	case 0x0:
 		return readComposite(r)
 
+	case typeCodeUUID:
+		return readUUID(r)
+
 	// not-implemented
 	case
 		typeCodeFloat,
@@ -613,7 +639,6 @@ func readAny(r reader) (interface{}, error) {
 		typeCodeDecimal64,
 		typeCodeDecimal128,
 		typeCodeChar,
-		typeCodeUUID,
 		typeCodeList0,
 		typeCodeList8,
 		typeCodeList32,
