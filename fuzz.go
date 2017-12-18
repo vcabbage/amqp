@@ -144,6 +144,8 @@ func FuzzUnmarshal(data []byte) int {
 		new(*ErrorCondition),
 		new(role),
 		new(*role),
+		new(UUID),
+		new(*UUID),
 	}
 
 	for _, t := range types {

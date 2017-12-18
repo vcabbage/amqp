@@ -3,6 +3,7 @@ package amqp
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"math"
 	"reflect"
@@ -2169,4 +2170,37 @@ func (f *mapSymbolAny) unmarshal(r reader) error {
 	}
 	*f = m
 	return nil
+}
+
+// UUID is a 128 identifier as defined in RFC 4122.
+type UUID [16]byte
+
+// String returns the hex encoded representation described in RFC 4122, Section 3.
+func (u UUID) String() string {
+	var buf [36]byte
+	hex.Encode(buf[:8], u[:4])
+	buf[8] = '-'
+	hex.Encode(buf[9:13], u[4:6])
+	buf[13] = '-'
+	hex.Encode(buf[14:18], u[6:8])
+	buf[18] = '-'
+	hex.Encode(buf[19:23], u[8:10])
+	buf[23] = '-'
+	hex.Encode(buf[24:], u[10:])
+	return string(buf[:])
+}
+
+func (u UUID) marshal(wr writer) error {
+	err := wr.WriteByte(byte(typeCodeUUID))
+	if err != nil {
+		return err
+	}
+	_, err = wr.Write(u[:])
+	return err
+}
+
+func (u *UUID) unmarshal(r reader) error {
+	un, err := readUUID(r)
+	*u = un
+	return err
 }
