@@ -237,7 +237,10 @@ func writeSymbol(wr writer, sym symbol, typ amqpType) error {
 
 	switch typ {
 	case typeCodeSym8:
-		wr.WriteByte(uint8(l))
+		err := wr.WriteByte(uint8(l))
+		if err != nil {
+			return err
+		}
 	case typeCodeSym32:
 		err := binary.Write(wr, binary.BigEndian, uint32(l))
 		if err != nil {
@@ -264,8 +267,11 @@ func writeString(wr writer, str string) error {
 
 	// Str32
 	case l < math.MaxUint32:
-		wr.WriteByte(byte(typeCodeStr32))
-		err := binary.Write(wr, binary.BigEndian, uint32(l))
+		err := wr.WriteByte(byte(typeCodeStr32))
+		if err != nil {
+			return err
+		}
+		err = binary.Write(wr, binary.BigEndian, uint32(l))
 		if err != nil {
 			return err
 		}
@@ -288,8 +294,11 @@ func writeBinary(wr writer, bin []byte) error {
 
 	// List32
 	case l < math.MaxUint32:
-		wr.WriteByte(byte(typeCodeVbin32))
-		err := binary.Write(wr, binary.BigEndian, uint32(l))
+		err := wr.WriteByte(byte(typeCodeVbin32))
+		if err != nil {
+			return err
+		}
+		err = binary.Write(wr, binary.BigEndian, uint32(l))
 		if err != nil {
 			return err
 		}
@@ -361,28 +370,4 @@ func writeSlice(wr writer, isArray bool, of amqpType, numFields int, size int) e
 	}
 
 	return nil
-}
-
-func writeMapHeader(wr writer, elements int) error {
-	if elements < math.MaxUint8 {
-		err := wr.WriteByte(byte(typeCodeMap8))
-		if err != nil {
-			return err
-		}
-		return wr.WriteByte(uint8(elements))
-	}
-
-	err := wr.WriteByte(byte(typeCodeMap32))
-	if err != nil {
-		return err
-	}
-	return binary.Write(wr, binary.BigEndian, uint32(elements))
-}
-
-func writeMapElement(wr writer, key, value interface{}) error {
-	err := marshal(wr, key)
-	if err != nil {
-		return err
-	}
-	return marshal(wr, value)
 }
