@@ -20,7 +20,6 @@ type Conn struct {
 	data [][]byte
 	// data         []byte
 	done         chan struct{}
-	write        chan struct{}
 	err          chan error
 	readDeadline *time.Timer
 }

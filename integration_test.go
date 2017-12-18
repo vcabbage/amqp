@@ -9,7 +9,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"math/rand"
+	"net"
 	"os"
+	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +24,7 @@ import (
 	"github.com/Azure/go-autorest/autorest/azure"
 	"github.com/fortytw2/leaktest"
 	"pack.ag/amqp"
+	"pack.ag/amqp/internal/testconn"
 )
 
 var (
@@ -33,6 +38,7 @@ var (
 	accessKey      = mustGetenv("SERVICEBUS_ACCESS_KEY")
 
 	tlsKeyLog = flag.String("tlskeylog", "", "path to write the TLS key log")
+	recordDir = flag.String("recorddir", "", "directory to write connection records to")
 )
 
 func TestIntegrationRoundTrip(t *testing.T) {
@@ -67,10 +73,10 @@ func TestIntegrationRoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			checkLeaks := leaktest.Check(t)
+			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
 
 			// Create client
-			client := newClient(t)
+			client := newClient(t, tt.label)
 			defer client.Close()
 
 			// Open a session
@@ -103,7 +109,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 					})
 					cancel()
 					if err != nil {
-						sendErr = fmt.Errorf("Error after %d sends: %v", i, err)
+						sendErr = fmt.Errorf("Error after %d sends: %+v", i, err)
 						return
 					}
 				}
@@ -130,7 +136,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 					msg, err := receiver.Receive(ctx)
 					cancel()
 					if err != nil {
-						receiveErr = fmt.Errorf("Error after %d receives: %v", i, err)
+						receiveErr = fmt.Errorf("Error after %d receives: %+v", i, err)
 						return
 					}
 
@@ -154,6 +160,8 @@ func TestIntegrationRoundTrip(t *testing.T) {
 
 			checkLeaks() // this is done here because queuesClient starts additional goroutines
 
+			time.Sleep(1 * time.Second)
+
 			q, err := queuesClient.Get(resourceGroup, namespace, queueName)
 			if err != nil {
 				t.Fatal(err)
@@ -164,7 +172,81 @@ func TestIntegrationRoundTrip(t *testing.T) {
 			}
 
 			if dead := *q.CountDetails.DeadLetterMessageCount; dead > 0 {
-				t.Fatal("Expected DeadLetterMessageCount to be 0, but it was %d", dead)
+				t.Fatalf("Expected DeadLetterMessageCount to be 0, but it was %d", dead)
+			}
+		})
+	}
+}
+
+func TestIntegrationSend(t *testing.T) {
+	queueName, queuesClient, cleanup := newTestQueue(t, "receive")
+	defer cleanup()
+
+	tests := []struct {
+		label string
+		data  []string
+	}{
+		{
+			label: "3 send, small payload",
+			data: []string{
+				"2Hey there!",
+				"2Hi there!",
+				"2Ho there!",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+			// Create client
+			client := newClient(t, tt.label)
+			defer client.Close()
+
+			// Open a session
+			session, err := client.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Create a sender
+			sender, err := session.NewSender(
+				amqp.LinkSource(queueName),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for i, data := range tt.data {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				err = sender.Send(ctx, &amqp.Message{
+					Data: []byte(data),
+				})
+				cancel()
+				if err != nil {
+					t.Fatalf("Error after %d sends: %+v", i, err)
+					return
+				}
+			}
+			sender.Close()
+			client.Close() // close before leak check
+
+			checkLeaks() // this is done here because queuesClient starts additional goroutines
+
+			time.Sleep(1 * time.Second)
+
+			q, err := queuesClient.Get(resourceGroup, namespace, queueName)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if amc := *q.CountDetails.ActiveMessageCount; int(amc) != len(tt.data) {
+				t.Fatalf("Expected ActiveMessageCount to be 0, but it was %d", amc)
+			}
+
+			if dead := *q.CountDetails.DeadLetterMessageCount; dead > 0 {
+				t.Fatalf("Expected DeadLetterMessageCount to be 0, but it was %d", dead)
 			}
 		})
 	}
@@ -176,12 +258,12 @@ func dump(i interface{}) {
 	enc.Encode(i)
 }
 
-func newClient(t testing.TB, opts ...amqp.ConnOption) *amqp.Client {
+func newClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Client {
 	opts = append(opts,
 		amqp.ConnSASLPlain(accessKeyName, accessKey),
 	)
 
-	if *tlsKeyLog == "" {
+	if *tlsKeyLog == "" && *recordDir == "" {
 		client, err := amqp.Dial("amqps://"+namespace+".servicebus.windows.net", opts...)
 		if err != nil {
 			t.Fatal(err)
@@ -189,24 +271,38 @@ func newClient(t testing.TB, opts ...amqp.ConnOption) *amqp.Client {
 		return client
 	}
 
-	f, err := os.OpenFile(*tlsKeyLog, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	var tlsConfig tls.Config
+
+	if *tlsKeyLog != "" {
+		f, err := os.OpenFile(*tlsKeyLog, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		tlsConfig = tls.Config{
+			KeyLogWriter: f,
+		}
+	}
+
+	var conn net.Conn
+	conn, err := tls.Dial("tcp", namespace+".servicebus.windows.net:5671", &tlsConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	tlsConfig := &tls.Config{
-		KeyLogWriter: f,
-	}
-
-	tlsConn, err := tls.Dial("tcp", namespace+".servicebus.windows.net:5671", tlsConfig)
-	if err != nil {
-		t.Fatal(err)
+	if *recordDir != "" {
+		path := filepath.Join(*recordDir, label)
+		f, err := os.Create(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn = testconn.NewRecorder(f, conn)
 	}
 
 	opts = append(opts,
 		amqp.ConnServerHostname(namespace+".servicebus.windows.net"),
 	)
-	client, err := amqp.New(tlsConn, opts...)
+	client, err := amqp.New(conn, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,8 +310,8 @@ func newClient(t testing.TB, opts ...amqp.ConnOption) *amqp.Client {
 }
 
 func newTestQueue(tb testing.TB, suffix string) (string, servicebus.QueuesClient, func()) {
-	// TODO: Add entropy to queue name to prevent conflicts with multiple CI/local runs.
-	queueName := "integration-" + suffix
+	queueName := "integration-" + suffix + "-" + strconv.FormatUint(rand.Uint64(), 10)
+	tb.Log("Creating queue", queueName)
 
 	oauthConfig, err := adal.NewOAuthConfig(azure.PublicCloud.ActiveDirectoryEndpoint, tenantID)
 	if err != nil {
