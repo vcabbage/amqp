@@ -147,7 +147,7 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 		if err != nil {
 			return isNull, err
 		}
-		*t = uint64(val)
+		*t = val
 	case *uint32:
 		val, err := readUint(r)
 		if err != nil {
@@ -387,36 +387,13 @@ func readCompositeHeader(r reader) (_ amqpType, fields int, _ error) {
 	}
 
 	// fields are represented as a list
-	fields, _, err = readHeaderSlice(r)
+	fields, err = readHeaderSlice(r)
 
 	return amqpType(v), fields, err
 }
 
-func readStringArray(r reader) ([]string, error) {
-	lElems, _, err := readHeaderSlice(r)
-	if err != nil {
-		return nil, err
-	}
-
-	b, err := r.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-
-	var strs []string
-	for i := 0; i < lElems; i++ {
-		vari, err := readVariableType(r, amqpType(b))
-		if err != nil {
-			return nil, err
-		}
-
-		strs = append(strs, string(vari))
-	}
-	return strs, nil
-}
-
 func readSymbolArray(r reader) ([]symbol, error) {
-	lElems, _, err := readHeaderSlice(r)
+	lElems, err := readHeaderSlice(r)
 	if err != nil {
 		return nil, err
 	}
@@ -512,53 +489,51 @@ func readVariableType(r reader, of amqpType) ([]byte, error) {
 	return buf, err
 }
 
-func readHeaderSlice(r reader) (elements int, length int, _ error) {
+func readHeaderSlice(r reader) (elements int, _ error) {
 	b, err := r.ReadByte()
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 
 	switch amqpType(b) {
 	case typeCodeNull:
-		return 0, 0, errNull
+		return 0, errNull
 	case typeCodeList0:
-		return 0, 0, nil
+		return 0, nil
 	case typeCodeList8, typeCodeArray8:
-		lByte, err := r.ReadByte()
+		_, err = r.ReadByte()
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 
 		elemByte, err := r.ReadByte()
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 
 		elements = int(elemByte)
-		length = int(lByte)
 	case typeCodeList32, typeCodeArray32:
 		var l uint32
 		err = binary.Read(r, binary.BigEndian, &l)
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 
 		var elems uint32
 		err = binary.Read(r, binary.BigEndian, &elems)
 		if err != nil {
-			return 0, 0, err
+			return 0, err
 		}
 
-		length = int(l)
 		elements = int(elems)
 	default:
-		return 0, 0, errorErrorf("type code %x is not a recognized list type", b)
+		return 0, errorErrorf("type code %x is not a recognized list type", b)
 	}
 
 	if elements > r.Len() {
-		return 0, 0, errInvalidLength
+		return 0, errInvalidLength
 	}
-	return elements, length, nil
+	return elements, nil
 }
 
 func readAny(r reader) (interface{}, error) {

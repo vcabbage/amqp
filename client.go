@@ -189,11 +189,15 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	return r, nil
 }
 
+// Sender sends messages on a single AMQP link.
 type Sender struct {
 	link *link
 	buf  bytes.Buffer
 }
 
+// Send sends a Message.
+//
+// Blocks until the message is sent, ctx completes, or an error occurs.
 func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	err := msg.marshal(&s.buf)
 	if err != nil {
@@ -235,8 +239,6 @@ func (s *Sender) Close() error {
 	s.link.Close()
 	return s.link.err
 }
-
-var errDeliveryFailed = errorNew("delivery failed") // TODO: replace with real error type
 
 const maxTransferFrameHeader = 66 // determined by calcMaxTransferFrameHeader
 
