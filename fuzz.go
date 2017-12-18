@@ -11,6 +11,7 @@ import (
 )
 
 func FuzzConn(data []byte) int {
+	// Receive
 	client, err := New(testconn.New(data),
 		ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
 		ConnIdleTimeout(10*time.Millisecond),
@@ -36,6 +37,37 @@ func FuzzConn(data []byte) int {
 	}
 
 	msg.Accept()
+
+	// r.Close() // disabled until link close timeout implemented
+
+	s.Close()
+
+	// Send
+	client, err = New(testconn.New(data),
+		ConnSASLPlain("listen", "3aCXZYFcuZA89xe6lZkfYJvOPnTGipA3ap7NvPruBhI="),
+		ConnIdleTimeout(10*time.Millisecond),
+	)
+	if err != nil {
+		return 0
+	}
+	defer client.Close()
+
+	s, err = client.NewSession()
+	if err != nil {
+		return 0
+	}
+
+	sender, err := s.NewSender(LinkSource("source"), LinkCredit(2))
+	if err != nil {
+		return 0
+	}
+
+	err = sender.Send(context.Background(), &Message{
+		Data: []byte(data),
+	})
+	if err != nil {
+		return 0
+	}
 
 	// r.Close() // disabled until link close timeout implemented
 
