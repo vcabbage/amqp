@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strconv"
 	"time"
 )
 
@@ -153,6 +154,9 @@ type frame struct {
 	typ     uint8     // AMQP/SASL
 	channel uint16    // channel this frame is for
 	body    frameBody // body of the frame
+
+	// optional channel which will be closed after net transmit
+	done chan struct{}
 }
 
 // frameBody is the interface all frame bodies must implement
@@ -503,6 +507,14 @@ const (
 	roleSender   role = false
 	roleReceiver role = true
 )
+
+func (r role) String() string {
+	if r {
+		return "Receiver"
+	} else {
+		return "Sender"
+	}
+}
 
 func (rl *role) unmarshal(r reader) error {
 	_, err := unmarshal(r, (*bool)(rl))
@@ -939,6 +951,30 @@ type performFlow struct {
 	Properties map[symbol]interface{}
 }
 
+func (f *performFlow) String() string {
+	return fmt.Sprintf("Flow{NextIncomingID: %s, IncomingWindow: %d, NextOutgoingID: %d, OutgoingWindow: %d, "+
+		"Handle: %s, DeliveryCount: %s, LinkCredit: %s, Available: %s, Drain: %t, Echo: %t, Properties: %+v}",
+		formatUint32Ptr(f.NextIncomingID),
+		f.IncomingWindow,
+		f.NextOutgoingID,
+		f.OutgoingWindow,
+		formatUint32Ptr(f.Handle),
+		formatUint32Ptr(f.DeliveryCount),
+		formatUint32Ptr(f.LinkCredit),
+		formatUint32Ptr(f.Available),
+		f.Drain,
+		f.Echo,
+		f.Properties,
+	)
+}
+
+func formatUint32Ptr(p *uint32) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return strconv.FormatUint(uint64(*p), 10)
+}
+
 func (f *performFlow) link() (uint32, bool) {
 	if f.Handle == nil {
 		return 0, false
@@ -1130,6 +1166,33 @@ type performTransfer struct {
 	Batchable bool
 
 	Payload []byte
+
+	// optional channel to indicate to sender that transfer has completed
+	done chan struct{}
+}
+
+func (t performTransfer) String() string {
+	receiverSettleMode := "<nil>"
+	if t.ReceiverSettleMode != nil {
+		receiverSettleMode = strconv.FormatUint(uint64(*t.ReceiverSettleMode), 10)
+	}
+
+	return fmt.Sprintf("Transfer{Handle: %d, DeliveryID: %s, DeliveryTag: %q, MessageFormat: %s, "+
+		"Settled: %t, More: %t, ReceiverSettleMode: %s, State: %v, Resume: %t, Aborted: %t, "+
+		"Batchable: %t, Payload [size]: %d}",
+		t.Handle,
+		formatUint32Ptr(t.DeliveryID),
+		t.DeliveryTag,
+		formatUint32Ptr(t.MessageFormat),
+		t.Settled,
+		t.More,
+		receiverSettleMode,
+		t.State,
+		t.Resume,
+		t.Aborted,
+		t.Batchable,
+		len(t.Payload),
+	)
 }
 
 func (t *performTransfer) link() (uint32, bool) {
@@ -1230,6 +1293,17 @@ type performDisposition struct {
 	Batchable bool
 }
 
+func (p performDisposition) String() string {
+	return fmt.Sprintf("Disposition{Role: %s, First: %d, Last: %s, Settled: %t, State: %s, Batchable: %t}",
+		p.Role,
+		p.First,
+		formatUint32Ptr(p.Last),
+		p.Settled,
+		p.State,
+		p.Batchable,
+	)
+}
+
 func (*performDisposition) link() (uint32, bool) {
 	return 0, false
 }
@@ -1276,6 +1350,14 @@ type performDetach struct {
 	// If set, this field indicates that the link is being detached due to an error
 	// condition. The value of the field SHOULD contain details on the cause of the error.
 	Error *Error
+}
+
+func (d performDetach) String() string {
+	return fmt.Sprintf("Detach{Handle: %d, Closed: %t, Error: %v}",
+		d.Handle,
+		d.Closed,
+		d.Error,
+	)
 }
 
 func (d *performDetach) link() (uint32, bool) {
@@ -1893,6 +1975,10 @@ func (sa *stateAccepted) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeStateAccepted)
 }
 
+func (sa *stateAccepted) String() string {
+	return "Accepted"
+}
+
 /*
 <type name="rejected" class="composite" source="list" provides="delivery-state, outcome">
     <descriptor name="amqp:rejected:list" code="0x00000000:0x00000025"/>
@@ -1916,6 +2002,10 @@ func (sr *stateRejected) unmarshal(r reader) error {
 	)
 }
 
+func (sr *stateRejected) String() string {
+	return fmt.Sprintf("Rejected{Error: %v}", sr.Error)
+}
+
 /*
 <type name="released" class="composite" source="list" provides="delivery-state, outcome">
     <descriptor name="amqp:released:list" code="0x00000000:0x00000026"/>
@@ -1930,6 +2020,10 @@ func (sr *stateReleased) marshal(wr writer) error {
 
 func (sr *stateReleased) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeStateReleased)
+}
+
+func (sr *stateReleased) String() string {
+	return "Released"
 }
 
 /*
@@ -1978,6 +2072,10 @@ func (sm *stateModified) unmarshal(r reader) error {
 		{field: &sm.UndeliverableHere},
 		{field: &sm.MessageAnnotations},
 	}...)
+}
+
+func (sm *stateModified) String() string {
+	return fmt.Sprintf("Modified{DeliveryFailed: %t, UndeliverableHere: %t, MessageAnnotations: %v}", sm.DeliveryFailed, sm.UndeliverableHere, sm.MessageAnnotations)
 }
 
 /*

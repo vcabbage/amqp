@@ -276,7 +276,14 @@ func (c *conn) mux() {
 				c.err = errorErrorf("unexpected frame: %#v", fr.body)
 				continue
 			}
-			ch.rx <- fr
+
+			// TODO: handle session deletion while sending frame to
+			//       session mux?
+			select {
+			case ch.rx <- fr:
+			case <-c.done:
+				return
+			}
 
 		// new session request
 		//
@@ -467,6 +474,9 @@ func (c *conn) connWriter() {
 		// frame write request
 		case fr := <-c.txFrame:
 			err = c.writeFrame(fr)
+			if err == nil && fr.done != nil {
+				close(fr.done)
+			}
 
 		// keepalive timer
 		case <-keepalive:
