@@ -27,6 +27,11 @@ import (
 	"pack.ag/amqp/internal/testconn"
 )
 
+func init() {
+	// rand used to generate queue names, non-determinism is fine for this use
+	rand.Seed(time.Now().UnixNano())
+}
+
 var (
 	subscriptionID = mustGetenv("AZURE_SUBSCRIPTION_ID")
 	resourceGroup  = mustGetenv("AZURE_RESOURCE_GROUP")
