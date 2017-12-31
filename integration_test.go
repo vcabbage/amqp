@@ -160,6 +160,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 
 			checkLeaks() // this is done here because queuesClient starts additional goroutines
 
+			// Wait for Azure to update stats
 			time.Sleep(1 * time.Second)
 
 			q, err := queuesClient.Get(resourceGroup, namespace, queueName)
@@ -234,6 +235,7 @@ func TestIntegrationSend(t *testing.T) {
 
 			checkLeaks() // this is done here because queuesClient starts additional goroutines
 
+			// Wait for Azure to update stats
 			time.Sleep(1 * time.Second)
 
 			q, err := queuesClient.Get(resourceGroup, namespace, queueName)
