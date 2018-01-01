@@ -370,7 +370,7 @@ type performAttach struct {
 	// 0: unsettled - The sender will send all deliveries initially unsettled to the receiver.
 	// 1: settled - The sender will send all deliveries settled to the receiver.
 	// 2: mixed - The sender MAY send a mixture of settled and unsettled deliveries to the receiver.
-	SenderSettleMode uint8
+	SenderSettleMode *uint8
 
 	// the settlement policy of the receiver
 	//
@@ -384,7 +384,7 @@ type performAttach struct {
 	// 1: second - The receiver will only settle after sending the disposition to
 	//             the sender and receiving a disposition indicating settlement of
 	//             the delivery from the sender.
-	ReceiverSettleMode uint8
+	ReceiverSettleMode *uint8
 
 	// the source for messages
 	//
@@ -468,8 +468,8 @@ func (a *performAttach) marshal(wr writer) error {
 		{value: a.Name, omit: false},
 		{value: a.Handle, omit: false},
 		{value: a.Role, omit: false},
-		{value: a.SenderSettleMode, omit: a.SenderSettleMode == 2},
-		{value: a.ReceiverSettleMode, omit: a.ReceiverSettleMode == 0},
+		{value: a.SenderSettleMode, omit: a.SenderSettleMode == nil},
+		{value: a.ReceiverSettleMode, omit: a.ReceiverSettleMode == nil},
 		{value: a.Source, omit: a.Source == nil},
 		{value: a.Target, omit: a.Target == nil},
 		{value: a.Unsettled, omit: len(a.Unsettled) == 0},
@@ -487,8 +487,8 @@ func (a *performAttach) unmarshal(r reader) error {
 		{field: &a.Name, handleNull: required("Attach.Name")},
 		{field: &a.Handle, handleNull: required("Attach.Handle")},
 		{field: &a.Role, handleNull: required("Attach.Role")},
-		{field: &a.SenderSettleMode, handleNull: defaultUint8(&a.SenderSettleMode, 2)},
-		{field: &a.ReceiverSettleMode, handleNull: defaultUint8(&a.ReceiverSettleMode, 0)},
+		{field: &a.SenderSettleMode},
+		{field: &a.ReceiverSettleMode},
 		{field: &a.Source},
 		{field: &a.Target},
 		{field: &a.Unsettled},
