@@ -1648,22 +1648,32 @@ type Message struct {
 
 	receiver *Receiver  // Receiver the message was received from
 	id       deliveryID // used when sending disposition
+	settled  bool       // whether transfer was settled by sender
 }
 
 // Accept notifies the server that the message has been
 // accepted and does not require redelivery.
 func (m *Message) Accept() {
+	if m.settled {
+		return
+	}
 	m.receiver.acceptMessage(m.id)
 }
 
 // Reject notifies the server that the message is invalid.
 func (m *Message) Reject() {
+	if m.settled {
+		return
+	}
 	m.receiver.rejectMessage(m.id)
 }
 
 // Release releases the message back to the server. The message
 // may be redelivered to this or another consumer.
 func (m *Message) Release() {
+	if m.settled {
+		return
+	}
 	m.receiver.releaseMessage(m.id)
 }
 

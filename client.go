@@ -213,13 +213,16 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	var (
 		messageFormat  = uint32(0) // Only message-format "0" is defined in spec.
 		maxPayloadSize = int(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
+		settleMode     = s.link.senderSettleMode
 	)
 
 	fr := performTransfer{
-		Handle:        s.link.handle,
-		DeliveryTag:   randBytes(32),
-		MessageFormat: &messageFormat,
-		More:          s.buf.Len() > 0,
+		Handle:             s.link.handle,
+		DeliveryTag:        randBytes(32),
+		MessageFormat:      &messageFormat,
+		More:               s.buf.Len() > 0,
+		Settled:            settleMode != nil && *settleMode == senderModeSettled,
+		ReceiverSettleMode: s.link.receiverSettleMode,
 	}
 
 	for fr.More {
@@ -476,11 +479,13 @@ type link struct {
 	// value from the sender and any subsequent messages received on the link. Note that,
 	// despite its name, the delivery-count is not a count but a sequence number
 	// initialized at an arbitrary point by the sender."
-	deliveryCount  uint32
-	linkCredit     uint32 // maximum number of messages allowed between flow updates
-	detachSent     bool   // detach frame has been sent
-	detachReceived bool
-	err            error // err returned on Close()
+	deliveryCount      uint32
+	linkCredit         uint32 // maximum number of messages allowed between flow updates
+	senderSettleMode   *uint8
+	receiverSettleMode *uint8
+	detachSent         bool // detach frame has been sent
+	detachReceived     bool
+	err                error // err returned on Close()
 }
 
 // newLink is used by Receiver and Sender to create new links
@@ -526,8 +531,10 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	}
 
 	attach := &performAttach{
-		Name:   l.name,
-		Handle: l.handle,
+		Name:               l.name,
+		Handle:             l.handle,
+		ReceiverSettleMode: l.receiverSettleMode,
+		SenderSettleMode:   l.senderSettleMode,
 	}
 
 	if isReceiver {
@@ -560,8 +567,14 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		l.deliveryCount = resp.InitialDeliveryCount
 		// buffer receiver so that link.mux doesn't block
 		l.transfers = make(chan performTransfer, l.receiver.maxCredit)
+		if resp.SenderSettleMode != nil {
+			l.senderSettleMode = resp.SenderSettleMode
+		}
 	} else {
 		l.transfers = make(chan performTransfer)
+		if resp.ReceiverSettleMode != nil {
+			l.receiverSettleMode = resp.ReceiverSettleMode
+		}
 	}
 
 	go l.mux()
@@ -618,6 +631,25 @@ func (l *link) mux() {
 
 			l.err = errorWrapf(DetachError{fr.Error}, "received detach frame")
 			return false
+
+		case *performDisposition:
+			debug(1, "RX: %s", fr)
+			// TODO: when isSender == true and receiver settle mode is "second",
+			//       block Send() until we get disposition and respond
+			//       with confirmation. (How does this interact with batching?)
+			if fr.Settled {
+				return true
+			}
+
+			resp := &performDisposition{
+				Role:    roleSender,
+				First:   fr.First,
+				Last:    fr.Last,
+				Settled: true,
+				State:   &stateAccepted{},
+			}
+			debug(1, "TX: %s", resp)
+			l.session.txFrame(resp, nil)
 
 		default:
 			debug(1, "RX: %s", fr)
@@ -843,6 +875,65 @@ func LinkBatchMaxAge(d time.Duration) LinkOption {
 	}
 }
 
+const (
+	senderModeUnsettled uint8 = 0
+	senderModeSettled   uint8 = 1
+	senderModeMixed     uint8 = 2
+)
+
+func LinkSenderModeUnsettled() LinkOption {
+	return linkSenderMode(senderModeUnsettled)
+}
+
+func LinkSenderModeSettled() LinkOption {
+	return linkSenderMode(senderModeSettled)
+}
+
+func LinkSenderModeMixed() LinkOption {
+	return linkSenderMode(senderModeMixed)
+}
+
+func LinkSenderModeNone() LinkOption {
+	return func(l *link) error {
+		l.senderSettleMode = nil
+		return nil
+	}
+}
+
+func linkSenderMode(m uint8) LinkOption {
+	return func(l *link) error {
+		l.senderSettleMode = &m
+		return nil
+	}
+}
+
+const (
+	receiverModeFirst  = 0
+	receiverModeSecond = 1
+)
+
+func LinkReceiverModeFirst() LinkOption {
+	return linkReceiverMode(receiverModeFirst)
+}
+
+func LinkReceiverModeSecond() LinkOption {
+	return linkReceiverMode(receiverModeSecond)
+}
+
+func LinkReceiverModeNone() LinkOption {
+	return func(l *link) error {
+		l.receiverSettleMode = nil
+		return nil
+	}
+}
+
+func linkReceiverMode(m uint8) LinkOption {
+	return func(l *link) error {
+		l.receiverSettleMode = &m
+		return nil
+	}
+}
+
 // Receiver receives messages on a single AMQP link.
 type Receiver struct {
 	link         *link                   // underlying link
@@ -876,6 +967,7 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 		// record the delivery ID if this is the first frame of the message
 		if first && fr.DeliveryID != nil {
 			msg.id = (deliveryID)(*fr.DeliveryID)
+			msg.settled = fr.Settled
 			first = false
 		}
 
