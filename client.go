@@ -180,6 +180,11 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 
 	r.link = l
 
+	// batching is just extra overhead when maxCredits == 1
+	if r.maxCredit == 1 {
+		r.batching = false
+	}
+
 	// create dispositions channel and start dispositionBatcher if batching enabled
 	if r.batching {
 		// buffer dispositions chan to prevent disposition sends from blocking
@@ -623,12 +628,13 @@ func (l *link) mux() {
 
 	for {
 		var outgoingTransfers chan performTransfer
-		if isSender && l.linkCredit > 0 {
+		switch {
+		// enable outgoing transfers case if sender and credits are available
+		case isSender && l.linkCredit > 0:
 			outgoingTransfers = l.transfers
-		}
 
 		// if receiver and linkCredit is half used, send more
-		if isReceiver && l.linkCredit < l.receiver.maxCredit/2 {
+		case isReceiver && l.linkCredit <= l.receiver.maxCredit/2:
 			var (
 				// copy because sent by pointer below; prevent race
 				linkCredit    = l.receiver.maxCredit
