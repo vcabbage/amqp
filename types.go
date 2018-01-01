@@ -280,6 +280,21 @@ type performBegin struct {
 	Properties map[symbol]interface{}
 }
 
+func (b *performBegin) String() string {
+	return fmt.Sprintf("Begin{RemoteChannel: %d, NextOutgoingID: %d, IncomingWindow: %d, "+
+		"OutgoingWindow: %d, HandleMax: %d, OfferedCapabilities: %v, DesiredCapabilities: %v, "+
+		"Properties: %v}",
+		b.RemoteChannel,
+		b.NextOutgoingID,
+		b.IncomingWindow,
+		b.OutgoingWindow,
+		b.HandleMax,
+		b.OfferedCapabilities,
+		b.DesiredCapabilities,
+		b.Properties,
+	)
+}
+
 func (b *performBegin) link() (uint32, bool) {
 	return 0, false
 }

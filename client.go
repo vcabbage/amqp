@@ -85,10 +85,13 @@ func (c *Client) NewSession() (*Session, error) {
 	}
 
 	// send Begin to server
-	s.txFrame(&performBegin{
+	begin := &performBegin{
 		NextOutgoingID: 0,
-		IncomingWindow: 1,
-	}, nil)
+		IncomingWindow: s.incomingWindow,
+		OutgoingWindow: s.outgoingWindow,
+	}
+	debug(1, "TX: %s", begin)
+	s.txFrame(begin, nil)
 
 	// wait for response
 	var fr frame
@@ -97,6 +100,7 @@ func (c *Client) NewSession() (*Session, error) {
 		return nil, c.conn.getErr()
 	case fr = <-s.rx:
 	}
+	debug(1, "RX: %s", fr.body)
 
 	begin, ok := fr.body.(*performBegin)
 	if !ok {
@@ -108,7 +112,7 @@ func (c *Client) NewSession() (*Session, error) {
 	s.remoteChannel = begin.RemoteChannel
 
 	// start Session multiplexor
-	go s.mux()
+	go s.mux(begin)
 
 	return s, nil
 }
@@ -117,11 +121,16 @@ func (c *Client) NewSession() (*Session, error) {
 //
 // A session multiplexes Receivers.
 type Session struct {
-	channel       uint16         // session's local channel
-	remoteChannel uint16         // session's remote channel
-	conn          *conn          // underlying conn
-	rx            chan frame     // frames destined for this session are sent on this chan by conn.mux
-	tx            chan frameBody // transfer frames to be sent; session must track disposition
+	channel       uint16                // session's local channel
+	remoteChannel uint16                // session's remote channel
+	conn          *conn                 // underlying conn
+	rx            chan frame            // frames destined for this session are sent on this chan by conn.mux
+	tx            chan frameBody        // non-transfer frames to be sent; session must track disposition
+	txTransfer    chan *performTransfer // transfer frames to be sent; session must track disposition
+
+	// flow control
+	incomingWindow uint32
+	outgoingWindow uint32
 
 	allocateHandle   chan *link // link handles are allocated by sending a link on this channel, nil is sent on link.rx once allocated
 	deallocateHandle chan *link // link handles are deallocated by sending a link on this channel
@@ -129,10 +138,14 @@ type Session struct {
 
 func newSession(c *conn, channel uint16) *Session {
 	return &Session{
-		conn:             c,
-		channel:          channel,
-		rx:               make(chan frame),
-		tx:               make(chan frameBody),
+		conn:       c,
+		channel:    channel,
+		rx:         make(chan frame),
+		tx:         make(chan frameBody),
+		txTransfer: make(chan *performTransfer),
+		// TODO: make windows configurable
+		incomingWindow:   5000,
+		outgoingWindow:   math.MaxUint32,
 		allocateHandle:   make(chan *link),
 		deallocateHandle: make(chan *link),
 	}
@@ -312,7 +325,7 @@ func (s *Session) NewSender(opts ...LinkOption) (*Sender, error) {
 	return &Sender{link: l}, nil
 }
 
-func (s *Session) mux() {
+func (s *Session) mux(remoteBegin *performBegin) {
 	var (
 		links       = make(map[uint32]*link) // mapping of remote handles to links
 		linksByName = make(map[string]*link) // maping of names to links
@@ -321,9 +334,47 @@ func (s *Session) mux() {
 		idsByDeliveryTag    = make(map[string]uint32) //mapping of deliveryTags to deliveryIDs
 		handlesByDeliveryID = make(map[uint32]uint32) //mapping of deliveryIDs to handles
 		nextDeliveryID      uint32                    // next deliveryID
+
+		// flow control values
+		nextOutgoingID       uint32
+		nextIncomingID       = remoteBegin.NextOutgoingID
+		remoteIncomingWindow = remoteBegin.IncomingWindow
+		remoteOutgoingWindow = remoteBegin.OutgoingWindow
 	)
 
+	updateFlowControl := func(flow *performFlow) {
+		// "When the endpoint receives a flow frame from its peer,
+		// it MUST update the next-incoming-id directly from the
+		// next-outgoing-id of the frame, and it MUST update the
+		// remote-outgoing-window directly from the outgoing-window
+		// of the frame."
+		nextIncomingID = flow.NextOutgoingID
+		remoteOutgoingWindow = flow.OutgoingWindow
+
+		// "The remote-incoming-window is computed as follows:
+		//
+		// next-incoming-id(flow) + incoming-window(flow) - next-outgoing-id(endpoint)
+		//
+		// If the next-incoming-id field of the flow frame is not set, then remote-incoming-window is computed as follows:
+		//
+		// initial-outgoing-id(endpoint) + incoming-window(flow) - next-outgoing-id(endpoint)"
+		remoteIncomingWindow = flow.IncomingWindow - nextOutgoingID
+		if flow.NextIncomingID != nil {
+			remoteIncomingWindow += *flow.NextIncomingID
+		} else {
+			// TODO: This is a protocol error:
+			//       "[...] MUST be set if the peer has received
+			//        the begin frame for the session"
+		}
+	}
+
 	for {
+		txTransfer := s.txTransfer
+		// disable txTransfer if flow control windows have been exceeded
+		if remoteIncomingWindow == 0 || s.outgoingWindow == 0 {
+			txTransfer = s.txTransfer
+		}
+
 		select {
 		// conn has completed, exit
 		case <-s.conn.done:
@@ -345,6 +396,10 @@ func (s *Session) mux() {
 		// incoming frame for link
 		case fr := <-s.rx:
 			debug(1, "RX(Session): %s", fr.body)
+			// TODO: The link() method is superfluous if type assertions are needed
+			//       for each message and cause logic duplication between session and
+			//       link scoped messages.
+
 			// TODO: how should the two cases below be handled?
 			//       proto error or alright to ignore?
 			handle, ok := fr.body.link()
@@ -376,6 +431,22 @@ func (s *Session) mux() {
 						}
 					}
 
+				// Flow frames may be session scoped
+				case *performFlow:
+					updateFlowControl(body)
+
+					if body.Echo {
+						niID := nextIncomingID
+						resp := &performFlow{
+							NextIncomingID: &niID,
+							IncomingWindow: s.incomingWindow,
+							NextOutgoingID: nextOutgoingID,
+							OutgoingWindow: s.outgoingWindow,
+						}
+						debug(1, "TX: %s", resp)
+						s.txFrame(resp, nil)
+					}
+
 				default:
 					fmt.Printf("Unexpected frame: %s\n", body)
 				}
@@ -383,24 +454,37 @@ func (s *Session) mux() {
 				continue
 			}
 
-			link, ok := links[handle]
-			if !ok {
-				// This may be an attach response, in which case the link should be
-				// looked up by name, then added to the links map with the remote's
-				// handle contained in this attach frame.
-				attach, ok := fr.body.(*performAttach)
-				if !ok {
-					continue
-				}
+			link, linkOk := links[handle]
 
-				link, ok = linksByName[attach.Name]
-				if !ok {
-					continue
+			switch body := fr.body.(type) {
+			case *performAttach:
+				// On Attach response link should be looked up by name, then added
+				// to the links map with the remote's handle contained in this
+				// attach frame.
+				link, linkOk = linksByName[body.Name]
+				if !linkOk {
+					break
 				}
-				delete(linksByName, attach.Name) // name no longer needed
+				delete(linksByName, body.Name) // name no longer needed
 
-				link.remoteHandle = attach.Handle
+				link.remoteHandle = body.Handle
 				links[link.remoteHandle] = link
+
+			case *performTransfer:
+				// "Upon receiving a transfer, the receiving endpoint will
+				// increment the next-incoming-id to match the implicit
+				// transfer-id of the incoming transfer plus one, as well
+				// as decrementing the remote-outgoing-window, and MAY
+				// (depending on policy) decrement its incoming-window."
+				nextIncomingID++
+				remoteOutgoingWindow--
+
+			case *performFlow:
+				updateFlowControl(body)
+			}
+
+			if !linkOk {
+				continue
 			}
 
 			select {
@@ -408,39 +492,52 @@ func (s *Session) mux() {
 			case link.rx <- fr.body:
 			}
 
+		case fr := <-txTransfer:
+			id, ok := idsByDeliveryTag[string(fr.DeliveryTag)]
+			if !ok {
+				// no entry for tag, allocate new DeliveryID
+				id = nextDeliveryID
+				nextDeliveryID++
+
+				if fr.More {
+					idsByDeliveryTag[string(fr.DeliveryTag)] = id
+				}
+			} else {
+				// existing entry indicates this isn't the first message,
+				// clear values that are only required on first message
+				fr.DeliveryTag = nil
+				fr.MessageFormat = nil
+
+				if !fr.More {
+					delete(idsByDeliveryTag, string(fr.DeliveryTag))
+				}
+			}
+
+			handlesByDeliveryID[id] = fr.Handle
+			fr.DeliveryID = &id
+			debug(2, "TX(Session): %s", fr)
+			s.txFrame(fr, fr.done)
+
+			// "Upon sending a transfer, the sending endpoint will increment
+			// its next-outgoing-id, decrement its remote-incoming-window,
+			// and MAY (depending on policy) decrement its outgoing-window."
+			nextOutgoingID++
+			remoteIncomingWindow--
+
 		case fr := <-s.tx:
 			switch fr := fr.(type) {
-			case *performTransfer:
-				id, ok := idsByDeliveryTag[string(fr.DeliveryTag)]
-				if !ok {
-					// no entry for tag, allocate new DeliveryID
-					id = nextDeliveryID
-					nextDeliveryID++
-
-					if fr.More {
-						idsByDeliveryTag[string(fr.DeliveryTag)] = id
-					}
-				} else {
-					// existing entry indicates this isn't the first message,
-					// clear values that are only required on first message
-					fr.DeliveryTag = nil
-					fr.MessageFormat = nil
-
-					if !fr.More {
-						delete(idsByDeliveryTag, string(fr.DeliveryTag))
-					}
-				}
-
-				handlesByDeliveryID[id] = fr.Handle
-				fr.DeliveryID = &id
-				debug(1, "TX(Session): %s", fr)
-				s.txFrame(fr, fr.done)
 			case *performFlow:
-				nextIncomingID := nextDeliveryID
-				fr.NextIncomingID = &nextIncomingID
-				fr.IncomingWindow = math.MaxUint32 // max number of transfer frames
+				niID := nextIncomingID
+				fr.NextIncomingID = &niID
+				fr.IncomingWindow = s.incomingWindow
+				fr.NextOutgoingID = nextOutgoingID
+				fr.OutgoingWindow = s.outgoingWindow
+				debug(1, "TX(Session): %s", fr)
 				s.txFrame(fr, nil)
+			case *performTransfer:
+				panic("transfer frames must use txTransfer")
 			default:
+				debug(1, "TX(Session): %s", fr)
 				s.txFrame(fr, nil)
 			}
 		}
@@ -641,6 +738,23 @@ func (l *link) mux() {
 				l.linkCredit = *fr.LinkCredit - (l.deliveryCount - *fr.DeliveryCount)
 			}
 
+			if fr.Echo {
+				var (
+					// copy because sent by pointer below; prevent race
+					linkCredit    = l.linkCredit
+					deliveryCount = l.deliveryCount
+				)
+
+				// send flow
+				fr := &performFlow{
+					Handle:        &l.handle,
+					DeliveryCount: &deliveryCount,
+					LinkCredit:    &linkCredit, // max number of messages
+				}
+				debug(1, "TX: %s", fr)
+				l.session.txFrame(fr, nil)
+			}
+
 		// remote side is closing links
 		case *performDetach:
 			debug(1, "RX: %s", fr)
@@ -670,7 +784,6 @@ func (l *link) mux() {
 				First:   fr.First,
 				Last:    fr.Last,
 				Settled: true,
-				State:   &stateAccepted{},
 			}
 			debug(1, "TX: %s", resp)
 			l.session.txFrame(resp, nil)
@@ -699,11 +812,9 @@ func (l *link) mux() {
 
 			// send flow
 			fr := &performFlow{
-				NextOutgoingID: 0,
-				OutgoingWindow: 0,
-				Handle:         &l.handle,
-				DeliveryCount:  &deliveryCount,
-				LinkCredit:     &linkCredit, // max number of messages
+				Handle:        &l.handle,
+				DeliveryCount: &deliveryCount,
+				LinkCredit:    &linkCredit, // max number of messages
 			}
 			debug(1, "TX: %s", fr)
 			l.session.txFrame(fr, nil)
@@ -720,7 +831,7 @@ func (l *link) mux() {
 			for {
 				// Ensure we never block the session mux
 				select {
-				case l.session.tx <- &tr:
+				case l.session.txTransfer <- &tr:
 					break Loop
 				case fr := <-l.rx:
 					if !handleRx(fr) {
