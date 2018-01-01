@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// maxSliceLen is equal to math.MaxInt32 or math.MaxInt64, depending on platform
+const maxSliceLen = uint64(^uint(0) >> 1)
+
 // Client is an AMQP client connection.
 type Client struct {
 	conn *conn
@@ -208,6 +211,10 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	err := msg.marshal(&s.buf)
 	if err != nil {
 		return err
+	}
+
+	if uint64(s.buf.Len()) > s.link.peerMaxMessageSize {
+		return errorErrorf("encoded message size exceeds peer max of %d", s.link.peerMaxMessageSize)
 	}
 
 	var (
@@ -485,6 +492,8 @@ type link struct {
 	linkCredit         uint32 // maximum number of messages allowed between flow updates
 	senderSettleMode   *uint8
 	receiverSettleMode *uint8
+	maxMessageSize     uint64
+	peerMaxMessageSize uint64
 	detachSent         bool // detach frame has been sent
 	detachReceived     bool
 	err                error // err returned on Close()
@@ -498,6 +507,10 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		receiver: r,
 		close:    make(chan struct{}),
 		done:     make(chan struct{}),
+		// TODO: this is excessive, especially on 64-bit platforms
+		//       default to a more reasonable max and allow users to
+		//       change via LinkOption
+		maxMessageSize: maxSliceLen,
 	}
 
 	isReceiver := r != nil
@@ -537,6 +550,7 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		Handle:             l.handle,
 		ReceiverSettleMode: l.receiverSettleMode,
 		SenderSettleMode:   l.senderSettleMode,
+		MaxMessageSize:     l.maxMessageSize,
 	}
 
 	if isReceiver {
@@ -562,6 +576,14 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	resp, ok := fr.(*performAttach)
 	if !ok {
 		return nil, errorErrorf("unexpected attach response: %#v", fr)
+	}
+
+	// TODO: this is excessive, especially on 64-bit platforms
+	//       default to a more reasonable max and allow users to
+	//       change via LinkOption
+	l.peerMaxMessageSize = maxSliceLen
+	if resp.MaxMessageSize != 0 && resp.MaxMessageSize < uint64(l.peerMaxMessageSize) {
+		l.peerMaxMessageSize = resp.MaxMessageSize
 	}
 
 	if isReceiver {
@@ -952,9 +974,13 @@ type Receiver struct {
 func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 	r.buf.Reset()
 
-	msg := &Message{receiver: r} // message to be decoded into
+	msg := Message{receiver: r} // message to be decoded into
 
-	first := true // receiving the first frame of the message
+	var (
+		maxMessageSize = int(r.link.maxMessageSize)
+		messageSize    = 0
+		first          = true // receiving the first frame of the message
+	)
 	for {
 		// wait for the next frame
 		var fr performTransfer
@@ -973,6 +999,14 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 			first = false
 		}
 
+		// ensure maxMessageSize will not be exceeded
+		messageSize += len(fr.Payload)
+		if messageSize > maxMessageSize {
+			// TODO: send error
+			r.Close()
+			return nil, errorErrorf("received message larger than max size of ")
+		}
+
 		// add the payload the the buffer
 		r.buf.Write(fr.Payload)
 
@@ -984,7 +1018,7 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 
 	// unmarshal message
 	err := msg.unmarshal(&r.buf)
-	return msg, err
+	return &msg, err
 }
 
 // Close closes the Receiver and AMQP link.
