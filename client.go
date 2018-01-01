@@ -342,35 +342,37 @@ func (s *Session) mux() {
 			//       proto error or alright to ignore?
 			handle, ok := fr.body.link()
 			if !ok {
+				switch body := fr.body.(type) {
 				// Disposition frames can reference transfers from more than one
 				// link. Send this frame to all of them.
-				disposition, ok := fr.body.(*performDisposition)
-				if !ok {
-					continue
+				case *performDisposition:
+					start := body.First
+					end := start
+					if body.Last != nil {
+						end = *body.Last
+					}
+					for deliveryID := start; deliveryID <= end; deliveryID++ {
+						handle, ok := handlesByDeliveryID[deliveryID]
+						if !ok {
+							continue
+						}
+						delete(handlesByDeliveryID, deliveryID)
+
+						link, ok := links[handle]
+						if !ok {
+							continue
+						}
+
+						select {
+						case <-s.conn.done:
+						case link.rx <- fr.body:
+						}
+					}
+
+				default:
+					fmt.Printf("Unexpected frame: %s\n", body)
 				}
 
-				start := disposition.First
-				end := start
-				if disposition.Last != nil {
-					end = *disposition.Last
-				}
-				for deliveryID := start; deliveryID <= end; deliveryID++ {
-					handle, ok := handlesByDeliveryID[deliveryID]
-					if !ok {
-						continue
-					}
-					delete(handlesByDeliveryID, deliveryID)
-
-					link, ok := links[handle]
-					if !ok {
-						continue
-					}
-
-					select {
-					case <-s.conn.done:
-					case link.rx <- fr.body:
-					}
-				}
 				continue
 			}
 
