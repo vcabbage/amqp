@@ -329,6 +329,7 @@ func (s *Session) mux() {
 
 		// incoming frame for link
 		case fr := <-s.rx:
+			debug(1, "RX(Session): %s", fr.body)
 			// TODO: how should the two cases below be handled?
 			//       proto error or alright to ignore?
 			handle, ok := fr.body.link()
@@ -415,6 +416,7 @@ func (s *Session) mux() {
 
 				handlesByDeliveryID[id] = fr.Handle
 				fr.DeliveryID = &id
+				debug(1, "TX(Session): %s", fr)
 				s.txFrame(fr, fr.done)
 			case *performFlow:
 				nextIncomingID := nextDeliveryID
@@ -532,6 +534,7 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	}
 
 	// send Attach frame
+	debug(1, "TX: %s", attach)
 	s.txFrame(attach, nil)
 
 	// wait for response
@@ -541,6 +544,7 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		return nil, s.conn.getErr()
 	case fr = <-l.rx:
 	}
+	debug(1, "RX: %s", fr)
 	resp, ok := fr.(*performAttach)
 	if !ok {
 		return nil, errorErrorf("unexpected attach response: %#v", fr)
@@ -572,6 +576,7 @@ func (l *link) mux() {
 		switch fr := fr.(type) {
 		// message frame
 		case *performTransfer:
+			debug(2, "RX: %s", fr)
 			if isSender {
 				// TODO: send error to remote
 				l.err = errorErrorf("Sender received transfer frame")
@@ -585,6 +590,7 @@ func (l *link) mux() {
 
 		// flow control frame
 		case *performFlow:
+			debug(1, "RX: %s", fr)
 			if isReceiver {
 				if fr.DeliveryCount != nil {
 					l.deliveryCount = *fr.DeliveryCount
@@ -595,6 +601,7 @@ func (l *link) mux() {
 
 		// remote side is closing links
 		case *performDetach:
+			debug(1, "RX: %s", fr)
 			// don't currently support link detach and reattach
 			if !fr.Closed {
 				l.err = errorErrorf("non-closing detach not supported: %+v", fr)
@@ -608,7 +615,8 @@ func (l *link) mux() {
 			return false
 
 		default:
-			fmt.Printf("Unexpected frame: %T - %+v\n", fr, fr)
+			debug(1, "RX: %s", fr)
+			fmt.Printf("Unexpected frame: %s\n", fr)
 		}
 		return true
 	}
@@ -635,6 +643,7 @@ func (l *link) mux() {
 				DeliveryCount:  &deliveryCount,
 				LinkCredit:     &linkCredit, // max number of messages
 			}
+			debug(1, "TX: %s", fr)
 			l.session.txFrame(fr, nil)
 
 			// reset credit
@@ -644,9 +653,10 @@ func (l *link) mux() {
 		select {
 		// send data
 		case tr := <-outgoingTransfers:
-			// Ensure we never block the session mux
+			debug(3, "TX(link): %s", tr)
 		Loop:
 			for {
+				// Ensure we never block the session mux
 				select {
 				case l.session.tx <- &tr:
 					break Loop
@@ -986,6 +996,7 @@ func (r *Receiver) sendDisposition(first deliveryID, last *deliveryID, disp disp
 		fr.State = new(stateReleased)
 	}
 
+	debug(1, "TX: %s", fr)
 	r.link.session.txFrame(fr, nil)
 }
 
