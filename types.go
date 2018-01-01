@@ -459,6 +459,34 @@ type performAttach struct {
 	Properties map[symbol]interface{}
 }
 
+func (a performAttach) String() string {
+	return fmt.Sprintf("Attach{Name: %s, Handle: %d, Role: %s, SenderSettleMode: %s, ReceiverSettleMode: %s, "+
+		"Source: %v, Target: %v, Unsettled: %v, IncompleteUnsettled: %t, InitialDeliveryCount: %d, MaxMessageSize: %d, "+
+		"OfferedCapabilities: %v, DesiredCapabilities: %v, Properties: %v}",
+		a.Name,
+		a.Handle,
+		a.Role,
+		formatUint8Ptr(a.SenderSettleMode),
+		formatUint8Ptr(a.ReceiverSettleMode),
+		a.Source,
+		a.Target,
+		a.Unsettled,
+		a.IncompleteUnsettled,
+		a.InitialDeliveryCount,
+		a.MaxMessageSize,
+		a.OfferedCapabilities,
+		a.DesiredCapabilities,
+		a.Properties,
+	)
+}
+
+func formatUint8Ptr(p *uint8) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return strconv.FormatUint(uint64(*p), 10)
+}
+
 func (a *performAttach) link() (uint32, bool) {
 	return a.Handle, true
 }
@@ -1172,11 +1200,6 @@ type performTransfer struct {
 }
 
 func (t performTransfer) String() string {
-	receiverSettleMode := "<nil>"
-	if t.ReceiverSettleMode != nil {
-		receiverSettleMode = strconv.FormatUint(uint64(*t.ReceiverSettleMode), 10)
-	}
-
 	return fmt.Sprintf("Transfer{Handle: %d, DeliveryID: %s, DeliveryTag: %q, MessageFormat: %s, "+
 		"Settled: %t, More: %t, ReceiverSettleMode: %s, State: %v, Resume: %t, Aborted: %t, "+
 		"Batchable: %t, Payload [size]: %d}",
@@ -1186,7 +1209,7 @@ func (t performTransfer) String() string {
 		formatUint32Ptr(t.MessageFormat),
 		t.Settled,
 		t.More,
-		receiverSettleMode,
+		formatUint8Ptr(t.ReceiverSettleMode),
 		t.State,
 		t.Resume,
 		t.Aborted,
