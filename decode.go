@@ -245,7 +245,14 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 		indirect := reflect.Indirect(v) // *struct
 		if indirect.Kind() == reflect.Ptr {
 			if indirect.IsNil() { // *struct == nil
-				indirect.Set(reflect.New(indirect.Type().Elem()))
+				// unmarshal into tmp to prevent setting a nil value
+				// to the type's zero value
+				tmp := reflect.New(indirect.Type().Elem())
+				tmpIsNull, err := unmarshal(r, tmp.Interface())
+				if err == nil && !tmpIsNull {
+					indirect.Set(tmp)
+				}
+				return tmpIsNull, err
 			}
 			return unmarshal(r, indirect.Interface())
 		}
