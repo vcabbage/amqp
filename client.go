@@ -836,8 +836,24 @@ func (l *link) mux() {
 				DeliveryCount: &deliveryCount,
 				LinkCredit:    &linkCredit, // max number of messages
 			}
-			debug(1, "TX: %s", fr)
-			l.session.txFrame(fr, nil)
+			debug(3, "TX: %s", fr)
+		FlowLoop:
+			for {
+				// Ensure we never block the session mux
+				select {
+				case l.session.tx <- fr:
+					break FlowLoop
+				case fr := <-l.rx:
+					if !handleRx(fr) {
+						return
+					}
+				case <-l.close:
+					return
+				case <-l.session.conn.done:
+					l.err = l.session.conn.getErr()
+					return
+				}
+			}
 
 			// reset credit
 			l.linkCredit = l.receiver.maxCredit
