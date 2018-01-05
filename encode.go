@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 )
 
+const intSize = 32 << (^uint(0) >> 63)
+
 var (
 	errInvalidLength = errorNew("length field is larger than frame")
 	errNull          = errorNew("error is null")
@@ -77,6 +79,11 @@ func marshal(wr writer, i interface{}) error {
 		} else {
 			err = wr.WriteByte(byte(typeCodeBoolFalse))
 		}
+	case uint:
+		if intSize == 64 {
+			return writeUint64(wr, uint64(t))
+		}
+		return writeUint32(wr, uint32(t))
 	case uint64:
 		return writeUint64(wr, t)
 	case uint32:
@@ -97,6 +104,15 @@ func marshal(wr writer, i interface{}) error {
 		_, err = wr.Write([]byte{byte(typeCodeUbyte), t})
 	case *uint8:
 		_, err = wr.Write([]byte{byte(typeCodeUbyte), *t})
+	case int:
+		if intSize == 64 {
+			return writeInt64(wr, int64(t))
+		}
+		return writeInt32(wr, int32(t))
+	case int64:
+		return writeInt64(wr, t)
+	case int32:
+		return writeInt32(wr, t)
 	case []symbol:
 		err = writeSymbolArray(wr, t)
 	case string:
@@ -113,6 +129,32 @@ func marshal(wr writer, i interface{}) error {
 		return errorErrorf("marshal not implemented for %T", i)
 	}
 	return err
+}
+
+func writeInt32(wr writer, n int32) error {
+	if n < 256 {
+		_, err := wr.Write([]byte{byte(typeCodeSmallint), byte(n)})
+		return err
+	}
+
+	err := wr.WriteByte(byte(typeCodeInt))
+	if err != nil {
+		return err
+	}
+	return binary.Write(wr, binary.BigEndian, n)
+}
+
+func writeInt64(wr writer, n int64) error {
+	if n < 256 {
+		_, err := wr.Write([]byte{byte(typeCodeSmalllong), byte(n)})
+		return err
+	}
+
+	err := wr.WriteByte(byte(typeCodeLong))
+	if err != nil {
+		return err
+	}
+	return binary.Write(wr, binary.BigEndian, n)
 }
 
 func writeUint32(wr writer, n uint32) error {
