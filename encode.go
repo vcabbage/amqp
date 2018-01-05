@@ -6,6 +6,7 @@ import (
 	"io"
 	"math"
 	"sync"
+	"time"
 	"unicode/utf8"
 )
 
@@ -146,6 +147,16 @@ func writeUint64(wr writer, n uint64) error {
 		return err
 	}
 	return binary.Write(wr, binary.BigEndian, n)
+}
+
+func writeTimestamp(wr writer, t time.Time) error {
+	err := wr.WriteByte(byte(typeCodeTimestamp))
+	if err != nil {
+		return err
+	}
+
+	ms := t.UnixNano() / int64(time.Millisecond)
+	return binary.Write(wr, binary.BigEndian, ms)
 }
 
 // marshalField is a field to be marshaled
