@@ -275,6 +275,11 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	return nil
 }
 
+// Address returns the link's address.
+func (s *Sender) Address() string {
+	return s.link.address
+}
+
 // Close closes the Sender and AMQP link.
 func (s *Sender) Close() error {
 	// TODO: Should this timeout? Close() take a context? Use one of the
@@ -569,7 +574,8 @@ type link struct {
 	name         string               // our name
 	handle       uint32               // our handle
 	remoteHandle uint32               // remote's handle
-	sourceAddr   string               // address sent during attach
+	address      string               // address sent during attach
+	dynamicAddr  bool                 // request a dynamic link address from the server
 	rx           chan frameBody       // sessions sends frames for this link on this channel
 	transfers    chan performTransfer // sender uses for send; receiver uses for receive
 	close        chan struct{}
@@ -652,10 +658,16 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 
 	if isReceiver {
 		attach.Role = roleReceiver
-		attach.Source = &source{Address: l.sourceAddr}
+		attach.Source = &source{
+			Address: l.address,
+			Dynamic: l.dynamicAddr,
+		}
 	} else {
 		attach.Role = roleSender
-		attach.Target = &target{Address: l.sourceAddr}
+		attach.Target = &target{
+			Address: l.address,
+			Dynamic: l.dynamicAddr,
+		}
 	}
 
 	// send Attach frame
@@ -684,6 +696,10 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	}
 
 	if isReceiver {
+		// if dynamic address requested, copy assigned name to address
+		if l.dynamicAddr && resp.Source != nil {
+			l.address = resp.Source.Address
+		}
 		// deliveryCount is a sequence number, must initialize to sender's initial sequence number
 		l.deliveryCount = resp.InitialDeliveryCount
 		// buffer receiver so that link.mux doesn't block
@@ -692,6 +708,10 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 			l.senderSettleMode = resp.SenderSettleMode
 		}
 	} else {
+		// if dynamic address requested, copy assigned name to address
+		if l.dynamicAddr && resp.Target != nil {
+			l.address = resp.Target.Address
+		}
 		l.transfers = make(chan performTransfer)
 		if resp.ReceiverSettleMode != nil {
 			l.receiverSettleMode = resp.ReceiverSettleMode
@@ -965,13 +985,24 @@ outer:
 
 // LinkOption is an function for configuring an AMQP links.
 //
-// A link may be a Sender or a Receiver. Only Receiver is currently implemented.
+// A link may be a Sender or a Receiver.
 type LinkOption func(*link) error
 
-// LinkSource sets the source address.
-func LinkSource(source string) LinkOption {
+// LinkAddress sets the link address.
+//
+// For a Receiver this configures the source address.
+// For a Sender this configures the target address.
+func LinkAddress(source string) LinkOption {
 	return func(l *link) error {
-		l.sourceAddr = source
+		l.address = source
+		return nil
+	}
+}
+
+// LinkAddressDynamic requests a dynamically created address from the server.
+func LinkAddressDynamic() LinkOption {
+	return func(l *link) error {
+		l.dynamicAddr = true
 		return nil
 	}
 }
@@ -1130,6 +1161,11 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 	// unmarshal message
 	err := msg.unmarshal(&r.buf)
 	return &msg, err
+}
+
+// Address returns the link's address.
+func (r *Receiver) Address() string {
+	return r.link.address
 }
 
 // Close closes the Receiver and AMQP link.
