@@ -1972,6 +1972,7 @@ func (p *MessageProperties) marshal(wr writer) error {
 		{value: p.AbsoluteExpiryTime, omit: p.AbsoluteExpiryTime.IsZero()},
 		{value: p.CreationTime, omit: p.CreationTime.IsZero()},
 		{value: p.GroupID, omit: p.GroupID == ""},
+		{value: p.GroupSequence},
 		{value: p.ReplyToGroupID, omit: p.ReplyToGroupID == ""},
 	}...)
 }
