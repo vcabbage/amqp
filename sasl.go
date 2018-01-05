@@ -11,7 +11,8 @@ const (
 
 // SASL Mechanisms
 const (
-	saslMechanismPLAIN symbol = "PLAIN"
+	saslMechanismPLAIN     symbol = "PLAIN"
+	saslMechanismANONYMOUS symbol = "ANONYMOUS"
 )
 
 type saslCode int
@@ -42,6 +43,34 @@ func ConnSASLPlain(username, password string) ConnOption {
 					Mechanism:       "PLAIN",
 					InitialResponse: []byte("\x00" + username + "\x00" + password),
 					Hostname:        "",
+				},
+			})
+			if c.err != nil {
+				return nil
+			}
+
+			// go to c.saslOutcome to handle the server response
+			return c.saslOutcome
+		}
+		return nil
+	}
+}
+
+// ConnSASLAnonymous enables SASL ANONYMOUS authentication for the connection.
+func ConnSASLAnonymous() ConnOption {
+	return func(c *conn) error {
+		// make handlers map if no other mechanism has
+		if c.saslHandlers == nil {
+			c.saslHandlers = make(map[symbol]stateFunc)
+		}
+
+		// add the handler the the map
+		c.saslHandlers[saslMechanismANONYMOUS] = func() stateFunc {
+			c.err = c.writeFrame(frame{
+				typ: frameTypeSASL,
+				body: &saslInit{
+					Mechanism:       saslMechanismANONYMOUS,
+					InitialResponse: []byte("anonymous"),
 				},
 			})
 			if c.err != nil {
