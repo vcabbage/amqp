@@ -661,14 +661,21 @@ func readComposite(r reader) (interface{}, error) {
 		return nil, err
 	}
 
-	switch amqpType(v) {
-	case typeCodeError:
-		e := new(Error)
-		err := e.unmarshal(r)
-		return e, err
-	default:
+	construct, ok := compositeTypes[amqpType(v)]
+	if !ok {
 		return nil, errorErrorf("unmarshaling composite %0x not implemented", v)
 	}
+
+	iface := construct()
+	return unmarshal(r, iface)
+}
+
+var compositeTypes = map[amqpType]func() interface{}{
+	typeCodeError:                     func() interface{} { return new(Error) },
+	typeCodeDeleteOnClose:             func() interface{} { return deleteOnClose },
+	typeCodeDeleteOnNoMessages:        func() interface{} { return deleteOnNoMessages },
+	typeCodeDeleteOnNoLinks:           func() interface{} { return deleteOnNoLinks },
+	typeCodeDeleteOnNoLinksOrMessages: func() interface{} { return deleteOnNoLinksOrMessages },
 }
 
 func readTimestamp(r reader) (time.Time, error) {
