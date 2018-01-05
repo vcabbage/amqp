@@ -1145,6 +1145,10 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 		messageSize    = 0
 		first          = true // receiving the first frame of the message
 	)
+	if maxMessageSize == 0 {
+		maxMessageSize = int(maxSliceLen)
+	}
+
 	for {
 		// wait for the next frame
 		var fr performTransfer
