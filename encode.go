@@ -102,6 +102,12 @@ func marshal(wr writer, i interface{}) error {
 		err = writeString(wr, t)
 	case []byte:
 		err = writeBinary(wr, t)
+	case map[interface{}]interface{}:
+		err = writeMap(wr, t)
+	case map[string]interface{}:
+		err = writeMap(wr, t)
+	case time.Time:
+		err = writeTimestamp(wr, t)
 	default:
 		return errorErrorf("marshal not implemented for %T", i)
 	}
@@ -380,4 +386,71 @@ func writeSlice(wr writer, isArray bool, of amqpType, numFields int, size int) e
 	}
 
 	return nil
+}
+
+func writeMap(wr writer, m interface{}) error {
+	var length int
+	buf := new(bytes.Buffer)
+
+	switch m := m.(type) {
+	case map[interface{}]interface{}:
+		length = len(m)
+		for key, val := range m {
+			err := marshal(buf, key)
+			if err != nil {
+				return err
+			}
+			err = marshal(buf, val)
+			if err != nil {
+				return err
+			}
+		}
+	case map[string]interface{}:
+		length = len(m)
+		for key, val := range m {
+			err := marshal(buf, key)
+			if err != nil {
+				return err
+			}
+			err = marshal(buf, val)
+			if err != nil {
+				return err
+			}
+		}
+	default:
+		return errorErrorf("unsupported type or map type %T", m)
+	}
+
+	pairs := length * 2
+	if pairs > 255 {
+		return errorNew("map contains too many elements")
+	}
+
+	l := buf.Len() + 1 // +1 for pairs byte
+	switch {
+	case l < 256:
+		_, err := wr.Write([]byte{byte(typeCodeMap8), byte(l)})
+		if err != nil {
+			return err
+		}
+	case l < math.MaxUint32:
+		err := wr.WriteByte(byte(typeCodeMap32))
+		if err != nil {
+			return err
+		}
+		err = binary.Write(wr, binary.BigEndian, uint32(l))
+		if err != nil {
+			return err
+		}
+	default:
+		return errorNew("map too large")
+	}
+
+	err := wr.WriteByte(uint8(pairs))
+	if err != nil {
+		return err
+	}
+
+	_, err = buf.WriteTo(wr)
+	return err
 }
