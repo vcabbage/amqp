@@ -1600,7 +1600,7 @@ func (c *performClose) String() string {
 type Message struct {
 	// The header section carries standard delivery details about the transfer
 	// of a message through the AMQP network.
-	Header MessageHeader
+	Header *MessageHeader
 	// If the header section is omitted the receiver MUST assume the appropriate
 	// default values (or the meaning implied by no value being set) for the
 	// fields within the header unless other target or node specific defaults
@@ -1646,7 +1646,7 @@ type Message struct {
 
 	// The properties section is used for a defined set of standard properties of
 	// the message.
-	Properties MessageProperties
+	Properties *MessageProperties
 	// The properties section is part of the bare message; therefore,
 	// if retransmitted by an intermediary, it MUST remain unaltered.
 
@@ -1664,6 +1664,10 @@ type Message struct {
 	// TODO: this could be data(s), amqp-sequence(s), amqp-value rather than singe data:
 	// "The body consists of one of the following three choices: one or more data
 	//  sections, one or more amqp-sequence sections, or a single amqp-value section."
+
+	// Value payload.
+	Value interface{}
+	// An amqp-value section contains a single AMQP value.
 
 	// The footer section is used for details about the message or delivery which
 	// can only be calculated or evaluated once the whole bare message has been
@@ -1706,13 +1710,15 @@ func (m *Message) Release() {
 // TODO: add support for sending Modified disposition
 
 func (m *Message) marshal(wr writer) error {
-	err := m.Header.marshal(wr)
-	if err != nil {
-		return err
+	if m.Header != nil {
+		err := m.Header.marshal(wr)
+		if err != nil {
+			return err
+		}
 	}
 
 	if m.DeliveryAnnotations != nil {
-		err = writeDescriptor(wr, typeCodeDeliveryAnnotations)
+		err := writeDescriptor(wr, typeCodeDeliveryAnnotations)
 		if err != nil {
 			return err
 		}
@@ -1723,7 +1729,7 @@ func (m *Message) marshal(wr writer) error {
 	}
 
 	if m.Annotations != nil {
-		err = writeDescriptor(wr, typeCodeMessageAnnotations)
+		err := writeDescriptor(wr, typeCodeMessageAnnotations)
 		if err != nil {
 			return err
 		}
@@ -1733,13 +1739,15 @@ func (m *Message) marshal(wr writer) error {
 		}
 	}
 
-	err = marshal(wr, &m.Properties)
-	if err != nil {
-		return err
+	if m.Properties != nil {
+		err := marshal(wr, m.Properties)
+		if err != nil {
+			return err
+		}
 	}
 
 	if m.ApplicationProperties != nil {
-		err = writeDescriptor(wr, typeCodeApplicationProperties)
+		err := writeDescriptor(wr, typeCodeApplicationProperties)
 		if err != nil {
 			return err
 		}
@@ -1750,7 +1758,7 @@ func (m *Message) marshal(wr writer) error {
 	}
 
 	if m.Data != nil {
-		err = writeDescriptor(wr, typeCodeApplicationData)
+		err := writeDescriptor(wr, typeCodeApplicationData)
 		if err != nil {
 			return err
 		}
@@ -1759,8 +1767,20 @@ func (m *Message) marshal(wr writer) error {
 			return err
 		}
 	}
+
+	if m.Value != nil {
+		err := writeDescriptor(wr, typeCodeAMQPValue)
+		if err != nil {
+			return err
+		}
+		err = marshal(wr, m.Value)
+		if err != nil {
+			return err
+		}
+	}
+
 	if m.Footer != nil {
-		err = writeDescriptor(wr, typeCodeFooter)
+		err := writeDescriptor(wr, typeCodeFooter)
 		if err != nil {
 			return err
 		}
@@ -1812,6 +1832,9 @@ func (m *Message) unmarshal(r reader) error {
 
 		case typeCodeFooter:
 			section = &m.Footer
+
+		case typeCodeAMQPValue:
+			section = &m.Value
 
 		default:
 			return errorErrorf("unknown message section %x", typ)
