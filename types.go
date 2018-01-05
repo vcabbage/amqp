@@ -105,6 +105,12 @@ const (
 	typeCodeSASLChallenge amqpType = 0x42
 	typeCodeSASLResponse  amqpType = 0x43
 	typeCodeSASLOutcome   amqpType = 0x44
+
+	// Lifetime Policies
+	typeCodeDeleteOnClose             amqpType = 0x2b
+	typeCodeDeleteOnNoLinks           amqpType = 0x2c
+	typeCodeDeleteOnNoMessages        amqpType = 0x2d
+	typeCodeDeleteOnNoLinksOrMessages amqpType = 0x2e
 )
 
 // Frame structure:
@@ -2349,4 +2355,28 @@ func (u *UUID) unmarshal(r reader) error {
 	un, err := readUUID(r)
 	*u = un
 	return err
+}
+
+type lifetimePolicy uint8
+
+const (
+	deleteOnClose             = lifetimePolicy(typeCodeDeleteOnClose)
+	deleteOnNoLinks           = lifetimePolicy(typeCodeDeleteOnNoLinks)
+	deleteOnNoMessages        = lifetimePolicy(typeCodeDeleteOnNoMessages)
+	deleteOnNoLinksOrMessages = lifetimePolicy(typeCodeDeleteOnNoLinksOrMessages)
+)
+
+func (p lifetimePolicy) marshal(wr writer) error {
+	_, err := wr.Write([]byte{0x0, byte(typeCodeSmallUlong), byte(p), byte(typeCodeList0)})
+	return err
+}
+
+// unmarshal isn't defined on a pointer because concrete types should
+// always be created by the compositeTypes constructor functions.
+func (p lifetimePolicy) unmarshal(r reader) error {
+	data := r.Next(4) // constructor + empty list
+	if len(data) != 4 {
+		return errorErrorf("invalid size %d for lifetime-policy", len(data))
+	}
+	return nil
 }
