@@ -749,13 +749,19 @@ func (l *link) mux() {
 
 		// flow control frame
 		case *performFlow:
-			debug(1, "RX: %s", fr)
+			debug(3, "RX: %s", fr)
 			if isReceiver {
 				if fr.DeliveryCount != nil {
 					l.deliveryCount = *fr.DeliveryCount
 				}
 			} else {
-				l.linkCredit = *fr.LinkCredit - (l.deliveryCount - *fr.DeliveryCount)
+				l.linkCredit = *fr.LinkCredit - l.deliveryCount
+				if fr.DeliveryCount != nil {
+					// DeliveryCount can be nil if the receiver hasn't processed
+					// the attach. That shouldn't be the case here, but it's
+					// what ActiveMQ does.
+					l.linkCredit -= *fr.DeliveryCount
+				}
 			}
 
 			if fr.Echo {
