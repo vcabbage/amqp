@@ -517,7 +517,7 @@ func (a *performAttach) marshal(wr writer) error {
 		{value: a.Target, omit: a.Target == nil},
 		{value: a.Unsettled, omit: len(a.Unsettled) == 0},
 		{value: a.IncompleteUnsettled, omit: !a.IncompleteUnsettled},
-		{value: a.InitialDeliveryCount, omit: a.InitialDeliveryCount == 0},
+		{value: a.InitialDeliveryCount, omit: a.Role == roleReceiver},
 		{value: a.MaxMessageSize, omit: a.MaxMessageSize == 0},
 		{value: a.OfferedCapabilities, omit: len(a.OfferedCapabilities) == 0},
 		{value: a.DesiredCapabilities, omit: len(a.DesiredCapabilities) == 0},
