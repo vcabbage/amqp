@@ -1221,12 +1221,17 @@ type performTransfer struct {
 }
 
 func (t performTransfer) String() string {
-	return fmt.Sprintf("Transfer{Handle: %d, DeliveryID: %s, DeliveryTag: %q, MessageFormat: %s, "+
+	deliveryTag := "<nil>"
+	if t.DeliveryID != nil {
+		deliveryTag = string(t.DeliveryTag)
+	}
+
+	return fmt.Sprintf("Transfer{Handle: %d, DeliveryID: %s, DeliveryTag: %s, MessageFormat: %s, "+
 		"Settled: %t, More: %t, ReceiverSettleMode: %s, State: %v, Resume: %t, Aborted: %t, "+
 		"Batchable: %t, Payload [size]: %d}",
 		t.Handle,
 		formatUint32Ptr(t.DeliveryID),
-		t.DeliveryTag,
+		deliveryTag,
 		formatUint32Ptr(t.MessageFormat),
 		t.Settled,
 		t.More,
