@@ -77,39 +77,15 @@ func marshal(wr writer, i interface{}) error {
 			err = wr.WriteByte(byte(typeCodeBoolFalse))
 		}
 	case uint64:
-		if t == 0 {
-			err = wr.WriteByte(byte(typeCodeUlong0))
-			break
-		}
-		err = wr.WriteByte(byte(typeCodeUlong))
-		if err != nil {
-			return err
-		}
-		err = binary.Write(wr, binary.BigEndian, t)
+		return writeUint64(wr, t)
 	case uint32:
-		if t == 0 {
-			err = wr.WriteByte(byte(typeCodeUint0))
-			break
-		}
-		err = wr.WriteByte(byte(typeCodeUint))
-		if err != nil {
-			return err
-		}
-		err = binary.Write(wr, binary.BigEndian, t)
+		return writeUint32(wr, t)
 	case *uint32:
 		if t == nil {
 			err = wr.WriteByte(byte(typeCodeNull))
 			break
 		}
-		if *t == 0 {
-			err = wr.WriteByte(byte(typeCodeUint0))
-			break
-		}
-		err = wr.WriteByte(byte(typeCodeUint))
-		if err != nil {
-			return err
-		}
-		err = binary.Write(wr, binary.BigEndian, *t)
+		return writeUint32(wr, *t)
 	case uint16:
 		err = wr.WriteByte(byte(typeCodeUshort))
 		if err != nil {
@@ -130,6 +106,40 @@ func marshal(wr writer, i interface{}) error {
 		return errorErrorf("marshal not implemented for %T", i)
 	}
 	return err
+}
+
+func writeUint32(wr writer, n uint32) error {
+	if n == 0 {
+		return wr.WriteByte(byte(typeCodeUint0))
+	}
+
+	if n < 256 {
+		_, err := wr.Write([]byte{byte(typeCodeSmallUint), byte(n)})
+		return err
+	}
+
+	err := wr.WriteByte(byte(typeCodeUint))
+	if err != nil {
+		return err
+	}
+	return binary.Write(wr, binary.BigEndian, n)
+}
+
+func writeUint64(wr writer, n uint64) error {
+	if n == 0 {
+		return wr.WriteByte(byte(typeCodeUlong0))
+	}
+
+	if n < 256 {
+		_, err := wr.Write([]byte{byte(typeCodeSmallUlong), byte(n)})
+		return err
+	}
+
+	err := wr.WriteByte(byte(typeCodeUlong))
+	if err != nil {
+		return err
+	}
+	return binary.Write(wr, binary.BigEndian, n)
 }
 
 // marshalField is a field to be marshaled
