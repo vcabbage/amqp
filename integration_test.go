@@ -92,7 +92,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 
 			// Create a sender
 			sender, err := session.NewSender(
-				amqp.LinkSource(queueName),
+				amqp.LinkAddress(queueName),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -126,7 +126,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 
 				// Create a receiver
 				receiver, err := session.NewReceiver(
-					amqp.LinkSource(queueName),
+					amqp.LinkAddress(queueName),
 					amqp.LinkCredit(10),
 					amqp.LinkBatching(false),
 				)
@@ -218,7 +218,7 @@ func TestIntegrationSend(t *testing.T) {
 
 			// Create a sender
 			sender, err := session.NewSender(
-				amqp.LinkSource(queueName),
+				amqp.LinkAddress(queueName),
 			)
 			if err != nil {
 				t.Fatal(err)

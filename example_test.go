@@ -26,7 +26,7 @@ func Example() {
 
 	// Create a receiver
 	receiver, err := session.NewReceiver(
-		amqp.LinkSource("/queue-name"),
+		amqp.LinkAddress("/queue-name"),
 		amqp.LinkCredit(10),
 	)
 	if err != nil {
