@@ -783,7 +783,7 @@ func (l *link) mux() {
 					// DeliveryCount can be nil if the receiver hasn't processed
 					// the attach. That shouldn't be the case here, but it's
 					// what ActiveMQ does.
-					l.linkCredit -= *fr.DeliveryCount
+					l.linkCredit += *fr.DeliveryCount
 				}
 			}
 
