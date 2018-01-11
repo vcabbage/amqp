@@ -681,7 +681,7 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		return nil, s.conn.getErr()
 	case fr = <-l.rx:
 	}
-	debug(1, "RX: %s", fr)
+	debug(3, "RX: %s", fr)
 	resp, ok := fr.(*performAttach)
 	if !ok {
 		return nil, errorErrorf("unexpected attach response: %#v", fr)
@@ -735,7 +735,7 @@ func (l *link) mux() {
 		switch fr := fr.(type) {
 		// message frame
 		case *performTransfer:
-			debug(2, "RX: %s", fr)
+			debug(3, "RX: %s", fr)
 			if isSender {
 				// TODO: send error to remote
 				l.err = errorErrorf("Sender received transfer frame")
@@ -797,7 +797,7 @@ func (l *link) mux() {
 			return false
 
 		case *performDisposition:
-			debug(1, "RX: %s", fr)
+			debug(3, "RX: %s", fr)
 			// TODO: when isSender == true and receiver settle mode is "second",
 			//       block Send() until we get disposition and respond
 			//       with confirmation. (How does this interact with batching?)
