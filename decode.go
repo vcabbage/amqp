@@ -241,22 +241,33 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 		}
 		*t = v
 	default:
-		v := reflect.ValueOf(i)         // **struct
-		indirect := reflect.Indirect(v) // *struct
-		if indirect.Kind() == reflect.Ptr {
-			if indirect.IsNil() { // *struct == nil
-				// unmarshal into tmp to prevent setting a nil value
-				// to the type's zero value
-				tmp := reflect.New(indirect.Type().Elem())
-				tmpIsNull, err := unmarshal(r, tmp.Interface())
-				if err == nil && !tmpIsNull {
-					indirect.Set(tmp)
-				}
-				return tmpIsNull, err
-			}
-			return unmarshal(r, indirect.Interface())
+		// handle both *T and **T
+		v := reflect.Indirect(reflect.ValueOf(i))
+
+		// can't unmarshal into a non-pointer
+		if v.Kind() != reflect.Ptr {
+			return isNull, errorErrorf("unable to unmarshal into non-pointer %T", i)
 		}
-		return isNull, errorErrorf("unable to unmarshal %T", i)
+
+		// if the value being unmarshaled is null,
+		// skip the rest and set to nil
+		b, err := r.ReadByte()
+		if err != nil {
+			return isNull, err
+		}
+		if amqpType(b) == typeCodeNull {
+			v.Set(reflect.Zero(v.Type()))
+			return true, nil
+		}
+		r.UnreadByte()
+
+		// if nil pointer, allocate a new value to
+		// unmarshal into
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+
+		return unmarshal(r, v.Interface())
 	}
 	return isNull, nil
 }
