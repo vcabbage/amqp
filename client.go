@@ -233,24 +233,30 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	var (
 		messageFormat  = uint32(0) // Only message-format "0" is defined in spec.
 		maxPayloadSize = int(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
-		settleMode     = s.link.senderSettleMode
+		sndSettleMode  = s.link.senderSettleMode
+		rcvSettleMode  = s.link.receiverSettleMode
 	)
 
 	fr := performTransfer{
-		Handle:             s.link.handle,
-		DeliveryTag:        randBytes(32),
-		MessageFormat:      &messageFormat,
-		More:               s.buf.Len() > 0,
-		Settled:            settleMode != nil && *settleMode == senderModeSettled,
-		ReceiverSettleMode: s.link.receiverSettleMode,
+		Handle:            s.link.handle,
+		DeliveryTag:       randBytes(32), // TODO: delivery-tags only need to be unique on link, minimize this
+		MessageFormat:     &messageFormat,
+		More:              s.buf.Len() > 0,
+		confirmSettlement: rcvSettleMode != nil && *rcvSettleMode == ModeSecond,
 	}
 
 	for fr.More {
 		fr.Payload = append([]byte(nil), s.buf.Next(maxPayloadSize)...)
 		fr.More = s.buf.Len() > 0
 		if !fr.More {
-			// set done on last frame so it can be confirmed
-			// before returning to caller
+			// mark final transfer as settled when sender mode is settled
+			fr.Settled = sndSettleMode != nil && *sndSettleMode == ModeSettled
+
+			// set done on last frame to be closed after network transmission
+			//
+			// If confirmSettlement is true (ReceiverSettleMode == "second"),
+			// Session.mux will intercept the done channel and close it when the
+			// receiver has confirmed settlement instead of on net transmit.
 			fr.done = make(chan struct{})
 		}
 
@@ -294,7 +300,7 @@ func calcMaxTransferFrameHeader() int {
 	var buf bytes.Buffer
 
 	maxUint32 := uint32(math.MaxUint32)
-	maxUint8 := uint8(math.MaxUint8)
+	receiverSettleMode := ReceiverSettleMode(0)
 	err := writeFrame(&buf, frame{
 		typ:     frameTypeAMQP,
 		channel: math.MaxUint16,
@@ -305,7 +311,7 @@ func calcMaxTransferFrameHeader() int {
 			MessageFormat:      &maxUint32,
 			Settled:            true,
 			More:               true,
-			ReceiverSettleMode: &maxUint8,
+			ReceiverSettleMode: &receiverSettleMode,
 			State:              nil, // TODO: determine whether state should be included in size
 			Resume:             true,
 			Aborted:            true,
@@ -339,6 +345,8 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		idsByDeliveryTag    = make(map[string]uint32) //mapping of deliveryTags to deliveryIDs
 		handlesByDeliveryID = make(map[uint32]uint32) //mapping of deliveryIDs to handles
 		nextDeliveryID      uint32                    // next deliveryID
+
+		settlementByDeliveryID = make(map[uint32]chan struct{})
 
 		// flow control values
 		nextOutgoingID       uint32
@@ -377,7 +385,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		txTransfer := s.txTransfer
 		// disable txTransfer if flow control windows have been exceeded
 		if remoteIncomingWindow == 0 || s.outgoingWindow == 0 {
-			txTransfer = s.txTransfer
+			txTransfer = nil
 		}
 
 		select {
@@ -424,6 +432,15 @@ func (s *Session) mux(remoteBegin *performBegin) {
 							continue
 						}
 						delete(handlesByDeliveryID, deliveryID)
+
+						if body.Settled {
+							// check if settlement confirmation was requested, if so
+							// confirm by closing channel
+							if done, ok := settlementByDeliveryID[deliveryID]; ok {
+								close(done)
+								delete(settlementByDeliveryID, deliveryID)
+							}
+						}
 
 						link, ok := links[handle]
 						if !ok {
@@ -502,6 +519,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 			if !ok {
 				// no entry for tag, allocate new DeliveryID
 				id = nextDeliveryID
+				fr.DeliveryID = &id
 				nextDeliveryID++
 
 				if fr.More {
@@ -519,7 +537,12 @@ func (s *Session) mux(remoteBegin *performBegin) {
 			}
 
 			handlesByDeliveryID[id] = fr.Handle
-			fr.DeliveryID = &id
+			if fr.confirmSettlement {
+				// confirmSettlement requested, add done chan to map
+				// and clear from frame so conn doesn't close it.
+				settlementByDeliveryID[id] = fr.done
+				fr.done = nil
+			}
 			debug(2, "TX(Session): %s", fr)
 			s.txFrame(fr, fr.done)
 
@@ -593,8 +616,8 @@ type link struct {
 	// initialized at an arbitrary point by the sender."
 	deliveryCount      uint32
 	linkCredit         uint32 // maximum number of messages allowed between flow updates
-	senderSettleMode   *uint8
-	receiverSettleMode *uint8
+	senderSettleMode   *SenderSettleMode
+	receiverSettleMode *ReceiverSettleMode
 	maxMessageSize     uint64
 	peerMaxMessageSize uint64
 	detachSent         bool // detach frame has been sent
@@ -798,9 +821,6 @@ func (l *link) mux() {
 
 		case *performDisposition:
 			debug(3, "RX: %s", fr)
-			// TODO: when isSender == true and receiver settle mode is "second",
-			//       block Send() until we get disposition and respond
-			//       with confirmation. (How does this interact with batching?)
 			if fr.Settled {
 				return true
 			}
@@ -888,36 +908,6 @@ func (l *link) mux() {
 			}
 			l.deliveryCount++
 			l.linkCredit--
-
-			// TODO: re-enable and fix this logic
-
-			// // wait for response
-			// var fr frameBody
-			// select {
-			// case fr = <-l.rx:
-			// case <-l.session.conn.done:
-			// 	l.err = l.session.conn.getErr()
-			// 	return
-			// }
-			// resp, ok := fr.(*performDisposition)
-			// if !ok {
-			// 	l.err = errorErrorf("unexpected transfer response: %#v", fr)
-			// 	return
-			// }
-
-			// switch resp.State.(type) {
-			// case *stateAccepted:
-			// case *stateRejected, *stateReleased, *stateModified:
-			// 	fmt.Printf("%#v\n", resp.State)
-			// 	l.err = errDeliveryFailed
-			// 	return
-			// case *stateReceived:
-			// 	l.err = errorNew("unexpected stateRejected message")
-			// 	return
-			// default:
-			// 	l.err = errorErrorf("unexpected disposition with state %T received", resp.State)
-			// 	return
-			// }
 
 		// received frame
 		case fr := <-l.rx:
@@ -1063,61 +1053,34 @@ func LinkBatchMaxAge(d time.Duration) LinkOption {
 	}
 }
 
-const (
-	senderModeUnsettled uint8 = 0
-	senderModeSettled   uint8 = 1
-	senderModeMixed     uint8 = 2
-)
-
-func LinkSenderModeUnsettled() LinkOption {
-	return linkSenderMode(senderModeUnsettled)
-}
-
-func LinkSenderModeSettled() LinkOption {
-	return linkSenderMode(senderModeSettled)
-}
-
-func LinkSenderModeMixed() LinkOption {
-	return linkSenderMode(senderModeMixed)
-}
-
-func LinkSenderModeNone() LinkOption {
+// LinkSenderSettle sets the sender settlement mode.
+//
+// When the Link is the Receiver, this is a request to the remote
+// server.
+//
+// When the Link is the Sender, this is the actual settlement mode.
+func LinkSenderSettle(mode SenderSettleMode) LinkOption {
 	return func(l *link) error {
-		l.senderSettleMode = nil
+		if mode > ModeMixed {
+			return errorErrorf("invalid SenderSettlementMode %d", mode)
+		}
+		l.senderSettleMode = &mode
 		return nil
 	}
 }
 
-func linkSenderMode(m uint8) LinkOption {
+// LinkReceiverSettle sets the receiver settlement mode.
+//
+// When the Link is the Sender, this is a request to the remote
+// server.
+//
+// When the Link is the Receiver, this is the actual settlement mode.
+func LinkReceiverSettle(mode ReceiverSettleMode) LinkOption {
 	return func(l *link) error {
-		l.senderSettleMode = &m
-		return nil
-	}
-}
-
-const (
-	receiverModeFirst  = 0
-	receiverModeSecond = 1
-)
-
-func LinkReceiverModeFirst() LinkOption {
-	return linkReceiverMode(receiverModeFirst)
-}
-
-func LinkReceiverModeSecond() LinkOption {
-	return linkReceiverMode(receiverModeSecond)
-}
-
-func LinkReceiverModeNone() LinkOption {
-	return func(l *link) error {
-		l.receiverSettleMode = nil
-		return nil
-	}
-}
-
-func linkReceiverMode(m uint8) LinkOption {
-	return func(l *link) error {
-		l.receiverSettleMode = &m
+		if mode > ModeSecond {
+			return errorErrorf("invalid ReceiverSettlementMode %d", mode)
+		}
+		l.receiverSettleMode = &mode
 		return nil
 	}
 }
@@ -1163,7 +1126,6 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 		// record the delivery ID if this is the first frame of the message
 		if first && fr.DeliveryID != nil {
 			msg.id = (deliveryID)(*fr.DeliveryID)
-			msg.settled = fr.Settled
 			first = false
 		}
 
@@ -1178,11 +1140,23 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 		// add the payload the the buffer
 		r.buf.Write(fr.Payload)
 
+		// mark as settled if at least one frame is settled
+		msg.settled = msg.settled || fr.Settled
+
 		// break out of loop if message is complete
 		if !fr.More {
 			break
 		}
 	}
+
+	// TODO:
+	// When rcv-settle-mode == second, don't consider the transfer complete
+	// until caller accepts/reject/etc and a confirm from sender.
+	//
+	// At first glance, this appears to be at odds with batching. A batch can't
+	// be built up if the caller is blocked on confirmation. However, while receives
+	// must happen synchronously, confirmations do not. While the use is probably
+	// limited it may be worth exploring.
 
 	// unmarshal message
 	err := msg.unmarshal(&r.buf)
@@ -1244,7 +1218,8 @@ func (r *Receiver) dispositionBatcher() {
 			if msgDis.disposition != dispositionAccept || (batchStarted && last+1 != msgDis.id) {
 				// send the current batch, if any
 				if batchStarted {
-					r.sendDisposition(first, &last, dispositionAccept)
+					lastCopy := last
+					r.sendDisposition(first, &lastCopy, dispositionAccept)
 					batchStarted = false
 				}
 
@@ -1266,7 +1241,8 @@ func (r *Receiver) dispositionBatcher() {
 
 			// send batch if current size == batchSize
 			if uint32(last-first+1) >= batchSize {
-				r.sendDisposition(first, &last, dispositionAccept)
+				lastCopy := last
+				r.sendDisposition(first, &lastCopy, dispositionAccept)
 				batchStarted = false
 				if !batchTimer.Stop() {
 					<-batchTimer.C // batch timer must be drained if stop returns false
@@ -1275,7 +1251,8 @@ func (r *Receiver) dispositionBatcher() {
 
 		// maxBatchAge elapsed, send batch
 		case <-batchTimer.C:
-			r.sendDisposition(first, &last, dispositionAccept)
+			lastCopy := last
+			r.sendDisposition(first, &lastCopy, dispositionAccept)
 			batchStarted = false
 			batchTimer.Stop()
 
@@ -1291,7 +1268,7 @@ func (r *Receiver) sendDisposition(first deliveryID, last *deliveryID, disp disp
 		Role:    roleReceiver,
 		First:   uint32(first),
 		Last:    (*uint32)(last),
-		Settled: true,
+		Settled: r.link.receiverSettleMode == nil || *r.link.receiverSettleMode == ModeFirst,
 	}
 
 	switch disp {
