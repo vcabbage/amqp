@@ -391,7 +391,7 @@ type performAttach struct {
 	// 0: unsettled - The sender will send all deliveries initially unsettled to the receiver.
 	// 1: settled - The sender will send all deliveries settled to the receiver.
 	// 2: mixed - The sender MAY send a mixture of settled and unsettled deliveries to the receiver.
-	SenderSettleMode *uint8
+	SenderSettleMode *SenderSettleMode
 
 	// the settlement policy of the receiver
 	//
@@ -405,7 +405,7 @@ type performAttach struct {
 	// 1: second - The receiver will only settle after sending the disposition to
 	//             the sender and receiving a disposition indicating settlement of
 	//             the delivery from the sender.
-	ReceiverSettleMode *uint8
+	ReceiverSettleMode *ReceiverSettleMode
 
 	// the source for messages
 	//
@@ -487,8 +487,8 @@ func (a performAttach) String() string {
 		a.Name,
 		a.Handle,
 		a.Role,
-		formatUint8Ptr(a.SenderSettleMode),
-		formatUint8Ptr(a.ReceiverSettleMode),
+		a.SenderSettleMode,
+		a.ReceiverSettleMode,
 		a.Source,
 		a.Target,
 		a.Unsettled,
@@ -499,13 +499,6 @@ func (a performAttach) String() string {
 		a.DesiredCapabilities,
 		a.Properties,
 	)
-}
-
-func formatUint8Ptr(p *uint8) string {
-	if p == nil {
-		return "<nil>"
-	}
-	return strconv.FormatUint(uint64(*p), 10)
 }
 
 func (a *performAttach) link() (uint32, bool) {
@@ -1152,7 +1145,7 @@ type performTransfer struct {
 	// 1: second - The receiver will only settle after sending the disposition to
 	//             the sender and receiving a disposition indicating settlement of
 	//             the delivery from the sender.
-	ReceiverSettleMode *uint8
+	ReceiverSettleMode *ReceiverSettleMode
 
 	// the state of the delivery at the sender
 	//
@@ -1218,6 +1211,9 @@ type performTransfer struct {
 
 	// optional channel to indicate to sender that transfer has completed
 	done chan struct{}
+	// complete when receiver has responded with dispostion (ReceiverSettleMode = second)
+	// instead of when this message has been sent on network
+	confirmSettlement bool
 }
 
 func (t performTransfer) String() string {
@@ -1226,7 +1222,7 @@ func (t performTransfer) String() string {
 		deliveryTag = string(t.DeliveryTag)
 	}
 
-	return fmt.Sprintf("Transfer{Handle: %d, DeliveryID: %s, DeliveryTag: %s, MessageFormat: %s, "+
+	return fmt.Sprintf("Transfer{Handle: %d, DeliveryID: %s, DeliveryTag: %q, MessageFormat: %s, "+
 		"Settled: %t, More: %t, ReceiverSettleMode: %s, State: %v, Resume: %t, Aborted: %t, "+
 		"Batchable: %t, Payload [size]: %d}",
 		t.Handle,
@@ -1235,7 +1231,7 @@ func (t performTransfer) String() string {
 		formatUint32Ptr(t.MessageFormat),
 		t.Settled,
 		t.More,
-		formatUint8Ptr(t.ReceiverSettleMode),
+		t.ReceiverSettleMode,
 		t.State,
 		t.Resume,
 		t.Aborted,
@@ -1684,27 +1680,28 @@ type Message struct {
 // Accept notifies the server that the message has been
 // accepted and does not require redelivery.
 func (m *Message) Accept() {
-	if m.settled {
-		return
+	if m.shouldSendDisposition() {
+		m.receiver.acceptMessage(m.id)
 	}
-	m.receiver.acceptMessage(m.id)
 }
 
 // Reject notifies the server that the message is invalid.
 func (m *Message) Reject() {
-	if m.settled {
-		return
+	if m.shouldSendDisposition() {
+		m.receiver.rejectMessage(m.id)
 	}
-	m.receiver.rejectMessage(m.id)
 }
 
 // Release releases the message back to the server. The message
 // may be redelivered to this or another consumer.
 func (m *Message) Release() {
-	if m.settled {
-		return
+	if m.shouldSendDisposition() {
+		m.receiver.releaseMessage(m.id)
 	}
-	m.receiver.releaseMessage(m.id)
+}
+
+func (m *Message) shouldSendDisposition() bool {
+	return !m.settled || (m.receiver.link.receiverSettleMode != nil && *m.receiver.link.receiverSettleMode == ModeSecond)
 }
 
 // TODO: add support for sending Modified disposition
@@ -2408,4 +2405,91 @@ func (p lifetimePolicy) unmarshal(r reader) error {
 		return errorErrorf("invalid size %d for lifetime-policy", len(data))
 	}
 	return nil
+}
+
+const (
+	// The sender will send all deliveries initially unsettled to the
+	// receiver.
+	ModeUnsettled SenderSettleMode = 0
+
+	// The sender will send all deliveries settled to the receiver.
+	ModeSettled SenderSettleMode = 1
+
+	// The sender MAY send a mixture of settled and unsettled deliveries
+	// to the receiver.
+	ModeMixed SenderSettleMode = 2
+)
+
+type SenderSettleMode uint8
+
+func (m *SenderSettleMode) String() string {
+	if m == nil {
+		return "<nil>"
+	}
+
+	switch *m {
+	case ModeUnsettled:
+		return "unsettled"
+
+	case ModeSettled:
+		return "settled"
+
+	case ModeMixed:
+		return "mixed"
+
+	default:
+		return fmt.Sprintf("unknown sender mode %d", uint8(*m))
+	}
+}
+
+func (m SenderSettleMode) marshal(wr writer) error {
+	return marshal(wr, uint8(m))
+}
+
+func (m *SenderSettleMode) unmarshal(r reader) error {
+	_, err := unmarshal(r, (*uint8)(m))
+	return err
+}
+
+const (
+	// ModeFirst specifies the receiver will spontaneously settle all
+	// incoming transfers.
+	ModeFirst ReceiverSettleMode = 0
+
+	// ModeSecond specifies receiver will only settle after sending the
+	// disposition to the sender and receiving a disposition indicating
+	// settlement of the delivery from the sender.
+	//
+	// BUG: When receiving messages, accepting/rejecting/releasing a
+	//      received message does not block and wait for the sender's
+	//      confirmation disposition.
+	ModeSecond ReceiverSettleMode = 1
+)
+
+type ReceiverSettleMode uint8
+
+func (m *ReceiverSettleMode) String() string {
+	if m == nil {
+		return "<nil>"
+	}
+
+	switch *m {
+	case ModeFirst:
+		return "first"
+
+	case ModeSecond:
+		return "second"
+
+	default:
+		return fmt.Sprintf("unknown receiver mode %d", uint8(*m))
+	}
+}
+
+func (m ReceiverSettleMode) marshal(wr writer) error {
+	return marshal(wr, uint8(m))
+}
+
+func (m *ReceiverSettleMode) unmarshal(r reader) error {
+	_, err := unmarshal(r, (*uint8)(m))
+	return err
 }
