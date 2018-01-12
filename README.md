@@ -14,9 +14,7 @@ AMQP 1.0 is not compatible with AMQP 0-9-1 or 0-10, which are
 the most common AMQP protocols in use today.
 
 This project is currently alpha status, though is currently being used by my employer
-in a pre-production capacity. The current focus is reading from
-Microsoft Azure's Service Bus. Only receive operations have been implemented.
-Producer operations will be implemented later.
+in a pre-production capacity. The current focus is reading from Microsoft Azure's Service Bus.
 
 API is subject to change until 1.0.0. If you choose to use this library, please vendor it.
 
@@ -59,7 +57,7 @@ func main() {
 
 	// Create a receiver
 	receiver, err := session.NewReceiver(
-		amqp.LinkSource("/queue-name"),
+		amqp.LinkAddress("/queue-name"),
 		amqp.LinkCredit(10),
 	)
 	if err != nil {
@@ -89,7 +87,7 @@ func main() {
 ### Notable Bugs/Shortcomings
 
 - [ ] Closing a sessions does not send an end performative.
-- [ ] Testing is lacking. Only fuzz testing is currently being performed.
+- [ ] Testing should be improved. Currently fuzz testing and basic Azure Service Bus integration testing is being performed.
 
 ### Features - Short Term
 
@@ -97,7 +95,7 @@ func main() {
 
 ### Features - Medium Term
 
-- [ ] Support message producer operations.
+- [X] Support message producer operations. (Supported as of 0.2.0)
 
 ### Other Notes
 
