@@ -550,12 +550,11 @@ const (
 	roleReceiver role = true
 )
 
-func (r role) String() string {
-	if r {
+func (rl role) String() string {
+	if rl {
 		return "Receiver"
-	} else {
-		return "Sender"
 	}
+	return "Sender"
 }
 
 func (rl *role) unmarshal(r reader) error {
@@ -1338,14 +1337,14 @@ type performDisposition struct {
 	Batchable bool
 }
 
-func (p performDisposition) String() string {
+func (d performDisposition) String() string {
 	return fmt.Sprintf("Disposition{Role: %s, First: %d, Last: %s, Settled: %t, State: %s, Batchable: %t}",
-		p.Role,
-		p.First,
-		formatUint32Ptr(p.Last),
-		p.Settled,
-		p.State,
-		p.Batchable,
+		d.Role,
+		d.First,
+		formatUint32Ptr(d.Last),
+		d.Settled,
+		d.State,
+		d.Batchable,
 	)
 }
 
@@ -2408,15 +2407,16 @@ func (p lifetimePolicy) unmarshal(r reader) error {
 }
 
 const (
-	// The sender will send all deliveries initially unsettled to the
-	// receiver.
+	// ModeMixed specifies the sender will send all deliveries initially
+	// unsettled to the receiver.
 	ModeUnsettled SenderSettleMode = 0
 
-	// The sender will send all deliveries settled to the receiver.
+	// ModeSettled specifies the sender will send all deliveries settled
+	// to the receiver.
 	ModeSettled SenderSettleMode = 1
 
-	// The sender MAY send a mixture of settled and unsettled deliveries
-	// to the receiver.
+	// ModeMixed specifies the sender MAY send a mixture of settled and
+	// unsettled deliveries to the receiver.
 	ModeMixed SenderSettleMode = 2
 )
 

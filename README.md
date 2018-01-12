@@ -7,7 +7,6 @@
 [![GoDoc](https://godoc.org/pack.ag/amqp?status.svg)](http://godoc.org/pack.ag/amqp)
 [![MIT licensed](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/vcabbage/amqp/master/LICENSE)
 
-
 pack.ag/amqp is an AMQP 1.0 client implementation for Go.
 
 AMQP 1.0 is not compatible with AMQP 0-9-1 or 0-10, which are
