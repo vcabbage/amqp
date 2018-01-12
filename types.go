@@ -2350,7 +2350,7 @@ func (f *mapSymbolAny) unmarshal(r reader) error {
 	return nil
 }
 
-// UUID is a 128 identifier as defined in RFC 4122.
+// UUID is a 128 bit identifier as defined in RFC 4122.
 type UUID [16]byte
 
 // String returns the hex encoded representation described in RFC 4122, Section 3.
