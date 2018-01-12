@@ -681,7 +681,7 @@ func readComposite(r reader) (interface{}, error) {
 	return unmarshal(r, iface)
 }
 
-var compositeTypes = [255]func() interface{}{
+var compositeTypes = [256]func() interface{}{
 	typeCodeError:                     func() interface{} { return new(Error) },
 	typeCodeDeleteOnClose:             func() interface{} { return deleteOnClose },
 	typeCodeDeleteOnNoMessages:        func() interface{} { return deleteOnNoMessages },
