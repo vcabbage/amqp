@@ -97,7 +97,6 @@ func TestMarshalUnmarshal(t *testing.T) {
 			},
 		},
 		role(true),
-		// deliveryState{},
 		&unsettled{
 			"fooDeliveryTag": &stateAccepted{},
 		},
