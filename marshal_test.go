@@ -3,8 +3,12 @@ package amqp
 import (
 	"bytes"
 	"fmt"
+	"io/ioutil"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +23,8 @@ func TestFraming(t *testing.T) {
 }
 
 func TestMarshalUnmarshal(t *testing.T) {
+	_, updateFuzzCorpus := os.LookupEnv("UPDATE_FUZZ_CORPUS")
+
 	types := []interface{}{
 		&performOpen{
 			ContainerID:         "foo",
@@ -332,7 +338,17 @@ func TestMarshalUnmarshal(t *testing.T) {
 			if err != nil {
 				t.Error(fmt.Sprintf("%+v", err))
 			}
-			// log.Printf("%T: %q\n", typ, buf.String())
+
+			if updateFuzzCorpus {
+				name := fmt.Sprintf("%T.bin", typ)
+				name = strings.TrimPrefix(name, "amqp.")
+				name = strings.TrimPrefix(name, "*amqp.")
+				path := filepath.Join("fuzz/marshal/corpus", name)
+				err = ioutil.WriteFile(path, buf.Bytes(), 0644)
+				if err != nil {
+					t.Error(err)
+				}
+			}
 
 			newTyp := reflect.New(reflect.TypeOf(typ))
 			_, err = unmarshal(&buf, newTyp.Interface())
