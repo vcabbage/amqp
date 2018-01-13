@@ -314,6 +314,7 @@ func (b *performBegin) marshal(wr writer) error {
 		{value: b.HandleMax, omit: b.HandleMax == 0},
 		{value: b.OfferedCapabilities, omit: len(b.OfferedCapabilities) == 0},
 		{value: b.DesiredCapabilities, omit: len(b.DesiredCapabilities) == 0},
+		{value: b.Properties, omit: b.Properties == nil},
 	}...)
 }
 
@@ -569,6 +570,10 @@ func (rl role) marshal(wr writer) error {
 type deliveryState interface{} // TODO: http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-transactions-v1.0-os.html#type-declared
 
 type unsettled map[string]deliveryState
+
+func (u unsettled) marshal(wr writer) error {
+	return writeMap(wr, u)
+}
 
 func (u *unsettled) unmarshal(r reader) error {
 	mr, err := newMapReader(r)
@@ -2184,6 +2189,14 @@ func (si *saslInit) marshal(wr writer) error {
 	}...)
 }
 
+func (si *saslInit) unmarshal(r reader) error {
+	return unmarshalComposite(r, typeCodeSASLInit, []unmarshalField{
+		{field: &si.Mechanism, handleNull: required("saslInit.Mechanism")},
+		{field: &si.InitialResponse},
+		{field: &si.Hostname},
+	}...)
+}
+
 /*
 <type name="sasl-mechanisms" class="composite" source="list" provides="sasl-frame">
     <descriptor name="amqp:sasl-mechanisms:list" code="0x00000000:0x00000040"/>
@@ -2193,6 +2206,12 @@ func (si *saslInit) marshal(wr writer) error {
 
 type saslMechanisms struct {
 	Mechanisms []symbol
+}
+
+func (sm saslMechanisms) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeSASLMechanism, []marshalField{
+		{value: sm.Mechanisms, omit: false},
+	}...)
 }
 
 func (sm *saslMechanisms) unmarshal(r reader) error {
@@ -2216,6 +2235,13 @@ func (*saslMechanisms) link() (uint32, bool) {
 type saslOutcome struct {
 	Code           saslCode
 	AdditionalData []byte
+}
+
+func (so saslOutcome) marshal(wr writer) error {
+	return marshalComposite(wr, typeCodeSASLOutcome, []marshalField{
+		{value: so.Code, omit: false},
+		{value: so.AdditionalData, omit: len(so.AdditionalData) == 0},
+	}...)
 }
 
 func (so *saslOutcome) unmarshal(r reader) error {
@@ -2272,6 +2298,10 @@ func (m *milliseconds) unmarshal(r reader) error {
 // inconsistently typed.
 type mapAnyAny map[interface{}]interface{}
 
+func (m mapAnyAny) marshal(wr writer) error {
+	return writeMap(wr, map[interface{}]interface{}(m))
+}
+
 func (m *mapAnyAny) unmarshal(r reader) error {
 	mr, err := newMapReader(r)
 	if err != nil {
@@ -2306,6 +2336,10 @@ func (m *mapAnyAny) unmarshal(r reader) error {
 // mapStringAny is used to decode AMQP maps that have string keys
 type mapStringAny map[string]interface{}
 
+func (m mapStringAny) marshal(wr writer) error {
+	return writeMap(wr, map[string]interface{}(m))
+}
+
 func (m *mapStringAny) unmarshal(r reader) error {
 	mr, err := newMapReader(r)
 	if err != nil {
@@ -2328,6 +2362,10 @@ func (m *mapStringAny) unmarshal(r reader) error {
 
 // mapStringAny is used to decode AMQP maps that have Symbol keys
 type mapSymbolAny map[symbol]interface{}
+
+func (m mapSymbolAny) marshal(wr writer) error {
+	return writeMap(wr, map[symbol]interface{}(m))
+}
 
 func (f *mapSymbolAny) unmarshal(r reader) error {
 	mr, err := newMapReader(r)
@@ -2396,12 +2434,26 @@ func (p lifetimePolicy) marshal(wr writer) error {
 	return err
 }
 
-// unmarshal isn't defined on a pointer because concrete types should
-// always be created by the compositeTypes constructor functions.
-func (p lifetimePolicy) unmarshal(r reader) error {
-	data := r.Next(4) // constructor + empty list
-	if len(data) != 4 {
-		return errorErrorf("invalid size %d for lifetime-policy", len(data))
+func (p *lifetimePolicy) unmarshal(r reader) error {
+	typ, fields, err := readCompositeHeader(r)
+	if err != nil {
+		return err
+	}
+	if fields != 0 {
+		return errorErrorf("invalid size %d for lifetime-policy")
+	}
+	*p = lifetimePolicy(typ)
+	return nil
+}
+
+func (p lifetimePolicy) unmarshalConstant(r reader) error {
+	var tmp [4]byte
+	n, err := r.Read(tmp[:])
+	if err != nil {
+		return err
+	}
+	if n != 4 {
+		return errorErrorf("invalid size %d for lifetime-policy")
 	}
 	return nil
 }

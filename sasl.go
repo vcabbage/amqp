@@ -15,10 +15,14 @@ const (
 	saslMechanismANONYMOUS symbol = "ANONYMOUS"
 )
 
-type saslCode int
+type saslCode uint8
+
+func (s saslCode) marshal(wr writer) error {
+	return marshal(wr, uint8(s))
+}
 
 func (s *saslCode) unmarshal(r reader) error {
-	_, err := unmarshal(r, (*int)(s))
+	_, err := unmarshal(r, (*uint8)(s))
 	return err
 }
 

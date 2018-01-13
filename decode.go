@@ -107,6 +107,11 @@ type unmarshaler interface {
 	unmarshal(r reader) error
 }
 
+// constantUnmarshaler allows the returned type to be a non-pointer
+type constantUnmarshaler interface {
+	unmarshalConstant(r reader) error
+}
+
 // unmarshal decodes AMQP encoded data into i.
 //
 // The decoding method is based on the type of i.
@@ -136,12 +141,38 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 	switch t := i.(type) {
 	case unmarshaler:
 		return isNull, t.unmarshal(r)
+	case constantUnmarshaler: // must be after unmarshaler
+		return false, t.unmarshalConstant(r)
 	case *int:
 		val, err := readInt(r)
 		if err != nil {
 			return isNull, err
 		}
 		*t = val
+	case *int8:
+		val, err := readInt(r)
+		if err != nil {
+			return isNull, err
+		}
+		*t = int8(val)
+	case *int16:
+		val, err := readInt(r)
+		if err != nil {
+			return isNull, err
+		}
+		*t = int16(val)
+	case *int32:
+		val, err := readInt(r)
+		if err != nil {
+			return isNull, err
+		}
+		*t = int32(val)
+	case *int64:
+		val, err := readInt(r)
+		if err != nil {
+			return isNull, err
+		}
+		*t = int64(val)
 	case *uint64:
 		val, err := readUint(r)
 		if err != nil {
@@ -241,12 +272,12 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 		}
 		*t = v
 	default:
-		// handle both *T and **T
+		// handle **T
 		v := reflect.Indirect(reflect.ValueOf(i))
 
 		// can't unmarshal into a non-pointer
 		if v.Kind() != reflect.Ptr {
-			return isNull, errorErrorf("unable to unmarshal into non-pointer %T", i)
+			return isNull, errorErrorf("unable to unmarshal %T", i)
 		}
 
 		// if the value being unmarshaled is null,
@@ -678,15 +709,23 @@ func readComposite(r reader) (interface{}, error) {
 	}
 
 	iface := construct()
-	return unmarshal(r, iface)
+	_, err = unmarshal(r, iface)
+	return iface, err
 }
 
 var compositeTypes = [256]func() interface{}{
-	typeCodeError:                     func() interface{} { return new(Error) },
+	typeCodeError: func() interface{} { return new(Error) },
+	// Lifetime Policies
 	typeCodeDeleteOnClose:             func() interface{} { return deleteOnClose },
 	typeCodeDeleteOnNoMessages:        func() interface{} { return deleteOnNoMessages },
 	typeCodeDeleteOnNoLinks:           func() interface{} { return deleteOnNoLinks },
 	typeCodeDeleteOnNoLinksOrMessages: func() interface{} { return deleteOnNoLinksOrMessages },
+	// Delivery States
+	typeCodeStateAccepted: func() interface{} { return new(stateAccepted) },
+	typeCodeStateModified: func() interface{} { return new(stateModified) },
+	typeCodeStateReceived: func() interface{} { return new(stateReceived) },
+	typeCodeStateRejected: func() interface{} { return new(stateRejected) },
+	typeCodeStateReleased: func() interface{} { return new(stateReleased) },
 }
 
 func readTimestamp(r reader) (time.Time, error) {

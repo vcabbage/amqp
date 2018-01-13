@@ -109,6 +109,18 @@ func marshal(wr writer, i interface{}) error {
 			return writeInt64(wr, int64(t))
 		}
 		return writeInt32(wr, int32(t))
+	case int8:
+		err = wr.WriteByte(byte(typeCodeByte))
+		if err != nil {
+			return err
+		}
+		binary.Write(wr, binary.BigEndian, t)
+	case int16:
+		err = wr.WriteByte(byte(typeCodeShort))
+		if err != nil {
+			return err
+		}
+		binary.Write(wr, binary.BigEndian, t)
 	case int64:
 		return writeInt64(wr, t)
 	case int32:
@@ -123,6 +135,10 @@ func marshal(wr writer, i interface{}) error {
 		err = writeMap(wr, t)
 	case map[string]interface{}:
 		err = writeMap(wr, t)
+	case map[symbol]interface{}:
+		err = writeMap(wr, t)
+	case unsettled:
+		err = writeMap(wr, t)
 	case time.Time:
 		err = writeTimestamp(wr, t)
 	default:
@@ -132,7 +148,7 @@ func marshal(wr writer, i interface{}) error {
 }
 
 func writeInt32(wr writer, n int32) error {
-	if n < 256 {
+	if n < 128 && n >= -128 {
 		_, err := wr.Write([]byte{byte(typeCodeSmallint), byte(n)})
 		return err
 	}
@@ -145,7 +161,7 @@ func writeInt32(wr writer, n int32) error {
 }
 
 func writeInt64(wr writer, n int64) error {
-	if n < 256 {
+	if n < 128 && n >= -128 {
 		_, err := wr.Write([]byte{byte(typeCodeSmalllong), byte(n)})
 		return err
 	}
@@ -399,10 +415,7 @@ func writeSlice(wr writer, isArray bool, of amqpType, numFields int, size int) e
 
 	switch {
 	// list0
-	case numFields == 0:
-		if isArray {
-			return errorNew("invalid array length 0")
-		}
+	case numFields == 0 && isArray:
 		return wr.WriteByte(byte(typeCodeList0))
 
 	// list8
@@ -459,6 +472,30 @@ func writeMap(wr writer, m interface{}) error {
 			}
 		}
 	case map[string]interface{}:
+		length = len(m)
+		for key, val := range m {
+			err := marshal(buf, key)
+			if err != nil {
+				return err
+			}
+			err = marshal(buf, val)
+			if err != nil {
+				return err
+			}
+		}
+	case map[symbol]interface{}:
+		length = len(m)
+		for key, val := range m {
+			err := marshal(buf, key)
+			if err != nil {
+				return err
+			}
+			err = marshal(buf, val)
+			if err != nil {
+				return err
+			}
+		}
+	case unsettled:
 		length = len(m)
 		for key, val := range m {
 			err := marshal(buf, key)
