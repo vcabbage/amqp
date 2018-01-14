@@ -7,3 +7,4 @@ amqp.test
 cover.out
 .envrc
 recordings
+.vscode
