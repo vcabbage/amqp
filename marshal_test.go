@@ -2,6 +2,7 @@ package amqp
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io/ioutil"
 	"math"
@@ -328,6 +329,10 @@ func TestMarshalUnmarshal(t *testing.T) {
 		uint16(math.MaxUint16),
 		uint32(math.MaxUint32),
 		uint64(math.MaxUint64),
+		describedType{
+			descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x46, 0x8C, 0x00, 0x00, 0x00, 0x04}),
+			value:      "amqp.annotation.x-opt-offset > '312'",
+		},
 	}
 
 	for _, typ := range types {
@@ -352,7 +357,7 @@ func TestMarshalUnmarshal(t *testing.T) {
 			newTyp := reflect.New(reflect.TypeOf(typ))
 			_, err = unmarshal(&buf, newTyp.Interface())
 			if err != nil {
-				t.Error(fmt.Sprintf("%v", err))
+				t.Error(fmt.Sprintf("%+v", err))
 				return
 			}
 

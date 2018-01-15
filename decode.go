@@ -703,12 +703,16 @@ func readComposite(r reader) (interface{}, error) {
 		return nil, err
 	}
 
+	var iface interface{}
+
+	// check if known composite type
 	construct := compositeTypes[amqpType(v)]
-	if construct == nil {
-		return nil, errorErrorf("unmarshaling composite %0x not implemented", v)
+	if construct != nil {
+		iface = construct()
+	} else {
+		iface = new(describedType) // try as described type
 	}
 
-	iface := construct()
 	_, err = unmarshal(r, iface)
 	return iface, err
 }
@@ -726,6 +730,42 @@ var compositeTypes = [256]func() interface{}{
 	typeCodeStateReceived: func() interface{} { return new(stateReceived) },
 	typeCodeStateRejected: func() interface{} { return new(stateRejected) },
 	typeCodeStateReleased: func() interface{} { return new(stateReleased) },
+
+	typeCodeOpen:                  notImplementedConstructor("typeCodeOpen"),
+	typeCodeBegin:                 notImplementedConstructor("typeCodeBegin"),
+	typeCodeAttach:                notImplementedConstructor("typeCodeAttach"),
+	typeCodeFlow:                  notImplementedConstructor("typeCodeFlow"),
+	typeCodeTransfer:              notImplementedConstructor("typeCodeTransfer"),
+	typeCodeDisposition:           notImplementedConstructor("typeCodeDisposition"),
+	typeCodeDetach:                notImplementedConstructor("typeCodeDetach"),
+	typeCodeEnd:                   notImplementedConstructor("typeCodeEnd"),
+	typeCodeClose:                 notImplementedConstructor("typeCodeClose"),
+	typeCodeSource:                notImplementedConstructor("typeCodeSource"),
+	typeCodeTarget:                notImplementedConstructor("typeCodeTarget"),
+	typeCodeMessageHeader:         notImplementedConstructor("typeCodeMessageHeader"),
+	typeCodeDeliveryAnnotations:   notImplementedConstructor("typeCodeDeliveryAnnotations"),
+	typeCodeMessageAnnotations:    notImplementedConstructor("typeCodeMessageAnnotations"),
+	typeCodeMessageProperties:     notImplementedConstructor("typeCodeMessageProperties"),
+	typeCodeApplicationProperties: notImplementedConstructor("typeCodeApplicationProperties"),
+	typeCodeApplicationData:       notImplementedConstructor("typeCodeApplicationData"),
+	typeCodeAMQPSequence:          notImplementedConstructor("typeCodeAMQPSequence"),
+	typeCodeAMQPValue:             notImplementedConstructor("typeCodeAMQPValue"),
+	typeCodeFooter:                notImplementedConstructor("typeCodeFooter"),
+	typeCodeSASLMechanism:         notImplementedConstructor("typeCodeSASLMechanism"),
+	typeCodeSASLInit:              notImplementedConstructor("typeCodeSASLInit"),
+	typeCodeSASLChallenge:         notImplementedConstructor("typeCodeSASLChallenge"),
+	typeCodeSASLResponse:          notImplementedConstructor("typeCodeSASLResponse"),
+	typeCodeSASLOutcome:           notImplementedConstructor("typeCodeSASLOutcome"),
+}
+
+type notImplemented string
+
+func (ni notImplemented) unmarshal(r reader) error {
+	return errorNew("readComposite unmarshal not implemented for " + string(ni))
+}
+
+func notImplementedConstructor(s string) func() interface{} {
+	return func() interface{} { return notImplemented(s) }
 }
 
 func readTimestamp(r reader) (time.Time, error) {

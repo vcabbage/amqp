@@ -3,6 +3,7 @@ package amqp
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"math/rand"
@@ -1089,13 +1090,15 @@ func LinkReceiverSettle(mode ReceiverSettleMode) LinkOption {
 
 // LinkSelectorFilter sets a selector filter (apache.org:selector-filter:string) on the link source.
 func LinkSelectorFilter(filter string) LinkOption {
-	const key = symbol("apache.org:selector-filter:string")
+	// <descriptor name="apache.org:selector-filter:string" code="0x0000468C:0x00000004"/>
+	const name = symbol("apache.org:selector-filter:string")
+	code := binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x46, 0x8C, 0x00, 0x00, 0x00, 0x04})
 	return func(l *link) error {
 		if l.filters == nil {
 			l.filters = make(map[symbol]interface{})
 		}
-		l.filters[key] = describedType{
-			descriptor: key,
+		l.filters[name] = describedType{
+			descriptor: code,
 			value:      filter,
 		}
 		return nil
