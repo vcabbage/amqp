@@ -3,6 +3,7 @@ package amqp
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"math/rand"
@@ -619,6 +620,7 @@ type link struct {
 	senderSettleMode   *SenderSettleMode
 	receiverSettleMode *ReceiverSettleMode
 	maxMessageSize     uint64
+	filters            map[symbol]interface{} // source filters sent during attach
 	peerMaxMessageSize uint64
 	detachSent         bool // detach frame has been sent
 	detachReceived     bool
@@ -684,6 +686,7 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		attach.Source = &source{
 			Address: l.address,
 			Dynamic: l.dynamicAddr,
+			Filter:  l.filters,
 		}
 	} else {
 		attach.Role = roleSender
@@ -1081,6 +1084,23 @@ func LinkReceiverSettle(mode ReceiverSettleMode) LinkOption {
 			return errorErrorf("invalid ReceiverSettlementMode %d", mode)
 		}
 		l.receiverSettleMode = &mode
+		return nil
+	}
+}
+
+// LinkSelectorFilter sets a selector filter (apache.org:selector-filter:string) on the link source.
+func LinkSelectorFilter(filter string) LinkOption {
+	// <descriptor name="apache.org:selector-filter:string" code="0x0000468C:0x00000004"/>
+	const name = symbol("apache.org:selector-filter:string")
+	code := binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x46, 0x8C, 0x00, 0x00, 0x00, 0x04})
+	return func(l *link) error {
+		if l.filters == nil {
+			l.filters = make(map[symbol]interface{})
+		}
+		l.filters[name] = describedType{
+			descriptor: code,
+			value:      filter,
+		}
 		return nil
 	}
 }

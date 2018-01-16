@@ -106,7 +106,6 @@ const (
 	typeCodeSASLResponse  amqpType = 0x43
 	typeCodeSASLOutcome   amqpType = 0x44
 
-	// Lifetime Policies
 	typeCodeDeleteOnClose             amqpType = 0x2b
 	typeCodeDeleteOnNoLinks           amqpType = 0x2c
 	typeCodeDeleteOnNoMessages        amqpType = 0x2d
@@ -761,6 +760,24 @@ func (s *source) unmarshal(r reader) error {
 	}...)
 }
 
+func (s source) String() string {
+	return fmt.Sprintf("source{Address: %s, Durable: %d, ExpiryPolicy: %s, Timeout: %d, "+
+		"Dynamic: %t, DynamicNodeProperties: %v, DistributionMode: %s, Filter: %v, DefaultOutcome: %v"+
+		"Outcomes: %v, Capabilities: %v}",
+		s.Address,
+		s.Durable,
+		s.ExpiryPolicy,
+		s.Timeout,
+		s.Dynamic,
+		s.DynamicNodeProperties,
+		s.DistributionMode,
+		s.Filter,
+		s.DefaultOutcome,
+		s.Outcomes,
+		s.Capabilities,
+	)
+}
+
 /*
 <type name="target" class="composite" source="list" provides="target">
     <descriptor name="amqp:target:list" code="0x00000000:0x00000029"/>
@@ -880,6 +897,19 @@ func (t *target) unmarshal(r reader) error {
 		{field: &t.DynamicNodeProperties},
 		{field: &t.Capabilities},
 	}...)
+}
+
+func (t target) String() string {
+	return fmt.Sprintf("source{Address: %s, Durable: %d, ExpiryPolicy: %s, Timeout: %d, "+
+		"Dynamic: %t, DynamicNodeProperties: %v, Capabilities: %v}",
+		t.Address,
+		t.Durable,
+		t.ExpiryPolicy,
+		t.Timeout,
+		t.Dynamic,
+		t.DynamicNodeProperties,
+		t.Capabilities,
+	)
 }
 
 /*
@@ -2263,12 +2293,16 @@ func (s symbol) marshal(wr writer) error {
 
 	var err error
 	switch {
-	// List8
+	// Sym8
 	case l < 256:
 		_, err = wr.Write(append([]byte{byte(typeCodeSym8), byte(l)}, []byte(s)...))
 
-	// List32
+	// Sym32
 	case l < math.MaxUint32:
+		err = wr.WriteByte(uint8(typeCodeSym32))
+		if err != nil {
+			return err
+		}
 		err = binary.Write(wr, binary.BigEndian, uint32(l))
 		if err != nil {
 			return err
@@ -2544,4 +2578,41 @@ func (m ReceiverSettleMode) marshal(wr writer) error {
 func (m *ReceiverSettleMode) unmarshal(r reader) error {
 	_, err := unmarshal(r, (*uint8)(m))
 	return err
+}
+
+type describedType struct {
+	descriptor interface{}
+	value      interface{}
+}
+
+func (t describedType) marshal(wr writer) error {
+	err := wr.WriteByte(0x0) // descriptor constructor
+	if err != nil {
+		return err
+	}
+	err = marshal(wr, t.descriptor)
+	if err != nil {
+		return err
+	}
+	return marshal(wr, t.value)
+}
+
+func (t *describedType) unmarshal(r reader) error {
+	b, err := r.ReadByte()
+	if b != 0x0 {
+		return errorErrorf("invalid described type header %0x", b)
+	}
+	_, err = unmarshal(r, &t.descriptor)
+	if err != nil {
+		return err
+	}
+	_, err = unmarshal(r, &t.value)
+	return err
+}
+
+func (t describedType) String() string {
+	return fmt.Sprintf("describedType{descriptor: %v, value: %v}",
+		t.descriptor,
+		t.value,
+	)
 }
