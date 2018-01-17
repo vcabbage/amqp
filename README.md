@@ -10,14 +10,13 @@
 pack.ag/amqp is an AMQP 1.0 client implementation for Go.
 
 AMQP 1.0 is not compatible with AMQP 0-9-1 or 0-10, which are
-the most common AMQP protocols in use today.
+the most common AMQP protocols in use today. A list of AMQP 1.0 brokers and other
+AMQP 1.0 resources can be found at [github.com/xinchen10/awesome-amqp](https://github.com/xinchen10/awesome-amqp).
 
-This project is currently alpha status, though is currently being used by my employer
-in a pre-production capacity. The current focus is reading from Microsoft Azure's Service Bus.
+This project is currently alpha status, though it is currently being used by my employer
+in a pre-production capacity.
 
 API is subject to change until 1.0.0. If you choose to use this library, please vendor it.
-
----
 
 ## Install
 
@@ -28,7 +27,7 @@ go get -u pack.ag/amqp
 ## Example Usage
 
 ``` go
-package mypackage
+package main
 
 import (
 	"context"
@@ -110,8 +109,6 @@ func main() {
 }
 ```
 
----
-
 ### Notable Bugs/Shortcomings
 
 - [ ] Closing a sessions does not send an end performative.
@@ -119,7 +116,7 @@ func main() {
 
 ### Features - Short Term
 
-- [ ] Set sender filters to support Azure Event Hubs.
+- [X] Set sender filters to support Azure Event Hubs. (Supported as of 0.3.0)
 
 ### Features - Medium Term
 
