@@ -51,15 +51,18 @@ func TestIntegrationRoundTrip(t *testing.T) {
 	defer cleanup()
 
 	tests := []struct {
-		label string
-		data  []string
+		label    string
+		sessions int
+		data     []string
 	}{
 		{
-			label: "1 roundtrip, small payload",
-			data:  []string{"1Hello there!"},
+			label:    "1 roundtrip, small payload",
+			sessions: 1,
+			data:     []string{"1Hello there!"},
 		},
 		{
-			label: "3 roundtrip, small payload",
+			label:    "3 roundtrip, small payload",
+			sessions: 1,
 			data: []string{
 				"2Hey there!",
 				"2Hi there!",
@@ -67,12 +70,18 @@ func TestIntegrationRoundTrip(t *testing.T) {
 			},
 		},
 		{
-			label: "1000 roundtrip, small payload",
+			label:    "1000 roundtrip, small payload",
+			sessions: 1,
 			data: repeatStrings(1000,
 				"3Hey there!",
 				"3Hi there!",
 				"3Ho there!",
 			),
+		},
+		{
+			label:    "1 roundtrip, small payload, 10 sessions",
+			sessions: 10,
+			data:     []string{"1Hello there!"},
 		},
 	}
 
@@ -81,84 +90,88 @@ func TestIntegrationRoundTrip(t *testing.T) {
 			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
 
 			// Create client
-			client := newClient(t, tt.label)
+			client := newClient(t, tt.label,
+				amqp.ConnMaxSessions(tt.sessions),
+			)
 			defer client.Close()
 
-			// Open a session
-			session, err := client.NewSession()
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			// Create a sender
-			sender, err := session.NewSender(
-				amqp.LinkAddress(queueName),
-			)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			// Perform test concurrently for speed and to catch races
-			var wg sync.WaitGroup
-			wg.Add(2)
-
-			var sendErr error
-			go func() {
-				defer wg.Done()
-				defer sender.Close()
-
-				for i, data := range tt.data {
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					err = sender.Send(ctx, &amqp.Message{
-						Data: []byte(data),
-					})
-					cancel()
-					if err != nil {
-						sendErr = fmt.Errorf("Error after %d sends: %+v", i, err)
-						return
-					}
+			for i := 0; i < tt.sessions; i++ {
+				// Open a session
+				session, err := client.NewSession()
+				if err != nil {
+					t.Fatal(err)
 				}
-			}()
 
-			var receiveErr error
-			go func() {
-				defer wg.Done()
-
-				// Create a receiver
-				receiver, err := session.NewReceiver(
+				// Create a sender
+				sender, err := session.NewSender(
 					amqp.LinkAddress(queueName),
-					amqp.LinkCredit(10),
-					amqp.LinkBatching(false),
 				)
 				if err != nil {
-					receiveErr = err
-					return
+					t.Fatal(err)
 				}
-				defer receiver.Close()
 
-				for i, data := range tt.data {
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					msg, err := receiver.Receive(ctx)
-					cancel()
+				// Perform test concurrently for speed and to catch races
+				var wg sync.WaitGroup
+				wg.Add(2)
+
+				var sendErr error
+				go func() {
+					defer wg.Done()
+					defer sender.Close()
+
+					for i, data := range tt.data {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						err = sender.Send(ctx, &amqp.Message{
+							Data: []byte(data),
+						})
+						cancel()
+						if err != nil {
+							sendErr = fmt.Errorf("Error after %d sends: %+v", i, err)
+							return
+						}
+					}
+				}()
+
+				var receiveErr error
+				go func() {
+					defer wg.Done()
+
+					// Create a receiver
+					receiver, err := session.NewReceiver(
+						amqp.LinkAddress(queueName),
+						amqp.LinkCredit(10),
+						amqp.LinkBatching(false),
+					)
 					if err != nil {
-						receiveErr = fmt.Errorf("Error after %d receives: %+v", i, err)
+						receiveErr = err
 						return
 					}
+					defer receiver.Close()
 
-					// Accept message
-					msg.Accept()
+					for i, data := range tt.data {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						msg, err := receiver.Receive(ctx)
+						cancel()
+						if err != nil {
+							receiveErr = fmt.Errorf("Error after %d receives: %+v", i, err)
+							return
+						}
 
-					if !bytes.Equal([]byte(data), msg.Data) {
-						receiveErr = fmt.Errorf("Expected received message %d to be %v, but it was %v", i+1, string(data), string(msg.Data))
+						// Accept message
+						msg.Accept()
+
+						if !bytes.Equal([]byte(data), msg.Data) {
+							receiveErr = fmt.Errorf("Expected received message %d to be %v, but it was %v", i+1, string(data), string(msg.Data))
+						}
 					}
+				}()
+
+				wg.Wait()
+
+				if sendErr != nil || receiveErr != nil {
+					t.Error("Send error:", sendErr)
+					t.Fatal("Receive error:", receiveErr)
 				}
-			}()
-
-			wg.Wait()
-
-			if sendErr != nil || receiveErr != nil {
-				t.Error("Send error:", sendErr)
-				t.Fatal("Receive error:", receiveErr)
 			}
 
 			client.Close() // close before leak check
