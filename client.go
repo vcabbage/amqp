@@ -207,7 +207,7 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 	// create dispositions channel and start dispositionBatcher if batching enabled
 	if r.batching {
 		// buffer dispositions chan to prevent disposition sends from blocking
-		r.dispositions = make(chan messageDisposition, l.linkCredit)
+		r.dispositions = make(chan messageDisposition, r.maxCredit)
 		go r.dispositionBatcher()
 	}
 
