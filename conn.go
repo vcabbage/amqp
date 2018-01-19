@@ -13,10 +13,9 @@ import (
 
 // Default connection options
 const (
-	DefaultMaxFrameSize = 512
 	DefaultIdleTimeout  = 1 * time.Minute
-
-	defaultChannelMax = 1
+	DefaultMaxFrameSize = 512
+	DefaultMaxSessions  = 65536
 )
 
 // Errors
@@ -108,6 +107,28 @@ func ConnConnectTimeout(d time.Duration) ConnOption {
 	return func(c *conn) error { c.connectTimeout = d; return nil }
 }
 
+// ConnMaxSessions sets the maximum number of channels.
+//
+// n must be in the range 1 to 65536.
+//
+// BUG: Currently this limits how many channels can ever
+//      be opened on this connection rather than how many
+//      channels can be open at the same time.
+//
+// Default: 65536.
+func ConnMaxSessions(n int) ConnOption {
+	return func(c *conn) error {
+		if n < 1 {
+			return errorNew("max sessions cannot be less than 1")
+		}
+		if n > 65536 {
+			return errorNew("max sessions cannot be greater than 65536")
+		}
+		c.channelMax = uint16(n - 1)
+		return nil
+	}
+}
+
 // conn is an AMQP connection.
 type conn struct {
 	net            net.Conn      // underlying connection
@@ -142,9 +163,9 @@ type conn struct {
 	closeOnce sync.Once
 
 	// mux
-	newSession chan *Session // new Sessions are requested from mux by reading off this channel
-	delSession chan *Session // session completion is indicated to mux by sending the Session on this channel
-	connErr    chan error    // connReader/Writer notifications of an error
+	newSession chan newSessionResp // new Sessions are requested from mux by reading off this channel
+	delSession chan *Session       // session completion is indicated to mux by sending the Session on this channel
+	connErr    chan error          // connReader/Writer notifications of an error
 
 	// connReader
 	rxProto chan protoHeader // protoHeaders received by connReader
@@ -157,19 +178,24 @@ type conn struct {
 	txDone  chan struct{}
 }
 
+type newSessionResp struct {
+	session *Session
+	err     error
+}
+
 func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 	c := &conn{
 		net:              netConn,
 		maxFrameSize:     DefaultMaxFrameSize,
 		peerMaxFrameSize: DefaultMaxFrameSize,
-		channelMax:       defaultChannelMax,
+		channelMax:       DefaultMaxSessions - 1, // -1 because channel-max starts at zero
 		idleTimeout:      DefaultIdleTimeout,
 		done:             make(chan struct{}),
 		connErr:          make(chan error, 2), // buffered to ensure connReader/Writer won't leak
 		rxProto:          make(chan protoHeader),
 		rxFrame:          make(chan frame),
 		rxDone:           make(chan struct{}),
-		newSession:       make(chan *Session),
+		newSession:       make(chan newSessionResp),
 		delSession:       make(chan *Session),
 		txFrame:          make(chan frame),
 		txDone:           make(chan struct{}),
@@ -247,11 +273,14 @@ func (c *conn) getErr() error {
 // mux is start in it's own goroutine after initial connection establishment.
 //  It handles muxing of sessions, keepalives, and connection errors.
 func (c *conn) mux() {
-	// create the next session to allocate
-	nextSession := newSession(c, 0)
+	var (
+		// create the next session to allocate
+		nextSession = newSessionResp{session: newSession(c, 0)}
 
-	// map channel to sessions
-	sessions := make(map[uint16]*Session)
+		// map channels to sessions
+		sessionsByChannel       = make(map[uint16]*Session)
+		sessionsByRemoteChannel = make(map[uint16]*Session)
+	)
 
 	// hold the errMu lock until error or done
 	c.errMu.Lock()
@@ -271,16 +300,27 @@ func (c *conn) mux() {
 		// new frame from connReader
 		case fr := <-c.rxFrame:
 			// lookup session and send to Session.mux
-			ch, ok := sessions[fr.channel]
+			session, ok := sessionsByRemoteChannel[fr.channel]
 			if !ok {
-				c.err = errorErrorf("unexpected frame: %#v", fr.body)
-				continue
+				// if this is a begin, RemoteChannel should be used
+				begin, ok := fr.body.(*performBegin)
+				if !ok {
+					c.err = errorErrorf("unexpected frame: %#v", fr.body)
+					continue
+				}
+
+				session, ok = sessionsByChannel[begin.RemoteChannel]
+				if !ok {
+					c.err = errorErrorf("unexpected frame: %#v", fr.body)
+					continue
+				}
+
+				session.remoteChannel = fr.channel
+				sessionsByRemoteChannel[fr.channel] = session
 			}
 
-			// TODO: handle session deletion while sending frame to
-			//       session mux?
 			select {
-			case ch.rx <- fr:
+			case session.rx <- fr:
 			case <-c.done:
 				return
 			}
@@ -293,14 +333,27 @@ func (c *conn) mux() {
 		// sessions are far less frequent than frames being sent to sessions,
 		// this avoids the lock/unlock for session lookup.
 		case c.newSession <- nextSession:
-			sessions[nextSession.channel] = nextSession
+			if nextSession.err != nil {
+				continue
+			}
+
+			ch := nextSession.session.channel
+			sessionsByChannel[ch] = nextSession.session
+
+			if ch >= c.channelMax {
+				nextSession.session = nil
+				nextSession.err = errorErrorf("reached connection channel max (%d)", c.channelMax)
+				continue
+			}
 
 			// create the next session to send
-			nextSession = newSession(c, nextSession.channel+1) // TODO: enforce max session/wrapping
+			nextSession.session = newSession(c, ch+1)
 
 		// session deletion
 		case s := <-c.delSession:
-			delete(sessions, s.channel)
+			// TODO: allow channel number reuse
+			delete(sessionsByChannel, s.channel)
+			delete(sessionsByRemoteChannel, s.remoteChannel)
 
 		// connection is complete
 		case <-c.done:

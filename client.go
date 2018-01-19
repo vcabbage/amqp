@@ -78,12 +78,17 @@ func (c *Client) Close() error {
 // NewSession opens a new AMQP session to the server.
 func (c *Client) NewSession() (*Session, error) {
 	// get a session allocated by Client.mux
-	var s *Session
+	var sResp newSessionResp
 	select {
 	case <-c.conn.done:
 		return nil, c.conn.getErr()
-	case s = <-c.conn.newSession:
+	case sResp = <-c.conn.newSession:
 	}
+
+	if sResp.err != nil {
+		return nil, sResp.err
+	}
+	s := sResp.session
 
 	// send Begin to server
 	begin := &performBegin{
@@ -109,9 +114,6 @@ func (c *Client) NewSession() (*Session, error) {
 		return nil, errorErrorf("unexpected begin response: %+v", fr.body)
 	}
 
-	// TODO: record negotiated settings
-	s.remoteChannel = begin.RemoteChannel
-
 	// start Session multiplexor
 	go s.mux(begin)
 
@@ -123,7 +125,7 @@ func (c *Client) NewSession() (*Session, error) {
 // A session multiplexes Receivers.
 type Session struct {
 	channel       uint16                // session's local channel
-	remoteChannel uint16                // session's remote channel
+	remoteChannel uint16                // session's remote channel, owned by conn.mux
 	conn          *conn                 // underlying conn
 	rx            chan frame            // frames destined for this session are sent on this chan by conn.mux
 	tx            chan frameBody        // non-transfer frames to be sent; session must track disposition
@@ -167,7 +169,7 @@ func (s *Session) Close() error {
 func (s *Session) txFrame(p frameBody, done chan struct{}) {
 	s.conn.wantWriteFrame(frame{
 		typ:     frameTypeAMQP,
-		channel: s.remoteChannel,
+		channel: s.channel,
 		body:    p,
 		done:    done,
 	})
