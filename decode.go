@@ -580,6 +580,62 @@ func readHeaderSlice(r reader) (elements int, _ error) {
 	return elements, nil
 }
 
+func init() {
+	// break initialization cycle by assigning in init
+	// typeReaders -> readComposite -> unmarshal -> readAny -> typeReaders
+	typeReaders[0x0] = readComposite
+}
+
+var typeReaders = [256]func(r reader) (interface{}, error){
+	// bool
+	typeCodeBool:      func(r reader) (interface{}, error) { return readBool(r) },
+	typeCodeBoolTrue:  func(r reader) (interface{}, error) { return readBool(r) },
+	typeCodeBoolFalse: func(r reader) (interface{}, error) { return readBool(r) },
+	// uint
+	typeCodeUbyte:      func(r reader) (interface{}, error) { return readUint(r) },
+	typeCodeUshort:     func(r reader) (interface{}, error) { return readUint(r) },
+	typeCodeUint:       func(r reader) (interface{}, error) { return readUint(r) },
+	typeCodeSmallUint:  func(r reader) (interface{}, error) { return readUint(r) },
+	typeCodeUint0:      func(r reader) (interface{}, error) { return readUint(r) },
+	typeCodeUlong:      func(r reader) (interface{}, error) { return readUint(r) },
+	typeCodeSmallUlong: func(r reader) (interface{}, error) { return readUint(r) },
+	typeCodeUlong0:     func(r reader) (interface{}, error) { return readUint(r) },
+	// int
+	typeCodeByte:      func(r reader) (interface{}, error) { return readInt(r) },
+	typeCodeShort:     func(r reader) (interface{}, error) { return readInt(r) },
+	typeCodeInt:       func(r reader) (interface{}, error) { return readInt(r) },
+	typeCodeSmallint:  func(r reader) (interface{}, error) { return readInt(r) },
+	typeCodeLong:      func(r reader) (interface{}, error) { return readInt(r) },
+	typeCodeSmalllong: func(r reader) (interface{}, error) { return readInt(r) },
+	// binary
+	typeCodeVbin8:  func(r reader) (interface{}, error) { return readBinary(r) },
+	typeCodeVbin32: func(r reader) (interface{}, error) { return readBinary(r) },
+	// strings
+	typeCodeStr8:  func(r reader) (interface{}, error) { return readString(r) },
+	typeCodeStr32: func(r reader) (interface{}, error) { return readString(r) },
+	typeCodeSym8:  func(r reader) (interface{}, error) { return readString(r) },
+	typeCodeSym32: func(r reader) (interface{}, error) { return readString(r) },
+	// timestamp
+	typeCodeTimestamp: func(r reader) (interface{}, error) { return readTimestamp(r) },
+	// UUID
+	typeCodeUUID: func(r reader) (interface{}, error) { return readUUID(r) },
+
+	// TODO: implement
+	typeCodeFloat:      func(r reader) (interface{}, error) { return nil, errorNew("float not implemented") },
+	typeCodeDouble:     func(r reader) (interface{}, error) { return nil, errorNew("double not implemented") },
+	typeCodeDecimal32:  func(r reader) (interface{}, error) { return nil, errorNew("decimal32 not implemented") },
+	typeCodeDecimal64:  func(r reader) (interface{}, error) { return nil, errorNew("decimal64 not implemented") },
+	typeCodeDecimal128: func(r reader) (interface{}, error) { return nil, errorNew("decimal128 not implemented") },
+	typeCodeChar:       func(r reader) (interface{}, error) { return nil, errorNew("char not implemented") },
+	typeCodeList0:      func(r reader) (interface{}, error) { return nil, errorNew("list0 not implemented") },
+	typeCodeList8:      func(r reader) (interface{}, error) { return nil, errorNew("list8 not implemented") },
+	typeCodeList32:     func(r reader) (interface{}, error) { return nil, errorNew("list32 not implemented") },
+	typeCodeMap8:       func(r reader) (interface{}, error) { return nil, errorNew("map8 not implemented") },
+	typeCodeMap32:      func(r reader) (interface{}, error) { return nil, errorNew("map32 not implemented") },
+	typeCodeArray8:     func(r reader) (interface{}, error) { return nil, errorNew("array8 not implemented") },
+	typeCodeArray32:    func(r reader) (interface{}, error) { return nil, errorNew("array32 not implemented") },
+}
+
 func readAny(r reader) (interface{}, error) {
 	b, err := r.ReadByte()
 	if err != nil {
@@ -595,81 +651,11 @@ func readAny(r reader) (interface{}, error) {
 		return nil, err
 	}
 
-	switch amqpType(b) {
-	// bool
-	case
-		typeCodeBool,
-		typeCodeBoolTrue,
-		typeCodeBoolFalse:
-		return readBool(r)
-
-	// unsigned integers
-	case
-		typeCodeUbyte,
-		typeCodeUshort,
-		typeCodeUint,
-		typeCodeSmallUint,
-		typeCodeUint0,
-		typeCodeUlong,
-		typeCodeSmallUlong,
-		typeCodeUlong0:
-		return readUint(r)
-
-	// signed integers
-	case
-		typeCodeByte,
-		typeCodeShort,
-		typeCodeInt,
-		typeCodeSmallint,
-		typeCodeLong,
-		typeCodeSmalllong:
-		return readInt(r)
-
-	// binary
-	case
-		typeCodeVbin8,
-		typeCodeVbin32:
-		return readBinary(r)
-
-	// strings
-	case
-		typeCodeStr8,
-		typeCodeStr32,
-		typeCodeSym8,
-		typeCodeSym32:
-		return readString(r)
-
-	// timestamp
-	case typeCodeTimestamp:
-		return readTimestamp(r)
-
-	// composite
-	case 0x0:
-		return readComposite(r)
-
-	case typeCodeUUID:
-		return readUUID(r)
-
-	// not-implemented
-	case
-		typeCodeFloat,
-		typeCodeDouble,
-		typeCodeDecimal32,
-		typeCodeDecimal64,
-		typeCodeDecimal128,
-		typeCodeChar,
-		typeCodeList0,
-		typeCodeList8,
-		typeCodeList32,
-		typeCodeMap8,
-		typeCodeMap32,
-		typeCodeArray8,
-		typeCodeArray32:
-		return nil, errorErrorf("%0x not implemented", b)
-
-	default:
+	tr := typeReaders[amqpType(b)]
+	if tr == nil {
 		return nil, errorErrorf("unknown type %0x", b)
 	}
+	return tr(r)
 }
 
 // roReader is similar to bytes.Reader but does not support rune
