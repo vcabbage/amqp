@@ -221,10 +221,10 @@ func (o *performOpen) marshal(wr writer) error {
 
 func (o *performOpen) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeOpen, []unmarshalField{
-		{field: &o.ContainerID, handleNull: required("Open.ContainerID")},
+		{field: &o.ContainerID, handleNull: func() error { return errorNew("Open.ContainerID is required") }},
 		{field: &o.Hostname},
-		{field: &o.MaxFrameSize, handleNull: defaultUint32(&o.MaxFrameSize, 4294967295)},
-		{field: &o.ChannelMax, handleNull: defaultUint16(&o.ChannelMax, 65535)},
+		{field: &o.MaxFrameSize, handleNull: func() error { o.MaxFrameSize = 4294967295; return nil }},
+		{field: &o.ChannelMax, handleNull: func() error { o.ChannelMax = 65535; return nil }},
 		{field: (*milliseconds)(&o.IdleTimeout)},
 		{field: &o.OutgoingLocales},
 		{field: &o.IncomingLocales},
@@ -2322,8 +2322,7 @@ func (m milliseconds) marshal(wr writer) error {
 }
 
 func (m *milliseconds) unmarshal(r reader) error {
-	var n uint32
-	_, err := unmarshal(r, &n)
+	n, err := readUint(r)
 	*m = milliseconds(time.Duration(n) * time.Millisecond)
 	return err
 }
@@ -2402,20 +2401,22 @@ func (m mapSymbolAny) marshal(wr writer) error {
 }
 
 func (f *mapSymbolAny) unmarshal(r reader) error {
-	mr, err := newMapReader(r)
+	_, count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
 
-	m := make(mapSymbolAny, mr.pairs())
-	for mr.more() {
-		var key symbol
-		var value interface{}
-		err = mr.next(&key, &value)
+	m := make(mapSymbolAny, count/2)
+	for i := uint8(0); i < count; i += 2 {
+		key, err := readString(r)
 		if err != nil {
 			return err
 		}
-		m[key] = value
+		value, err := readAny(r)
+		if err != nil {
+			return err
+		}
+		m[symbol(key)] = value
 	}
 	*f = m
 	return nil
