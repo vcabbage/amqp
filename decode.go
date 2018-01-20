@@ -360,50 +360,6 @@ type unmarshalField struct {
 // is null.
 type nullHandler func() error
 
-// required returns a nullHandler that will cause an error to
-// be returned if the field is null.
-func required(name string) nullHandler {
-	return func() error {
-		return errorNew(name + " is required")
-	}
-}
-
-// defaultUint32 returns a nullHandler that sets n to defaultValue
-// if the field is null.
-func defaultUint32(n *uint32, defaultValue uint32) nullHandler {
-	return func() error {
-		*n = defaultValue
-		return nil
-	}
-}
-
-// defaultUint16 returns a nullHandler that sets n to defaultValue
-// if the field is null.
-func defaultUint16(n *uint16, defaultValue uint16) nullHandler {
-	return func() error {
-		*n = defaultValue
-		return nil
-	}
-}
-
-// defaultUint8 returns a nullHandler that sets n to defaultValue
-// if the field is null.
-func defaultUint8(n *uint8, defaultValue uint8) nullHandler {
-	return func() error {
-		*n = defaultValue
-		return nil
-	}
-}
-
-// defaultSymbol returns a nullHandler that sets s to defaultValue
-// if the field is null.
-func defaultSymbol(s *symbol, defaultValue symbol) nullHandler {
-	return func() error {
-		*s = defaultValue
-		return nil
-	}
-}
-
 // readCompositeHeader reads and consumes the composite header from r.
 //
 // If the composite is null, errNull will be returned.
@@ -1047,51 +1003,6 @@ func readUint(r reader) (value uint64, _ error) {
 	}
 }
 
-type limitReader struct {
-	reader
-	limit uint32
-	read  uint32
-}
-
-var errLimitReached = errorNew("limit reached")
-
-func (r *limitReader) Read(p []byte) (int, error) {
-	if r.read >= r.limit {
-		return 0, errLimitReached
-	}
-	n, err := r.reader.Read(p)
-	r.read += uint32(n)
-	return n, err
-}
-
-type mapReader struct {
-	r     *limitReader
-	count int // elements (2 * # of pairs)
-	read  int
-}
-
-func (mr *mapReader) pairs() int {
-	return mr.count / 2
-}
-
-func (mr *mapReader) more() bool {
-	return mr.read < mr.count
-}
-
-func (mr *mapReader) next(key, value interface{}) error {
-	_, err := unmarshal(mr.r, key)
-	if err != nil {
-		return err
-	}
-	mr.read++
-	_, err = unmarshal(mr.r, value)
-	if err != nil {
-		return err
-	}
-	mr.read++
-	return nil
-}
-
 func readMapHeader(r reader) (size uint32, count uint8, _ error) {
 	b, err := r.ReadByte()
 	if err != nil {
@@ -1122,44 +1033,4 @@ func readMapHeader(r reader) (size uint32, count uint8, _ error) {
 
 	count, err = r.ReadByte()
 	return size, count, err
-}
-
-func newMapReader(r reader) (*mapReader, error) {
-	b, err := r.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-
-	var n uint32
-	switch amqpType(b) {
-	case typeCodeNull:
-		return nil, errNull
-	case typeCodeMap8:
-		bn, err := r.ReadByte()
-		if err != nil {
-			return nil, err
-		}
-		n = uint32(bn)
-	case typeCodeMap32:
-		if r.Len() < 4 {
-			return nil, errorNew("invalid length for type map32")
-		}
-		n = binary.BigEndian.Uint32(r.Next(4))
-	default:
-		return nil, errorErrorf("invalid map type %x", b)
-	}
-
-	if uint64(n) > uint64(r.Len()) {
-		return nil, errInvalidLength
-	}
-
-	b, err = r.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-
-	return &mapReader{
-		r:     &limitReader{reader: r, limit: n},
-		count: int(b),
-	}, nil
 }

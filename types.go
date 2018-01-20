@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"strconv"
 	"time"
+	"unicode/utf8"
 )
 
 type amqpType uint8
@@ -205,15 +206,15 @@ func (o *performOpen) link() (uint32, bool) {
 
 func (o *performOpen) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeOpen, []marshalField{
-		{value: o.ContainerID, omit: false},
-		{value: o.Hostname, omit: o.Hostname == ""},
-		{value: o.MaxFrameSize, omit: o.MaxFrameSize == 0},
-		{value: o.ChannelMax, omit: o.ChannelMax == 0},
-		{value: milliseconds(o.IdleTimeout), omit: o.IdleTimeout == 0},
-		{value: o.OutgoingLocales, omit: len(o.OutgoingLocales) == 0},
-		{value: o.IncomingLocales, omit: len(o.IncomingLocales) == 0},
-		{value: o.OfferedCapabilities, omit: len(o.OfferedCapabilities) == 0},
-		{value: o.DesiredCapabilities, omit: len(o.DesiredCapabilities) == 0},
+		{value: &o.ContainerID, omit: false},
+		{value: &o.Hostname, omit: o.Hostname == ""},
+		{value: &o.MaxFrameSize, omit: o.MaxFrameSize == 0},
+		{value: &o.ChannelMax, omit: o.ChannelMax == 0},
+		{value: (*milliseconds)(&o.IdleTimeout), omit: o.IdleTimeout == 0},
+		{value: &o.OutgoingLocales, omit: len(o.OutgoingLocales) == 0},
+		{value: &o.IncomingLocales, omit: len(o.IncomingLocales) == 0},
+		{value: &o.OfferedCapabilities, omit: len(o.OfferedCapabilities) == 0},
+		{value: &o.DesiredCapabilities, omit: len(o.DesiredCapabilities) == 0},
 		{value: o.Properties, omit: len(o.Properties) == 0},
 	}...)
 }
@@ -305,13 +306,13 @@ func (b *performBegin) link() (uint32, bool) {
 
 func (b *performBegin) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeBegin, []marshalField{
-		{value: b.RemoteChannel, omit: b.RemoteChannel == 0},
-		{value: b.NextOutgoingID, omit: false},
-		{value: b.IncomingWindow, omit: false},
-		{value: b.OutgoingWindow, omit: false},
-		{value: b.HandleMax, omit: b.HandleMax == 0},
-		{value: b.OfferedCapabilities, omit: len(b.OfferedCapabilities) == 0},
-		{value: b.DesiredCapabilities, omit: len(b.DesiredCapabilities) == 0},
+		{value: &b.RemoteChannel, omit: b.RemoteChannel == 0},
+		{value: &b.NextOutgoingID, omit: false},
+		{value: &b.IncomingWindow, omit: false},
+		{value: &b.OutgoingWindow, omit: false},
+		{value: &b.HandleMax, omit: b.HandleMax == 0},
+		{value: &b.OfferedCapabilities, omit: len(b.OfferedCapabilities) == 0},
+		{value: &b.DesiredCapabilities, omit: len(b.DesiredCapabilities) == 0},
 		{value: b.Properties, omit: b.Properties == nil},
 	}...)
 }
@@ -319,10 +320,10 @@ func (b *performBegin) marshal(wr writer) error {
 func (b *performBegin) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeBegin, []unmarshalField{
 		{field: &b.RemoteChannel},
-		{field: &b.NextOutgoingID, handleNull: required("Begin.NextOutgoingID")},
-		{field: &b.IncomingWindow, handleNull: required("Begin.IncomingWindow")},
-		{field: &b.OutgoingWindow, handleNull: required("Begin.OutgoingWindow")},
-		{field: &b.HandleMax, handleNull: defaultUint32(&b.HandleMax, 4294967295)},
+		{field: &b.NextOutgoingID, handleNull: func() error { return errorNew("Begin.NextOutgoingID is required") }},
+		{field: &b.IncomingWindow, handleNull: func() error { return errorNew("Begin.IncomingWindow is required") }},
+		{field: &b.OutgoingWindow, handleNull: func() error { return errorNew("Begin.OutgoingWindow is required") }},
+		{field: &b.HandleMax, handleNull: func() error { b.HandleMax = 4294967295; return nil }},
 		{field: &b.OfferedCapabilities},
 		{field: &b.DesiredCapabilities},
 		{field: &b.Properties},
@@ -506,28 +507,28 @@ func (a *performAttach) link() (uint32, bool) {
 
 func (a *performAttach) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeAttach, []marshalField{
-		{value: a.Name, omit: false},
-		{value: a.Handle, omit: false},
-		{value: a.Role, omit: false},
+		{value: &a.Name, omit: false},
+		{value: &a.Handle, omit: false},
+		{value: &a.Role, omit: false},
 		{value: a.SenderSettleMode, omit: a.SenderSettleMode == nil},
 		{value: a.ReceiverSettleMode, omit: a.ReceiverSettleMode == nil},
 		{value: a.Source, omit: a.Source == nil},
 		{value: a.Target, omit: a.Target == nil},
 		{value: a.Unsettled, omit: len(a.Unsettled) == 0},
-		{value: a.IncompleteUnsettled, omit: !a.IncompleteUnsettled},
-		{value: a.InitialDeliveryCount, omit: a.Role == roleReceiver},
-		{value: a.MaxMessageSize, omit: a.MaxMessageSize == 0},
-		{value: a.OfferedCapabilities, omit: len(a.OfferedCapabilities) == 0},
-		{value: a.DesiredCapabilities, omit: len(a.DesiredCapabilities) == 0},
+		{value: &a.IncompleteUnsettled, omit: !a.IncompleteUnsettled},
+		{value: &a.InitialDeliveryCount, omit: a.Role == roleReceiver},
+		{value: &a.MaxMessageSize, omit: a.MaxMessageSize == 0},
+		{value: &a.OfferedCapabilities, omit: len(a.OfferedCapabilities) == 0},
+		{value: &a.DesiredCapabilities, omit: len(a.DesiredCapabilities) == 0},
 		{value: a.Properties, omit: len(a.Properties) == 0},
 	}...)
 }
 
 func (a *performAttach) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeAttach, []unmarshalField{
-		{field: &a.Name, handleNull: required("Attach.Name")},
-		{field: &a.Handle, handleNull: required("Attach.Handle")},
-		{field: &a.Role, handleNull: required("Attach.Role")},
+		{field: &a.Name, handleNull: func() error { return errorNew("Attach.Name is required") }},
+		{field: &a.Handle, handleNull: func() error { return errorNew("Attach.Handle is required") }},
+		{field: &a.Role, handleNull: func() error { return errorNew("Attach.Role is required") }},
 		{field: &a.SenderSettleMode},
 		{field: &a.ReceiverSettleMode},
 		{field: &a.Source},
@@ -574,22 +575,25 @@ func (u unsettled) marshal(wr writer) error {
 }
 
 func (u *unsettled) unmarshal(r reader) error {
-	mr, err := newMapReader(r)
+	_, count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
 
-	mm := make(unsettled, mr.pairs())
-	for mr.more() {
-		var key string
-		var value deliveryState
-		err = mr.next(&key, &value)
+	m := make(unsettled, count/2)
+	for i := uint8(0); i < count; i += 2 {
+		key, err := readString(r)
 		if err != nil {
 			return err
 		}
-		mm[key] = value
+		var value deliveryState
+		_, err = unmarshal(r, &value)
+		if err != nil {
+			return err
+		}
+		m[key] = value
 	}
-	*u = mm
+	*u = m
 	return nil
 }
 
@@ -729,17 +733,17 @@ type source struct {
 
 func (s *source) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeSource, []marshalField{
-		{value: s.Address, omit: s.Address == ""},
-		{value: s.Durable, omit: s.Durable == 0},
-		{value: s.ExpiryPolicy, omit: s.ExpiryPolicy == ""},
-		{value: s.Timeout, omit: s.Timeout == 0},
-		{value: s.Dynamic, omit: !s.Dynamic},
+		{value: &s.Address, omit: s.Address == ""},
+		{value: &s.Durable, omit: s.Durable == 0},
+		{value: &s.ExpiryPolicy, omit: s.ExpiryPolicy == ""},
+		{value: &s.Timeout, omit: s.Timeout == 0},
+		{value: &s.Dynamic, omit: !s.Dynamic},
 		{value: s.DynamicNodeProperties, omit: len(s.DynamicNodeProperties) == 0},
-		{value: s.DistributionMode, omit: s.DistributionMode == ""},
+		{value: &s.DistributionMode, omit: s.DistributionMode == ""},
 		{value: s.Filter, omit: len(s.Filter) == 0},
 		{value: s.DefaultOutcome, omit: s.DefaultOutcome == nil},
-		{value: s.Outcomes, omit: len(s.Outcomes) == 0},
-		{value: s.Capabilities, omit: len(s.Capabilities) == 0},
+		{value: &s.Outcomes, omit: len(s.Outcomes) == 0},
+		{value: &s.Capabilities, omit: len(s.Capabilities) == 0},
 	}...)
 }
 
@@ -747,7 +751,7 @@ func (s *source) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeSource, []unmarshalField{
 		{field: &s.Address},
 		{field: &s.Durable},
-		{field: &s.ExpiryPolicy, handleNull: defaultSymbol(&s.ExpiryPolicy, "session-end")},
+		{field: &s.ExpiryPolicy, handleNull: func() error { s.ExpiryPolicy = "session-end"; return nil }},
 		{field: &s.Timeout},
 		{field: &s.Dynamic},
 		{field: &s.DynamicNodeProperties},
@@ -876,13 +880,13 @@ type target struct {
 
 func (t *target) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeTarget, []marshalField{
-		{value: t.Address, omit: t.Address == ""},
-		{value: t.Durable, omit: t.Durable == 0},
-		{value: t.ExpiryPolicy, omit: t.ExpiryPolicy == ""},
-		{value: t.Timeout, omit: t.Timeout == 0},
-		{value: t.Dynamic, omit: !t.Dynamic},
+		{value: &t.Address, omit: t.Address == ""},
+		{value: &t.Durable, omit: t.Durable == 0},
+		{value: &t.ExpiryPolicy, omit: t.ExpiryPolicy == ""},
+		{value: &t.Timeout, omit: t.Timeout == 0},
+		{value: &t.Dynamic, omit: !t.Dynamic},
 		{value: t.DynamicNodeProperties, omit: len(t.DynamicNodeProperties) == 0},
-		{value: t.Capabilities, omit: len(t.Capabilities) == 0},
+		{value: &t.Capabilities, omit: len(t.Capabilities) == 0},
 	}...)
 }
 
@@ -890,7 +894,7 @@ func (t *target) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeTarget, []unmarshalField{
 		{field: &t.Address},
 		{field: &t.Durable},
-		{field: &t.ExpiryPolicy, handleNull: defaultSymbol(&t.ExpiryPolicy, "session-end")},
+		{field: &t.ExpiryPolicy, handleNull: func() error { t.ExpiryPolicy = "session-end"; return nil }},
 		{field: &t.Timeout},
 		{field: &t.Dynamic},
 		{field: &t.DynamicNodeProperties},
@@ -1060,15 +1064,15 @@ func (f *performFlow) link() (uint32, bool) {
 func (f *performFlow) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeFlow, []marshalField{
 		{value: f.NextIncomingID, omit: f.NextIncomingID == nil},
-		{value: f.IncomingWindow, omit: false},
-		{value: f.NextOutgoingID, omit: false},
-		{value: f.OutgoingWindow, omit: false},
+		{value: &f.IncomingWindow, omit: false},
+		{value: &f.NextOutgoingID, omit: false},
+		{value: &f.OutgoingWindow, omit: false},
 		{value: f.Handle, omit: f.Handle == nil},
 		{value: f.DeliveryCount, omit: f.DeliveryCount == nil},
 		{value: f.LinkCredit, omit: f.LinkCredit == nil},
 		{value: f.Available, omit: f.Available == nil},
-		{value: f.Drain, omit: !f.Drain},
-		{value: f.Echo, omit: !f.Echo},
+		{value: &f.Drain, omit: !f.Drain},
+		{value: &f.Echo, omit: !f.Echo},
 		{value: f.Properties, omit: len(f.Properties) == 0},
 	}...)
 }
@@ -1076,9 +1080,9 @@ func (f *performFlow) marshal(wr writer) error {
 func (f *performFlow) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeFlow, []unmarshalField{
 		{field: &f.NextIncomingID},
-		{field: &f.IncomingWindow, handleNull: required("Flow.IncomingWindow")},
-		{field: &f.NextOutgoingID, handleNull: required("Flow.NextOutgoingID")},
-		{field: &f.OutgoingWindow, handleNull: required("Flow.OutgoingWindow")},
+		{field: &f.IncomingWindow, handleNull: func() error { return errorNew("Flow.IncomingWindow is required") }},
+		{field: &f.NextOutgoingID, handleNull: func() error { return errorNew("Flow.NextOutgoingID is required") }},
+		{field: &f.OutgoingWindow, handleNull: func() error { return errorNew("Flow.OutgoingWindow is required") }},
 		{field: &f.Handle},
 		{field: &f.DeliveryCount},
 		{field: &f.LinkCredit},
@@ -1279,17 +1283,17 @@ func (t *performTransfer) link() (uint32, bool) {
 
 func (t *performTransfer) marshal(wr writer) error {
 	err := marshalComposite(wr, typeCodeTransfer, []marshalField{
-		{value: t.Handle},
+		{value: &t.Handle},
 		{value: t.DeliveryID, omit: t.DeliveryID == nil},
-		{value: t.DeliveryTag, omit: len(t.DeliveryTag) == 0},
+		{value: &t.DeliveryTag, omit: len(t.DeliveryTag) == 0},
 		{value: t.MessageFormat, omit: t.MessageFormat == nil},
-		{value: t.Settled, omit: !t.Settled},
-		{value: t.More, omit: !t.More},
+		{value: &t.Settled, omit: !t.Settled},
+		{value: &t.More, omit: !t.More},
 		{value: t.ReceiverSettleMode, omit: t.ReceiverSettleMode == nil},
 		{value: t.State, omit: t.State == nil},
-		{value: t.Resume, omit: !t.Resume},
-		{value: t.Aborted, omit: !t.Aborted},
-		{value: t.Batchable, omit: !t.Batchable},
+		{value: &t.Resume, omit: !t.Resume},
+		{value: &t.Aborted, omit: !t.Aborted},
+		{value: &t.Batchable, omit: !t.Batchable},
 	}...)
 	if err != nil {
 		return err
@@ -1301,7 +1305,7 @@ func (t *performTransfer) marshal(wr writer) error {
 
 func (t *performTransfer) unmarshal(r reader) error {
 	err := unmarshalComposite(r, typeCodeTransfer, []unmarshalField{
-		{field: &t.Handle, handleNull: required("Transfer.Handle")},
+		{field: &t.Handle, handleNull: func() error { return errorNew("Transfer.Handle is required") }},
 		{field: &t.DeliveryID},
 		{field: &t.DeliveryTag},
 		{field: &t.MessageFormat},
@@ -1388,19 +1392,19 @@ func (*performDisposition) link() (uint32, bool) {
 
 func (d *performDisposition) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeDisposition, []marshalField{
-		{value: d.Role, omit: false},
-		{value: d.First, omit: false},
+		{value: &d.Role, omit: false},
+		{value: &d.First, omit: false},
 		{value: d.Last, omit: d.Last == nil},
-		{value: d.Settled, omit: !d.Settled},
+		{value: &d.Settled, omit: !d.Settled},
 		{value: d.State, omit: d.State == nil},
-		{value: d.Batchable, omit: !d.Batchable},
+		{value: &d.Batchable, omit: !d.Batchable},
 	}...)
 }
 
 func (d *performDisposition) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeDisposition, []unmarshalField{
-		{field: &d.Role, handleNull: required("Disposition.Role")},
-		{field: &d.First, handleNull: required("Disposition.First")},
+		{field: &d.Role, handleNull: func() error { return errorNew("Disposition.Role is required") }},
+		{field: &d.First, handleNull: func() error { return errorNew("Disposition.Handle is required") }},
 		{field: &d.Last},
 		{field: &d.Settled},
 		{field: &d.State},
@@ -1444,15 +1448,15 @@ func (d *performDetach) link() (uint32, bool) {
 
 func (d *performDetach) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeDetach, []marshalField{
-		{value: d.Handle, omit: false},
-		{value: d.Closed, omit: !d.Closed},
+		{value: &d.Handle, omit: false},
+		{value: &d.Closed, omit: !d.Closed},
 		{value: d.Error, omit: d.Error == nil},
 	}...)
 }
 
 func (d *performDetach) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeDetach, []unmarshalField{
-		{field: &d.Handle, handleNull: required("Detach.Handle")},
+		{field: &d.Handle, handleNull: func() error { return errorNew("Detach.Handle is required") }},
 		{field: &d.Closed},
 		{field: &d.Error},
 	}...)
@@ -1536,15 +1540,15 @@ type Error struct {
 
 func (e *Error) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeError, []marshalField{
-		{value: e.Condition, omit: false},
-		{value: e.Description, omit: e.Description == ""},
+		{value: &e.Condition, omit: false},
+		{value: &e.Description, omit: e.Description == ""},
 		{value: e.Info, omit: len(e.Info) == 0},
 	}...)
 }
 
 func (e *Error) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeError, []unmarshalField{
-		{field: &e.Condition, handleNull: required("Error.Condition")},
+		{field: &e.Condition, handleNull: func() error { return errorNew("Error.Condition is required") }},
 		{field: &e.Description},
 		{field: &e.Info},
 	}...)
@@ -1792,7 +1796,7 @@ func (m *Message) marshal(wr writer) error {
 		if err != nil {
 			return err
 		}
-		err = marshal(wr, m.Data)
+		err = writeBinary(wr, m.Data)
 		if err != nil {
 			return err
 		}
@@ -1899,11 +1903,29 @@ func peekMessageType(buf []byte) (uint8, error) {
 		return 0, errorErrorf("invalid composite header %0x", buf[0])
 	}
 
-	v, err := readUlong(&roReader{b: buf[1:]})
-	if err != nil {
-		return 0, err
+	// copied from readUlong to avoid allocations
+	t := amqpType(buf[1])
+	if t == typeCodeUlong0 {
+		return 0, nil
 	}
-	return uint8(v), err
+
+	if t == typeCodeSmallUlong {
+		if len(buf[2:]) == 0 {
+			errorNew("invalid ulong")
+		}
+		return uint8(buf[2]), nil
+	}
+
+	if t != typeCodeUlong {
+		return 0, errorErrorf("invalid type for uint32 %0x", t)
+	}
+
+	if len(buf[2:]) < 8 {
+		return 0, errorNew("invalid ulong")
+	}
+	v := binary.BigEndian.Uint64(buf[2:10])
+
+	return uint8(v), nil
 }
 
 func checkNull(buf []byte) bool {
@@ -1933,18 +1955,18 @@ type MessageHeader struct {
 
 func (h *MessageHeader) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeMessageHeader, []marshalField{
-		{value: h.Durable, omit: !h.Durable},
-		{value: h.Priority, omit: h.Priority == 4},
-		{value: milliseconds(h.TTL), omit: h.TTL == 0},
-		{value: h.FirstAcquirer, omit: !h.FirstAcquirer},
-		{value: h.DeliveryCount, omit: h.DeliveryCount == 0},
+		{value: &h.Durable, omit: !h.Durable},
+		{value: &h.Priority, omit: h.Priority == 4},
+		{value: (*milliseconds)(&h.TTL), omit: h.TTL == 0},
+		{value: &h.FirstAcquirer, omit: !h.FirstAcquirer},
+		{value: &h.DeliveryCount, omit: h.DeliveryCount == 0},
 	}...)
 }
 
 func (h *MessageHeader) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeMessageHeader, []unmarshalField{
 		{field: &h.Durable},
-		{field: &h.Priority, handleNull: defaultUint8(&h.Priority, 4)},
+		{field: &h.Priority, handleNull: func() error { h.Priority = 4; return nil }},
 		{field: (*milliseconds)(&h.TTL)},
 		{field: &h.FirstAcquirer},
 		{field: &h.DeliveryCount},
@@ -1992,18 +2014,18 @@ type MessageProperties struct {
 func (p *MessageProperties) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeMessageProperties, []marshalField{
 		{value: p.MessageID, omit: p.MessageID == nil},
-		{value: p.UserID, omit: len(p.UserID) == 0},
-		{value: p.To, omit: p.To == ""},
-		{value: p.Subject, omit: p.Subject == ""},
-		{value: p.ReplyTo, omit: p.ReplyTo == ""},
+		{value: &p.UserID, omit: len(p.UserID) == 0},
+		{value: &p.To, omit: p.To == ""},
+		{value: &p.Subject, omit: p.Subject == ""},
+		{value: &p.ReplyTo, omit: p.ReplyTo == ""},
 		{value: p.CorrelationID, omit: p.CorrelationID == nil},
-		{value: symbol(p.ContentType), omit: p.ContentType == ""},
-		{value: symbol(p.ContentEncoding), omit: p.ContentEncoding == ""},
-		{value: p.AbsoluteExpiryTime, omit: p.AbsoluteExpiryTime.IsZero()},
-		{value: p.CreationTime, omit: p.CreationTime.IsZero()},
-		{value: p.GroupID, omit: p.GroupID == ""},
-		{value: p.GroupSequence},
-		{value: p.ReplyToGroupID, omit: p.ReplyToGroupID == ""},
+		{value: (*symbol)(&p.ContentType), omit: p.ContentType == ""},
+		{value: (*symbol)(&p.ContentEncoding), omit: p.ContentEncoding == ""},
+		{value: &p.AbsoluteExpiryTime, omit: p.AbsoluteExpiryTime.IsZero()},
+		{value: &p.CreationTime, omit: p.CreationTime.IsZero()},
+		{value: &p.GroupID, omit: p.GroupID == ""},
+		{value: &p.GroupSequence},
+		{value: &p.ReplyToGroupID, omit: p.ReplyToGroupID == ""},
 	}...)
 }
 
@@ -2060,15 +2082,15 @@ type stateReceived struct {
 
 func (sr *stateReceived) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeStateReceived, []marshalField{
-		{value: sr.SectionNumber, omit: false},
-		{value: sr.SectionOffset, omit: false},
+		{value: &sr.SectionNumber, omit: false},
+		{value: &sr.SectionOffset, omit: false},
 	}...)
 }
 
 func (sr *stateReceived) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeStateReceived, []unmarshalField{
-		{field: &sr.SectionNumber, handleNull: required("StateReceived.SectionNumber")},
-		{field: &sr.SectionOffset, handleNull: required("StateReceived.SectionOffset")},
+		{field: &sr.SectionNumber, handleNull: func() error { return errorNew("StateReceiver.SectionNumber is required") }},
+		{field: &sr.SectionOffset, handleNull: func() error { return errorNew("StateReceiver.SectionOffset is required") }},
 	}...)
 }
 
@@ -2173,8 +2195,8 @@ type stateModified struct {
 
 func (sm *stateModified) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeStateModified, []marshalField{
-		{value: sm.DeliveryFailed, omit: !sm.DeliveryFailed},
-		{value: sm.UndeliverableHere, omit: !sm.UndeliverableHere},
+		{value: &sm.DeliveryFailed, omit: !sm.DeliveryFailed},
+		{value: &sm.UndeliverableHere, omit: !sm.UndeliverableHere},
 		{value: sm.MessageAnnotations, omit: sm.MessageAnnotations == nil},
 	}...)
 }
@@ -2212,15 +2234,15 @@ func (si *saslInit) link() (uint32, bool) {
 
 func (si *saslInit) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeSASLInit, []marshalField{
-		{value: si.Mechanism, omit: false},
-		{value: si.InitialResponse, omit: len(si.InitialResponse) == 0},
-		{value: si.Hostname, omit: len(si.Hostname) == 0},
+		{value: &si.Mechanism, omit: false},
+		{value: &si.InitialResponse, omit: len(si.InitialResponse) == 0},
+		{value: &si.Hostname, omit: len(si.Hostname) == 0},
 	}...)
 }
 
 func (si *saslInit) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeSASLInit, []unmarshalField{
-		{field: &si.Mechanism, handleNull: required("saslInit.Mechanism")},
+		{field: &si.Mechanism, handleNull: func() error { return errorNew("saslInit.Mechanism is required") }},
 		{field: &si.InitialResponse},
 		{field: &si.Hostname},
 	}...)
@@ -2239,13 +2261,13 @@ type saslMechanisms struct {
 
 func (sm saslMechanisms) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeSASLMechanism, []marshalField{
-		{value: sm.Mechanisms, omit: false},
+		{value: &sm.Mechanisms, omit: false},
 	}...)
 }
 
 func (sm *saslMechanisms) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeSASLMechanism,
-		unmarshalField{field: &sm.Mechanisms, handleNull: required("SASLMechanisms.Mechanisms")},
+		unmarshalField{field: &sm.Mechanisms, handleNull: func() error { return errorNew("saslMechanisms.Mechanisms is required") }},
 	)
 }
 
@@ -2268,20 +2290,90 @@ type saslOutcome struct {
 
 func (so saslOutcome) marshal(wr writer) error {
 	return marshalComposite(wr, typeCodeSASLOutcome, []marshalField{
-		{value: so.Code, omit: false},
-		{value: so.AdditionalData, omit: len(so.AdditionalData) == 0},
+		{value: &so.Code, omit: false},
+		{value: &so.AdditionalData, omit: len(so.AdditionalData) == 0},
 	}...)
 }
 
 func (so *saslOutcome) unmarshal(r reader) error {
 	return unmarshalComposite(r, typeCodeSASLOutcome, []unmarshalField{
-		{field: &so.Code, handleNull: required("SASLOutcome.Code")},
+		{field: &so.Code, handleNull: func() error { return errorNew("saslOutcome.AdditionalData is required") }},
 		{field: &so.AdditionalData},
 	}...)
 }
 
 func (*saslOutcome) link() (uint32, bool) {
 	return 0, false
+}
+
+type symbolSlice []symbol
+
+func (s symbolSlice) marshal(wr writer) error {
+	return writeSymbolArray(wr, s)
+}
+
+type amqpUint16 uint16
+
+func (n amqpUint16) marshal(wr writer) error {
+	err := wr.WriteByte(byte(typeCodeUshort))
+	if err != nil {
+		return err
+	}
+	tmp := make([]byte, 2)
+	binary.BigEndian.PutUint16(tmp, uint16(n))
+	_, err = wr.Write(tmp)
+	return err
+}
+
+type amqpUint32 uint32
+
+func (n amqpUint32) marshal(wr writer) error {
+	return writeUint32(wr, uint32(n))
+}
+
+// symbol is an AMQP symbolic string.
+type amqpString string
+
+func (s amqpString) marshal(wr writer) error {
+	if !utf8.ValidString(string(s)) {
+		return errorNew("not a valid UTF-8 string")
+	}
+	l := len(s)
+
+	switch {
+	// Str8
+	case l < 256:
+		err := wr.WriteByte(byte(typeCodeStr8))
+		if err != nil {
+			return err
+		}
+		err = wr.WriteByte(byte(l))
+		if err != nil {
+			return err
+		}
+		_, err = wr.WriteString(string(s))
+		return err
+
+	// Str32
+	case l < math.MaxUint32:
+		err := wr.WriteByte(byte(typeCodeStr32))
+		if err != nil {
+			return err
+		}
+
+		tmp := make([]byte, 4)
+		binary.BigEndian.PutUint32(tmp, uint32(l))
+		_, err = wr.Write(tmp)
+		if err != nil {
+			return err
+		}
+
+		_, err = wr.WriteString(string(s))
+		return err
+
+	default:
+		return errorNew("too long")
+	}
 }
 
 // symbol is an AMQP symbolic string.
@@ -2294,7 +2386,15 @@ func (s symbol) marshal(wr writer) error {
 	switch {
 	// Sym8
 	case l < 256:
-		_, err = wr.Write(append([]byte{byte(typeCodeSym8), byte(l)}, []byte(s)...))
+		err = wr.WriteByte(byte(typeCodeSym8))
+		if err != nil {
+			return err
+		}
+		err = wr.WriteByte(byte(l))
+		if err != nil {
+			return err
+		}
+		_, err = wr.WriteString(string(s))
 
 	// Sym32
 	case l < math.MaxUint32:
@@ -2302,11 +2402,13 @@ func (s symbol) marshal(wr writer) error {
 		if err != nil {
 			return err
 		}
-		err = binary.Write(wr, binary.BigEndian, uint32(l))
+		tmp := make([]byte, 4)
+		binary.BigEndian.PutUint32(tmp, uint32(l))
+		_, err := wr.Write(tmp)
 		if err != nil {
 			return err
 		}
-		_, err = wr.Write([]byte(s))
+		_, err = wr.WriteString(string(s))
 	default:
 		return errorNew("too long")
 	}
@@ -2335,16 +2437,18 @@ func (m mapAnyAny) marshal(wr writer) error {
 }
 
 func (m *mapAnyAny) unmarshal(r reader) error {
-	mr, err := newMapReader(r)
+	_, count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
 
-	mm := make(mapAnyAny, mr.pairs())
-	for mr.more() {
-		var key interface{}
-		var value interface{}
-		err = mr.next(&key, &value)
+	mm := make(mapAnyAny, count/2)
+	for i := uint8(0); i < count; i += 2 {
+		key, err := readAny(r)
+		if err != nil {
+			return err
+		}
+		value, err := readAny(r)
 		if err != nil {
 			return err
 		}
@@ -2361,7 +2465,6 @@ func (m *mapAnyAny) unmarshal(r reader) error {
 		mm[key] = value
 	}
 	*m = mm
-
 	return nil
 }
 
@@ -2373,22 +2476,25 @@ func (m mapStringAny) marshal(wr writer) error {
 }
 
 func (m *mapStringAny) unmarshal(r reader) error {
-	mr, err := newMapReader(r)
+	_, count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
 
-	mm := make(mapStringAny, mr.pairs())
-	for mr.more() {
-		var key string
-		var value interface{}
-		err = mr.next(&key, &value)
+	mm := make(mapStringAny, count/2)
+	for i := uint8(0); i < count; i += 2 {
+		key, err := readString(r)
+		if err != nil {
+			return err
+		}
+		value, err := readAny(r)
 		if err != nil {
 			return err
 		}
 		mm[key] = value
 	}
 	*m = mm
+
 	return nil
 }
 
@@ -2464,8 +2570,19 @@ const (
 )
 
 func (p lifetimePolicy) marshal(wr writer) error {
-	_, err := wr.Write([]byte{0x0, byte(typeCodeSmallUlong), byte(p), byte(typeCodeList0)})
-	return err
+	err := wr.WriteByte(byte(0x0))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(typeCodeSmallUlong))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(p))
+	if err != nil {
+		return err
+	}
+	return wr.WriteByte(byte(typeCodeList0))
 }
 
 func (p *lifetimePolicy) unmarshal(r reader) error {
