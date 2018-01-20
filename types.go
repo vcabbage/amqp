@@ -1,7 +1,6 @@
 package amqp
 
 import (
-	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
@@ -1900,7 +1899,7 @@ func peekMessageType(buf []byte) (uint8, error) {
 		return 0, errorErrorf("invalid composite header %0x", buf[0])
 	}
 
-	v, err := readInt(bytes.NewBuffer(buf[1:]))
+	v, err := readUlong(&roReader{b: buf[1:]})
 	if err != nil {
 		return 0, err
 	}
