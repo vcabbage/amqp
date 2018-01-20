@@ -452,14 +452,13 @@ func readSymbolArray(r reader) ([]symbol, error) {
 		return nil, err
 	}
 
-	var strs []symbol
+	strs := make([]symbol, lElems)
 	for i := 0; i < lElems; i++ {
 		vari, err := readVariableType(r, amqpType(b))
 		if err != nil {
 			return nil, err
 		}
-
-		strs = append(strs, symbol(vari))
+		strs[i] = symbol(vari)
 	}
 	return strs, nil
 }
@@ -481,7 +480,7 @@ func readBinary(r reader) ([]byte, error) {
 	}
 
 	vari, err := readVariableType(r, amqpType(b))
-	return vari, err
+	return append([]byte(nil), vari...), err // copy bytes as it shares backing with r
 }
 
 func readUUID(r reader) (UUID, error) {
@@ -507,8 +506,10 @@ func readUUID(r reader) (UUID, error) {
 	return uuid, nil
 }
 
+// readVariableType reads binary, strings and symbols
+//
+// returned bytes are only valid until the next use of r.
 func readVariableType(r reader, of amqpType) ([]byte, error) {
-	var buf []byte
 	switch of {
 	case typeCodeNull:
 		return nil, nil
@@ -520,7 +521,7 @@ func readVariableType(r reader, of amqpType) ([]byte, error) {
 		if uint64(n) > uint64(r.Len()) {
 			return nil, errInvalidLength
 		}
-		buf = make([]byte, n)
+		return r.Next(int(n)), nil
 	case typeCodeVbin32, typeCodeStr32, typeCodeSym32:
 		var n uint32
 		err := binary.Read(r, binary.BigEndian, &n)
@@ -530,12 +531,10 @@ func readVariableType(r reader, of amqpType) ([]byte, error) {
 		if uint64(n) > uint64(r.Len()) {
 			return nil, errInvalidLength
 		}
-		buf = make([]byte, n)
+		return r.Next(int(n)), nil
 	default:
 		return nil, errorErrorf("type code %#00x is not a recognized variable length type", of)
 	}
-	_, err := io.ReadFull(r, buf)
-	return buf, err
 }
 
 func readHeaderSlice(r reader) (elements int, _ error) {
@@ -787,7 +786,7 @@ func readTimestamp(r reader) (time.Time, error) {
 	return time.Unix(int64(n)/1000, int64(rem)*1000000).UTC(), err
 }
 
-func readInt(r roReader) (value int, _ error) {
+func readInt(r roReader) (int, error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return 0, err
@@ -874,16 +873,22 @@ func readUint(r reader) (value uint64, _ error) {
 		n, err := r.ReadByte()
 		return uint64(n), err
 	case typeCodeUshort:
-		var n uint16
-		err := binary.Read(r, binary.BigEndian, &n)
+		if r.Len() < 2 {
+			return 0, errorNew("invalid ushort")
+		}
+		n := binary.BigEndian.Uint16(r.Next(2))
 		return uint64(n), err
 	case typeCodeUint:
-		var n uint32
-		err := binary.Read(r, binary.BigEndian, &n)
+		if r.Len() < 4 {
+			return 0, errorNew("invalid uint")
+		}
+		n := binary.BigEndian.Uint32(r.Next(4))
 		return uint64(n), err
 	case typeCodeUlong:
-		var n uint64
-		err := binary.Read(r, binary.BigEndian, &n)
+		if r.Len() < 8 {
+			return 0, errorNew("invalid ulong")
+		}
+		n := binary.BigEndian.Uint64(r.Next(8))
 		return n, err
 
 	default:
@@ -934,6 +939,38 @@ func (mr *mapReader) next(key, value interface{}) error {
 	}
 	mr.read++
 	return nil
+}
+
+func readMapHeader(r reader) (size uint32, count uint8, _ error) {
+	b, err := r.ReadByte()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	switch amqpType(b) {
+	case typeCodeNull:
+		return 0, 0, errNull
+	case typeCodeMap8:
+		bn, err := r.ReadByte()
+		if err != nil {
+			return 0, 0, err
+		}
+		size = uint32(bn)
+	case typeCodeMap32:
+		if r.Len() < 4 {
+			return 0, 0, errInvalidLength
+		}
+		size = binary.BigEndian.Uint32(r.Next(4))
+	default:
+		return 0, 0, errorErrorf("invalid map type %x", b)
+	}
+
+	if uint64(size) > uint64(r.Len()) {
+		return 0, 0, errInvalidLength
+	}
+
+	count, err = r.ReadByte()
+	return size, count, err
 }
 
 func newMapReader(r reader) (*mapReader, error) {
