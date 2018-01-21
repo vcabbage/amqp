@@ -113,17 +113,13 @@ func marshal(wr writer, i interface{}) error {
 		if err != nil {
 			return err
 		}
-		tmp := make([]byte, 2)
-		binary.BigEndian.PutUint16(tmp, t)
-		_, err = wr.Write(tmp)
+		err = binaryWriteUint16(wr, t)
 	case *uint16:
 		err = wr.WriteByte(byte(typeCodeUshort))
 		if err != nil {
 			return err
 		}
-		tmp := make([]byte, 2)
-		binary.BigEndian.PutUint16(tmp, *t)
-		_, err = wr.Write(tmp)
+		err = binaryWriteUint16(wr, *t)
 	case uint8:
 		err = wr.WriteByte(byte(typeCodeUbyte))
 		if err != nil {
@@ -163,17 +159,13 @@ func marshal(wr writer, i interface{}) error {
 		if err != nil {
 			return err
 		}
-		tmp := make([]byte, 2)
-		binary.BigEndian.PutUint16(tmp, uint16(t))
-		_, err = wr.Write(tmp)
+		err = binaryWriteUint16(wr, uint16(t))
 	case *int16:
 		err = wr.WriteByte(byte(typeCodeShort))
 		if err != nil {
 			return err
 		}
-		tmp := make([]byte, 2)
-		binary.BigEndian.PutUint16(tmp, uint16(*t))
-		_, err = wr.Write(tmp)
+		err = binaryWriteUint16(wr, uint16(*t))
 	case int32:
 		return writeInt32(wr, t)
 	case *int32:
@@ -234,9 +226,51 @@ func writeInt32(wr writer, n int32) error {
 		return err
 	}
 
-	tmp := make([]byte, 4)
-	binary.BigEndian.PutUint32(tmp, uint32(n))
-	_, err = wr.Write(tmp)
+	return binaryWriteUint32(wr, uint32(n))
+}
+
+// tricky stuff to reduce allocations, do not modify without
+// benchmarking performance impact
+var (
+	poolByte2 = sync.Pool{
+		New: func() interface{} {
+			s := make([]byte, 2)
+			return &s
+		},
+	}
+	poolByte4 = sync.Pool{
+		New: func() interface{} {
+			s := make([]byte, 4)
+			return &s
+		},
+	}
+	poolByte8 = sync.Pool{
+		New: func() interface{} {
+			s := make([]byte, 8)
+			return &s
+		},
+	}
+)
+
+func binaryWriteUint16(wr writer, n uint16) error {
+	tmp := poolByte2.Get().(*[]byte)
+	binary.BigEndian.PutUint16(*tmp, n)
+	_, err := wr.Write(*tmp)
+	poolByte2.Put(tmp)
+	return err
+}
+func binaryWriteUint32(wr writer, n uint32) error {
+	tmp := poolByte4.Get().(*[]byte)
+	binary.BigEndian.PutUint32(*tmp, n)
+	_, err := wr.Write(*tmp)
+	poolByte4.Put(tmp)
+	return err
+}
+func binaryWriteUint64(wr writer, n uint64) error {
+	tmp := poolByte8.Get().(*[]byte)
+	binary.BigEndian.PutUint64(*tmp, n)
+	_, err := wr.Write(*tmp)
+	poolByte8.Put(tmp)
 	return err
 }
 
@@ -253,9 +287,7 @@ func writeInt64(wr writer, n int64) error {
 	if err != nil {
 		return err
 	}
-	tmp := make([]byte, 8)
-	binary.BigEndian.PutUint64(tmp, uint64(n))
-	_, err = wr.Write(tmp)
+	err = binaryWriteUint64(wr, uint64(n))
 	return err
 }
 
@@ -276,11 +308,7 @@ func writeUint32(wr writer, n uint32) error {
 	if err != nil {
 		return err
 	}
-
-	tmp := make([]byte, 4)
-	binary.BigEndian.PutUint32(tmp, n)
-	_, err = wr.Write(tmp)
-	return err
+	return binaryWriteUint32(wr, n)
 }
 
 func writeUint64(wr writer, n uint64) error {
@@ -302,10 +330,7 @@ func writeUint64(wr writer, n uint64) error {
 		return err
 	}
 
-	tmp := make([]byte, 8)
-	binary.BigEndian.PutUint64(tmp, n)
-	_, err = wr.Write(tmp)
-	return err
+	return binaryWriteUint64(wr, n)
 }
 
 func writeTimestamp(wr writer, t time.Time) error {
@@ -315,10 +340,7 @@ func writeTimestamp(wr writer, t time.Time) error {
 	}
 
 	ms := t.UnixNano() / int64(time.Millisecond)
-	tmp := make([]byte, 8)
-	binary.BigEndian.PutUint64(tmp, uint64(ms))
-	_, err = wr.Write(tmp)
-	return err
+	return binaryWriteUint64(wr, uint64(ms))
 }
 
 // marshalField is a field to be marshaled
@@ -463,9 +485,7 @@ func writeSymbolType(wr writer, sym symbol, typ amqpType) error {
 			return err
 		}
 	case typeCodeSym32:
-		tmp := make([]byte, 4)
-		binary.BigEndian.PutUint32(tmp, uint32(l))
-		_, err := wr.Write(tmp)
+		err := binaryWriteUint32(wr, uint32(l))
 		if err != nil {
 			return err
 		}
@@ -503,9 +523,7 @@ func writeString(wr writer, str string) error {
 			return err
 		}
 
-		tmp := make([]byte, 4)
-		binary.BigEndian.PutUint32(tmp, uint32(l))
-		_, err = wr.Write(tmp)
+		err = binaryWriteUint32(wr, uint32(l))
 		if err != nil {
 			return err
 		}
@@ -542,9 +560,7 @@ func writeBinary(wr writer, bin []byte) error {
 			return err
 		}
 
-		tmp := make([]byte, 4)
-		binary.BigEndian.PutUint32(tmp, uint32(l))
-		_, err = wr.Write(tmp)
+		err = binaryWriteUint32(wr, uint32(l))
 		if err != nil {
 			return err
 		}
@@ -602,14 +618,12 @@ func writeSlice(wr writer, isArray bool, of amqpType, numFields int, size int) e
 			return err
 		}
 
-		tmp := make([]byte, 4)
-		binary.BigEndian.PutUint32(tmp, uint32(size+4))
-		_, err = wr.Write(tmp)
+		err = binaryWriteUint32(wr, uint32(size+4))
 		if err != nil {
 			return err
 		}
-		binary.BigEndian.PutUint32(tmp, uint32(numFields))
-		_, err = wr.Write(tmp)
+
+		err = binaryWriteUint32(wr, uint32(numFields))
 		if err != nil {
 			return err
 		}
@@ -706,9 +720,7 @@ func writeMap(wr writer, m interface{}) error {
 		if err != nil {
 			return err
 		}
-		tmp := make([]byte, 4)
-		binary.BigEndian.PutUint32(tmp, uint32(l))
-		_, err = wr.Write(tmp)
+		err = binaryWriteUint32(wr, uint32(l))
 		if err != nil {
 			return err
 		}
