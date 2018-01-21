@@ -229,49 +229,60 @@ func writeInt32(wr writer, n int32) error {
 	return binaryWriteUint32(wr, uint32(n))
 }
 
-// tricky stuff to reduce allocations, do not modify without
-// benchmarking performance impact
-var (
-	poolByte2 = sync.Pool{
-		New: func() interface{} {
-			s := make([]byte, 2)
-			return &s
-		},
-	}
-	poolByte4 = sync.Pool{
-		New: func() interface{} {
-			s := make([]byte, 4)
-			return &s
-		},
-	}
-	poolByte8 = sync.Pool{
-		New: func() interface{} {
-			s := make([]byte, 8)
-			return &s
-		},
-	}
-)
-
 func binaryWriteUint16(wr writer, n uint16) error {
-	tmp := poolByte2.Get().(*[]byte)
-	binary.BigEndian.PutUint16(*tmp, n)
-	_, err := wr.Write(*tmp)
-	poolByte2.Put(tmp)
-	return err
+	err := wr.WriteByte(byte(n >> 8))
+	if err != nil {
+		return err
+	}
+	return wr.WriteByte(byte(n))
 }
+
 func binaryWriteUint32(wr writer, n uint32) error {
-	tmp := poolByte4.Get().(*[]byte)
-	binary.BigEndian.PutUint32(*tmp, n)
-	_, err := wr.Write(*tmp)
-	poolByte4.Put(tmp)
-	return err
+	err := wr.WriteByte(byte(n >> 24))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(n >> 16))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(n >> 8))
+	if err != nil {
+		return err
+	}
+	return wr.WriteByte(byte(n))
 }
+
 func binaryWriteUint64(wr writer, n uint64) error {
-	tmp := poolByte8.Get().(*[]byte)
-	binary.BigEndian.PutUint64(*tmp, n)
-	_, err := wr.Write(*tmp)
-	poolByte8.Put(tmp)
-	return err
+	err := wr.WriteByte(byte(n >> 56))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(n >> 48))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(n >> 40))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(n >> 32))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(n >> 24))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(n >> 16))
+	if err != nil {
+		return err
+	}
+	err = wr.WriteByte(byte(n >> 8))
+	if err != nil {
+		return err
+	}
+	return wr.WriteByte(byte(n))
 }
 
 func writeInt64(wr writer, n int64) error {
