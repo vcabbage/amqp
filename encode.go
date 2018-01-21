@@ -5,7 +5,6 @@ import (
 	"encoding/binary"
 	"io"
 	"math"
-	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -24,13 +23,6 @@ type writer interface {
 	WriteString(s string) (n int, err error)
 	Len() int
 	Bytes() []byte
-}
-
-// bufPool is used to reduce allocations when encoding.
-var bufPool = sync.Pool{
-	New: func() interface{} {
-		return new(bytes.Buffer)
-	},
 }
 
 // writesFrame encodes fr into buf.
@@ -475,22 +467,43 @@ func writeSymbolArray(wr writer, symbols []symbol) error {
 		}
 	}
 
-	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
+	// always using array32 might waste a couple bytes,
+	// but it simplifies overwriting the size later
+	err := wr.WriteByte(byte(typeCodeArray32))
+	if err != nil {
+		return err
+	}
 
+	// temp size, overwrite later
+	sizeIdx := wr.Len()
+	err = binaryWriteUint32(wr, 0)
+	if err != nil {
+		return err
+	}
+
+	// length
+	preArrayLen := wr.Len()
+	err = binaryWriteUint32(wr, uint32(len(symbols)))
+	if err != nil {
+		return err
+	}
+
+	// array type
+	err = wr.WriteByte(byte(ofType))
+	if err != nil {
+		return err
+	}
+
+	// write symbols
 	for _, symbol := range symbols {
-		err := writeSymbolType(buf, symbol, ofType)
+		err := writeSymbolType(wr, symbol, ofType)
 		if err != nil {
 			return err
 		}
 	}
 
-	err := writeArray(wr, ofType, len(symbols), buf.Len())
-	if err != nil {
-		return err
-	}
-
-	_, err = buf.WriteTo(wr)
+	// overwrite the size
+	binary.BigEndian.PutUint32(wr.Bytes()[sizeIdx:], uint32(wr.Len()-preArrayLen))
 	return err
 }
 
