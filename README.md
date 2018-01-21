@@ -26,9 +26,7 @@ go get -u pack.ag/amqp
 
 ## Contributing
 
-This repo is not yet ready to accept outside contributions, but I hope to be in a position to do so very soon.
-
-**If you find an bug or other area you would like to work on, please open an issue so we can discuss it.**
+I'm happy to accept contributions. A proper `CONTRIBUTING.md` is in the works. In the interim **please open an issue before beginning work** so we can discuss it. I want to ensure there is no duplication of effort and that any new functionality fits with the goals of the project.
 
 ## Example Usage
 
