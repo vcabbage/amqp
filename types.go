@@ -2319,10 +2319,7 @@ func (n amqpUint16) marshal(wr writer) error {
 	if err != nil {
 		return err
 	}
-	tmp := make([]byte, 2)
-	binary.BigEndian.PutUint16(tmp, uint16(n))
-	_, err = wr.Write(tmp)
-	return err
+	return binaryWriteUint16(wr, uint16(n))
 }
 
 type amqpUint32 uint32
@@ -2361,9 +2358,7 @@ func (s amqpString) marshal(wr writer) error {
 			return err
 		}
 
-		tmp := make([]byte, 4)
-		binary.BigEndian.PutUint32(tmp, uint32(l))
-		_, err = wr.Write(tmp)
+		err = binaryWriteUint32(wr, uint32(l))
 		if err != nil {
 			return err
 		}
@@ -2402,12 +2397,12 @@ func (s symbol) marshal(wr writer) error {
 		if err != nil {
 			return err
 		}
-		tmp := make([]byte, 4)
-		binary.BigEndian.PutUint32(tmp, uint32(l))
-		_, err := wr.Write(tmp)
+
+		err = binaryWriteUint32(wr, uint32(l))
 		if err != nil {
 			return err
 		}
+
 		_, err = wr.WriteString(string(s))
 	default:
 		return errorNew("too long")
