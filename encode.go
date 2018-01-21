@@ -33,15 +33,20 @@ var bufPool = sync.Pool{
 
 // writesFrame encodes fr into buf.
 func writeFrame(buf *bytes.Buffer, fr frame) error {
-	header := frameHeader{
-		Size:       0, // overwrite later
-		DataOffset: 2, // see frameHeader.DataOffset comment
-		FrameType:  fr.typ,
-		Channel:    fr.channel,
-	}
-
 	// write header
-	err := binary.Write(buf, binary.BigEndian, header)
+	_, err := buf.Write([]byte{0, 0, 0, 0}) // size, overwrite later
+	if err != nil {
+		return err
+	}
+	err = buf.WriteByte(2) // doff, see frameHeader.DataOffset comment
+	if err != nil {
+		return err
+	}
+	err = buf.WriteByte(fr.typ) // frame type
+	if err != nil {
+		return err
+	}
+	err = binaryWriteUint16(buf, fr.channel) // channel
 	if err != nil {
 		return err
 	}

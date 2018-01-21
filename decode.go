@@ -21,10 +21,17 @@ type reader interface {
 // parseFrameHeader reads the header from r and returns the result.
 //
 // No validation is done.
-func parseFrameHeader(r io.Reader) (frameHeader, error) {
-	var fh frameHeader
-	err := binary.Read(r, binary.BigEndian, &fh)
-	return fh, err
+func parseFrameHeader(r reader) (frameHeader, error) {
+	if r.Len() < 8 {
+		return frameHeader{}, errorNew("invalid frameHeader")
+	}
+	b := r.Next(8)
+	return frameHeader{
+		Size:       binary.BigEndian.Uint32(b[0:4]),
+		DataOffset: b[4],
+		FrameType:  b[5],
+		Channel:    binary.BigEndian.Uint16(b[6:8]),
+	}, nil
 }
 
 // parseProtoHeader reads the proto header from r and returns the results
@@ -63,36 +70,54 @@ func parseFrameBody(r reader) (frameBody, error) {
 		return nil, err
 	}
 
-	var t frameBody
 	switch pType {
 	case typeCodeOpen:
-		t = new(performOpen)
+		t := new(performOpen)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeBegin:
-		t = new(performBegin)
+		t := new(performBegin)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeAttach:
-		t = new(performAttach)
+		t := new(performAttach)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeFlow:
-		t = new(performFlow)
+		t := new(performFlow)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeTransfer:
-		t = new(performTransfer)
+		t := new(performTransfer)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeDisposition:
-		t = new(performDisposition)
+		t := new(performDisposition)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeDetach:
-		t = new(performDetach)
+		t := new(performDetach)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeEnd:
-		t = new(performEnd)
+		t := new(performEnd)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeClose:
-		t = new(performClose)
+		t := new(performClose)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeSASLMechanism:
-		t = new(saslMechanisms)
+		t := new(saslMechanisms)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeSASLOutcome:
-		t = new(saslOutcome)
+		t := new(saslOutcome)
+		err := t.unmarshal(r)
+		return t, err
 	default:
 		return nil, errorErrorf("unknown preformative type %0x", pType)
 	}
-
-	_, err = unmarshal(r, t)
-	return t, err
 }
 
 // unmarshaler is fulfilled by types that can unmarshal
