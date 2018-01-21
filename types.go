@@ -145,6 +145,16 @@ const (
 	frameHeaderSize = 8
 )
 
+func newProtoHeader(pID protoID) *protoHeader {
+	return &protoHeader{
+		Proto:    [4]byte{'A', 'M', 'Q', 'P'},
+		ProtoID:  pID,
+		Major:    1,
+		Minor:    0,
+		Revision: 0,
+	}
+}
+
 // protoHeader in a structure appropriate for use with binary.Read()
 type protoHeader struct {
 	Proto    [4]byte
@@ -152,6 +162,23 @@ type protoHeader struct {
 	Major    uint8
 	Minor    uint8
 	Revision uint8
+}
+
+func (p *protoHeader) Bytes() []byte {
+	return []byte{
+		p.Proto[0],
+		p.Proto[1],
+		p.Proto[2],
+		p.Proto[3],
+		byte(p.ProtoID),
+		p.Major,
+		p.Minor,
+		p.Revision,
+	}
+}
+
+func (p *protoHeader) String() string {
+	return fmt.Sprintf("%s%%d%d.%d.%d.%d", p.Proto, p.ProtoID, p.Major, p.Minor, p.Revision)
 }
 
 // frame is the decoded representation of a frame
