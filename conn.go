@@ -39,6 +39,17 @@ func ConnServerHostname(hostname string) ConnOption {
 	}
 }
 
+// ConnSkipTLSNegotiation skips TLS negotiation, the TCP connection
+// is first overlaid with TLS before entering the AMQP protocol handshake.
+//
+// A hackfix solution for brokers that do not follow the AMQP 1.0 specification.
+func ConnSkipTLSNegotiation() ConnOption {
+	return func(c *conn) error {
+		c.tlsSkipNegotiation = true
+		return nil
+	}
+}
+
 // ConnTLS toggles TLS negotiation.
 //
 // Default: false.
@@ -137,9 +148,10 @@ type conn struct {
 	resumeRead     chan struct{} // connReader reads from channel while paused, until channel is closed
 
 	// TLS
-	tlsNegotiation bool        // negotiate TLS
-	tlsComplete    bool        // TLS negotiation complete
-	tlsConfig      *tls.Config // TLS config, default used if nil (ServerName set to Client.hostname)
+	tlsSkipNegotiation bool        // establish TLS without negotiating
+	tlsNegotiation     bool        // negotiate TLS
+	tlsComplete        bool        // TLS negotiation complete
+	tlsConfig          *tls.Config // TLS config, default used if nil (ServerName set to Client.hostname)
 
 	// SASL
 	saslHandlers map[symbol]stateFunc // map of supported handlers keyed by SASL mechanism, SASL not negotiated if nil
@@ -392,22 +404,34 @@ func (c *conn) connReader() {
 
 	// frameReader facilitates reading directly into buf
 	fr := &frameReader{r: c.net}
+	tryUpdate := func() bool {
+		if atomic.LoadInt32(&c.pauseRead) == 1 {
+			// need to stop reading during TLS negotiation,
+			// see conn.startTLS()
+			c.pauseRead = 0
+			for range c.resumeRead {
+				// reads indicate paused, resume on close
+			}
+			fr.r = c.net // conn wrapped with TLS
+			return true
+		}
+		return false
+	}
 
 	for {
 		// need to read more if buf doesn't contain the complete frame
 		// or there's not enough in buf to parse the header
 		if frameInProgress || buf.Len() < frameHeaderSize {
+			// need to check it here because c.net can already
+			// be updated in a separate goroutine, because no io was needed.
+			if c.tlsSkipNegotiation && tryUpdate() {
+				continue
+			}
+
 			c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
 			_, err := buf.ReadFrom(fr)
 			if err != nil {
-				if atomic.LoadInt32(&c.pauseRead) == 1 {
-					// need to stop reading during TLS negotiation,
-					// see conn.startTLS()
-					c.pauseRead = 0
-					for range c.resumeRead {
-						// reads indicate paused, resume on close
-					}
-					fr.r = c.net // conn wrapped with TLS
+				if tryUpdate() {
 					continue
 				}
 
@@ -446,6 +470,7 @@ func (c *conn) connReader() {
 			case <-c.done:
 				return
 			case c.rxProto <- p:
+				debug(1, "recv header %s", p.String())
 			}
 
 			continue
@@ -584,7 +609,10 @@ func (c *conn) writeProtoHeader(pID protoID) error {
 	if c.connectTimeout != 0 {
 		c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
 	}
-	_, err := c.net.Write([]byte{'A', 'M', 'Q', 'P', byte(pID), 1, 0, 0})
+
+	p := newProtoHeader(pID)
+	debug(1, "send header %s", p.String())
+	_, err := c.net.Write(p.Bytes())
 	return err
 }
 
@@ -631,6 +659,11 @@ const (
 // exchangeProtoHeader performs the round trip exchange of protocol
 // headers, validation, and returns the protoID specific next state.
 func (c *conn) exchangeProtoHeader(pID protoID) stateFunc {
+	// start tls session immediately without negotiating.
+	if pID == protoTLS && c.tlsSkipNegotiation {
+		return c.startTLS
+	}
+
 	// write the proto header
 	c.err = c.writeProtoHeader(pID)
 	if c.err != nil {

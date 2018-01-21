@@ -45,6 +45,7 @@ func Dial(addr string, opts ...ConnOption) (*Client, error) {
 		return nil, errorErrorf("unsupported scheme %q", u.Scheme)
 	}
 
+	debug(1, "dial %s", host+":"+port)
 	conn, err := net.Dial("tcp", host+":"+port)
 	if err != nil {
 		return nil, err
