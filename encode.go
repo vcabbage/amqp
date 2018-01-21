@@ -22,6 +22,8 @@ type writer interface {
 	io.Writer
 	io.ByteWriter
 	WriteString(s string) (n int, err error)
+	Len() int
+	Bytes() []byte
 }
 
 // bufPool is used to reduce allocations when encoding.
@@ -406,22 +408,6 @@ func marshalComposite(wr writer, code amqpType, fields ...marshalField) error {
 		return err
 	}
 
-	buf := bufPool.Get().(*bytes.Buffer)
-	defer bufPool.Put(buf)
-	buf.Reset()
-
-	// write null to each index up to lastSetIdx
-	for _, f := range fields[:lastSetIdx+1] {
-		if f.omit {
-			buf.WriteByte(byte(typeCodeNull))
-			continue
-		}
-		err := marshal(buf, f.value)
-		if err != nil {
-			return err
-		}
-	}
-
 	// write header
 	err := writeDescriptor(wr, code)
 	if err != nil {
@@ -429,12 +415,42 @@ func marshalComposite(wr writer, code amqpType, fields ...marshalField) error {
 	}
 
 	// write fields
-	err = writeList(wr, lastSetIdx+1, buf.Len())
+	err = wr.WriteByte(byte(typeCodeList32))
 	if err != nil {
 		return err
 	}
 
-	_, err = buf.WriteTo(wr)
+	// write temp size, replace later
+	sizeIdx := wr.Len()
+	err = binaryWriteUint32(wr, 0)
+	if err != nil {
+		return err
+	}
+	preFieldLen := wr.Len()
+
+	// field count
+	err = binaryWriteUint32(wr, uint32(lastSetIdx+1))
+	if err != nil {
+		return err
+	}
+
+	// write null to each index up to lastSetIdx
+	for _, f := range fields[:lastSetIdx+1] {
+		if f.omit {
+			wr.WriteByte(byte(typeCodeNull))
+			continue
+		}
+		err := marshal(wr, f.value)
+		if err != nil {
+			return err
+		}
+	}
+
+	// fix size
+	size := uint32(wr.Len() - preFieldLen)
+	buf := wr.Bytes()
+	binary.BigEndian.PutUint32(buf[sizeIdx:], size)
+
 	return err
 }
 
