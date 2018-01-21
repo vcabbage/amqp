@@ -24,6 +24,12 @@ API is subject to change until 1.0.0. If you choose to use this library, please 
 go get -u pack.ag/amqp
 ```
 
+## Contributing
+
+This repo is not yet ready to accept outside contributions, but I hope to be in a position to do so very soon.
+
+**If you find an bug or other area you would like to work on, please open an issue so we can discuss it.**
+
 ## Example Usage
 
 ``` go
