@@ -33,6 +33,7 @@ func init() {
 }
 
 var (
+	isForkPR       = os.Getenv("CI") != "" && os.Getenv("SERVICEBUS_ACCESS_KEY") == ""
 	subscriptionID = mustGetenv("AZURE_SUBSCRIPTION_ID")
 	resourceGroup  = mustGetenv("AZURE_RESOURCE_GROUP")
 	tenantID       = mustGetenv("AZURE_TENANT_ID")
@@ -330,6 +331,8 @@ func newClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Client
 }
 
 func newTestQueue(tb testing.TB, suffix string) (string, servicebus.QueuesClient, func()) {
+	shouldRunIntegration(tb)
+
 	queueName := "integration-" + suffix + "-" + strconv.FormatUint(rand.Uint64(), 10)
 	tb.Log("Creating queue", queueName)
 
@@ -363,10 +366,16 @@ func newTestQueue(tb testing.TB, suffix string) (string, servicebus.QueuesClient
 
 func mustGetenv(key string) string {
 	v := os.Getenv(key)
-	if v == "" {
+	if v == "" && !isForkPR {
 		panic("Environment variable '" + key + "' required for integration tests.")
 	}
 	return v
+}
+
+func shouldRunIntegration(tb testing.TB) {
+	if isForkPR {
+		tb.Skip("skipping integration test in PR")
+	}
 }
 
 func repeatStrings(count int, strs ...string) []string {
