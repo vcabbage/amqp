@@ -1028,34 +1028,41 @@ func readUint(r reader) (value uint64, _ error) {
 	}
 }
 
-func readMapHeader(r reader) (size uint32, count uint8, _ error) {
+func readMapHeader(r reader) (size uint32, count uint32, _ error) {
 	b, err := r.ReadByte()
 	if err != nil {
 		return 0, 0, err
 	}
 
+	var width int
 	switch amqpType(b) {
 	case typeCodeNull:
 		return 0, 0, errNull
 	case typeCodeMap8:
-		bn, err := r.ReadByte()
+		b, err = r.ReadByte()
 		if err != nil {
 			return 0, 0, err
 		}
-		size = uint32(bn)
+		size = uint32(b)
+		b, err = r.ReadByte()
+		if err != nil {
+			return 0, 0, err
+		}
+		count = uint32(b)
+		width = 1
 	case typeCodeMap32:
-		if r.Len() < 4 {
+		if r.Len() < 8 { // two uint32's
 			return 0, 0, errInvalidLength
 		}
 		size = binary.BigEndian.Uint32(r.Next(4))
+		count = binary.BigEndian.Uint32(r.Next(4))
+		width = 4
 	default:
 		return 0, 0, errorErrorf("invalid map type %x", b)
 	}
 
-	if uint64(size) > uint64(r.Len()) {
+	if uint64(size) > uint64(r.Len()+width) {
 		return 0, 0, errInvalidLength
 	}
-
-	count, err = r.ReadByte()
 	return size, count, err
 }

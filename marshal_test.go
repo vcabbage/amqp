@@ -362,6 +362,21 @@ var exampleTypes = []interface{}{
 			},
 		},
 	},
+	&performDetach{
+		Handle: 4352,
+		Closed: true,
+		Error: &Error{
+			Condition:   ErrorLinkRedirect,
+			Description: "",
+			// payload is bigger than map8 encoding size
+			Info: map[string]interface{}{
+				"hostname":     "redirected.myservicebus.example.org",
+				"network-host": "redirected.myservicebus.example.org",
+				"port":         5671,
+				"address":      "amqps://redirected.myservicebus.example.org:5671/path",
+			},
+		},
+	},
 	ErrorCondition("the condition"),
 	&Error{
 		Condition:   ErrorNotAllowed,

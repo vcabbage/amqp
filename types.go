@@ -581,7 +581,7 @@ func (u *unsettled) unmarshal(r reader) error {
 	}
 
 	m := make(unsettled, count/2)
-	for i := uint8(0); i < count; i += 2 {
+	for i := uint32(0); i < count; i += 2 {
 		key, err := readString(r)
 		if err != nil {
 			return err
@@ -2438,7 +2438,7 @@ func (m *mapAnyAny) unmarshal(r reader) error {
 	}
 
 	mm := make(mapAnyAny, count/2)
-	for i := uint8(0); i < count; i += 2 {
+	for i := uint32(0); i < count; i += 2 {
 		key, err := readAny(r)
 		if err != nil {
 			return err
@@ -2477,7 +2477,7 @@ func (m *mapStringAny) unmarshal(r reader) error {
 	}
 
 	mm := make(mapStringAny, count/2)
-	for i := uint8(0); i < count; i += 2 {
+	for i := uint32(0); i < count; i += 2 {
 		key, err := readString(r)
 		if err != nil {
 			return err
@@ -2507,7 +2507,7 @@ func (f *mapSymbolAny) unmarshal(r reader) error {
 	}
 
 	m := make(mapSymbolAny, count/2)
-	for i := uint8(0); i < count; i += 2 {
+	for i := uint32(0); i < count; i += 2 {
 		key, err := readString(r)
 		if err != nil {
 			return err
