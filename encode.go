@@ -745,27 +745,27 @@ func writeMap(wr writer, m interface{}) error {
 	}
 
 	pairs := length * 2
-	if pairs > 255 {
+	if pairs > math.MaxUint32-4 {
 		return errorNew("map contains too many elements")
 	}
 
-	l := buf.Len() + 1 // +1 for pairs byte
+	l := buf.Len()
 	switch {
-	case l < 256:
-		err := wr.WriteByte(byte(typeCodeMap8))
+	case l+1 <= math.MaxUint8:
+		_, err := wr.Write([]byte{byte(typeCodeMap8), byte(l + 1), byte(pairs)})
 		if err != nil {
 			return err
 		}
-		err = wr.WriteByte(byte(l))
-		if err != nil {
-			return err
-		}
-	case l < math.MaxUint32:
+	case l+4 <= math.MaxUint32:
 		err := wr.WriteByte(byte(typeCodeMap32))
 		if err != nil {
 			return err
 		}
-		err = binaryWriteUint32(wr, uint32(l))
+		err = binaryWriteUint32(wr, uint32(l+4))
+		if err != nil {
+			return err
+		}
+		err = binaryWriteUint32(wr, uint32(pairs))
 		if err != nil {
 			return err
 		}
@@ -773,11 +773,6 @@ func writeMap(wr writer, m interface{}) error {
 		return errorNew("map too large")
 	}
 
-	err := wr.WriteByte(uint8(pairs))
-	if err != nil {
-		return err
-	}
-
-	_, err = buf.WriteTo(wr)
+	_, err := buf.WriteTo(wr)
 	return err
 }
