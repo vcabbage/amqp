@@ -88,7 +88,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+			checkLeaks := leaktest.CheckTimeout(t, 300*time.Second)
 
 			// Create client
 			client := newClient(t, tt.label,
@@ -121,11 +121,9 @@ func TestIntegrationRoundTrip(t *testing.T) {
 					defer sender.Close()
 
 					for i, data := range tt.data {
-						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-						err = sender.Send(ctx, &amqp.Message{
+						err = sender.Send(context.Background(), &amqp.Message{
 							Data: []byte(data),
 						})
-						cancel()
 						if err != nil {
 							sendErr = fmt.Errorf("Error after %d sends: %+v", i, err)
 							return
@@ -150,9 +148,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 					defer receiver.Close()
 
 					for i, data := range tt.data {
-						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-						msg, err := receiver.Receive(ctx)
-						cancel()
+						msg, err := receiver.Receive(context.Background())
 						if err != nil {
 							receiveErr = fmt.Errorf("Error after %d receives: %+v", i, err)
 							return
@@ -218,7 +214,7 @@ func TestIntegrationSend(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+			checkLeaks := leaktest.CheckTimeout(t, 300*time.Second)
 
 			// Create client
 			client := newClient(t, tt.label)
@@ -239,11 +235,9 @@ func TestIntegrationSend(t *testing.T) {
 			}
 
 			for i, data := range tt.data {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				err = sender.Send(ctx, &amqp.Message{
+				err = sender.Send(context.Background(), &amqp.Message{
 					Data: []byte(data),
 				})
-				cancel()
 				if err != nil {
 					t.Fatalf("Error after %d sends: %+v", i, err)
 					return
