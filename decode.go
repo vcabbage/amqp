@@ -2,7 +2,9 @@ package amqp
 
 import (
 	"encoding/binary"
+	"errors"
 	"io"
+	"math"
 	"reflect"
 	"time"
 )
@@ -17,6 +19,9 @@ type reader interface {
 	Len() int
 	Next(int) []byte
 }
+
+// sentinel error indicating that a decoded value is null
+var errNull = errors.New("error is null")
 
 // parseFrameHeader reads the header from r and returns the result.
 //
@@ -116,7 +121,7 @@ func parseFrameBody(r reader) (frameBody, error) {
 		err := t.unmarshal(r)
 		return t, err
 	default:
-		return nil, errorErrorf("unknown preformative type %0x", pType)
+		return nil, errorErrorf("unknown preformative type %02x", pType)
 	}
 }
 
@@ -169,65 +174,71 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 		}
 		*t = val
 	case *int8:
-		val, err := readInt(r)
+		val, err := readSbyte(r)
 		if err != nil {
 			return isNull, err
 		}
-		*t = int8(val)
+		*t = val
 	case *int16:
-		val, err := readInt(r)
+		val, err := readShort(r)
 		if err != nil {
 			return isNull, err
 		}
-		*t = int16(val)
+		*t = val
 	case *int32:
-		val, err := readInt(r)
+		val, err := readInt32(r)
 		if err != nil {
 			return isNull, err
 		}
-		*t = int32(val)
+		*t = val
 	case *int64:
-		val, err := readInt(r)
+		val, err := readLong(r)
 		if err != nil {
 			return isNull, err
 		}
-		*t = int64(val)
+		*t = val
 	case *uint64:
-		val, err := readUint(r)
+		val, err := readUlong(r)
 		if err != nil {
 			return isNull, err
 		}
 		*t = val
 	case *uint32:
-		val, err := readUint(r)
+		val, err := readUint32(r)
 		if err != nil {
 			return isNull, err
 		}
-		*t = uint32(val)
+		*t = val
 	case *uint16:
-		val, err := readUint(r)
+		val, err := readUshort(r)
 		if err != nil {
 			return isNull, err
 		}
-		*t = uint16(val)
+		*t = val
 	case *uint8:
-		val, err := readUint(r)
+		val, err := readUbyte(r)
 		if err != nil {
 			return isNull, err
 		}
-		*t = uint8(val)
+		*t = val
+	case *float32:
+		val, err := readFloat(r)
+		if err != nil {
+			return isNull, err
+		}
+		*t = val
+	case *float64:
+		val, err := readDouble(r)
+		if err != nil {
+			return isNull, err
+		}
+		*t = val
 	case *string:
 		val, err := readString(r)
 		if err != nil {
 			return isNull, err
 		}
 		*t = val
-	case *[]symbol:
-		sa, err := readSymbolArray(r)
-		if err != nil {
-			return isNull, err
-		}
-		*t = sa
 	case *symbol:
 		s, err := readString(r)
 		if err != nil {
@@ -252,6 +263,86 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 			return isNull, err
 		}
 		*t = ts
+	case *[]int8:
+		err = (*arrayInt8)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]uint16:
+		err = (*arrayUint16)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]int16:
+		err = (*arrayInt16)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]uint32:
+		err = (*arrayUint32)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]int32:
+		err = (*arrayInt32)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]uint64:
+		err = (*arrayUint64)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]int64:
+		err = (*arrayInt64)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]float32:
+		err = (*arrayFloat)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]float64:
+		err = (*arrayDouble)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]bool:
+		err = (*arrayBool)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]string:
+		err = (*arrayString)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]symbol:
+		err = (*arraySymbol)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[][]byte:
+		err = (*arrayBinary)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]time.Time:
+		err = (*arrayTimestamp)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]UUID:
+		err = (*arrayUUID)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
+	case *[]interface{}:
+		err = (*list)(t).unmarshal(r)
+		if err != nil {
+			return isNull, err
+		}
 	case *map[interface{}]interface{}:
 		return isNull, (*mapAnyAny)(t).unmarshal(r)
 	case *map[string]interface{}:
@@ -259,7 +350,7 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 	case *map[symbol]interface{}:
 		return isNull, (*mapSymbolAny)(t).unmarshal(r)
 	case *deliveryState:
-		typ, err := peekMessageType(r.Bytes())
+		type_, err := peekMessageType(r.Bytes())
 		if err != nil {
 			if err == errNull {
 				_, err = r.ReadByte() // if null, discard nullCode
@@ -268,7 +359,7 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 			return false, err
 		}
 
-		switch amqpType(typ) {
+		switch amqpType(type_) {
 		case typeCodeStateAccepted:
 			*t = &stateAccepted{}
 		case typeCodeStateModified:
@@ -280,7 +371,7 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 		case typeCodeStateReleased:
 			*t = &stateReleased{}
 		default:
-			return false, errorErrorf("unexpected type %d for deliveryState", typ)
+			return false, errorErrorf("unexpected type %d for deliveryState", type_)
 		}
 		return unmarshal(r, *t)
 
@@ -301,11 +392,11 @@ func unmarshal(r reader, i interface{}) (isNull bool, err error) {
 
 		// if the value being unmarshaled is null,
 		// skip the rest and set to nil
-		b, err := r.ReadByte()
+		type_, err := r.ReadByte()
 		if err != nil {
 			return isNull, err
 		}
-		if amqpType(b) == typeCodeNull {
+		if amqpType(type_) == typeCodeNull {
 			v.Set(reflect.Zero(v.Type()))
 			return true, nil
 		}
@@ -389,19 +480,19 @@ type nullHandler func() error
 //
 // If the composite is null, errNull will be returned.
 func readCompositeHeader(r reader) (_ amqpType, fields int, _ error) {
-	byt, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, 0, err
 	}
 
 	// could be null instead of a composite header
-	if amqpType(byt) == typeCodeNull {
+	if amqpType(type_) == typeCodeNull {
 		return 0, 0, errNull
 	}
 
 	// compsites always start with 0x0
-	if byt != 0 {
-		return 0, 0, errorErrorf("invalid composite header %0x", byt)
+	if type_ != 0 {
+		return 0, 0, errorErrorf("invalid composite header %#02x", type_)
 	}
 
 	// next, the composite type is encoded as an AMQP uint8
@@ -411,403 +502,542 @@ func readCompositeHeader(r reader) (_ amqpType, fields int, _ error) {
 	}
 
 	// fields are represented as a list
-	fields, err = readHeaderSlice(r)
+	_, fields, err = readListHeader(r)
 
 	return amqpType(v), fields, err
 }
 
-func readSymbolArray(r reader) ([]symbol, error) {
-	lElems, err := readHeaderSlice(r)
+func readListHeader(r reader) (size, length int, _ error) {
+	type_, err := r.ReadByte()
 	if err != nil {
-		return nil, err
+		return 0, 0, err
 	}
 
-	b, err := r.ReadByte()
-	if err != nil {
-		return nil, err
-	}
+	listLength := r.Len()
 
-	strs := make([]symbol, lElems)
-	for i := 0; i < lElems; i++ {
-		vari, err := readVariableType(r, amqpType(b))
-		if err != nil {
-			return nil, err
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, 0, errNull
+	case typeCodeList0:
+		return 0, 0, nil
+	case typeCodeList8:
+		if listLength < 2 {
+			return 0, 0, errorNew("invalid length")
 		}
-		strs[i] = symbol(vari)
+		buf := r.Next(2)
+		size = int(buf[0])
+		if int(size) > listLength-1 {
+			return 0, 0, errorNew("invalid length")
+		}
+		length = int(buf[1])
+	case typeCodeList32:
+		if listLength < 8 {
+			return 0, 0, errorNew("invalid length")
+		}
+		buf := r.Next(8)
+		size = int(binary.BigEndian.Uint32(buf[:4]))
+		if size > listLength-4 {
+			return 0, 0, errorNew("invalid length")
+		}
+		length = int(binary.BigEndian.Uint32(buf[4:]))
+	default:
+		return 0, 0, errorErrorf("type code %#02x is not a recognized list type", type_)
 	}
-	return strs, nil
+
+	return size, length, nil
+}
+
+func readArrayHeader(r reader) (size, length int, _ error) {
+	type_, err := r.ReadByte()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	arrayLength := r.Len()
+
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, 0, errNull
+	case typeCodeArray8:
+		if arrayLength < 2 {
+			return 0, 0, errorNew("invalid length")
+		}
+		bytes := r.Next(2)
+		size = int(bytes[0])
+		if int(size) > arrayLength-1 {
+			return 0, 0, errorNew("invalid length")
+		}
+		length = int(bytes[1])
+	case typeCodeArray32:
+		if arrayLength < 8 {
+			return 0, 0, errorNew("invalid length")
+		}
+		l := binary.BigEndian.Uint32(r.Next(4))
+		if int(l) > arrayLength-4 {
+			return 0, 0, errorErrorf("invalid length for type %02x", type_)
+		}
+		length = int(binary.BigEndian.Uint32(r.Next(4)))
+	default:
+		return 0, 0, errorErrorf("type code %#02x is not a recognized list type", type_)
+	}
+	return size, length, nil
 }
 
 func readString(r reader) (string, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return "", err
 	}
 
-	vari, err := readVariableType(r, amqpType(b))
-	return string(vari), err
+	var length int
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return "", errNull
+	case typeCodeStr8, typeCodeSym8:
+		n, err := r.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		length = int(n)
+	case typeCodeStr32, typeCodeSym32:
+		if r.Len() < 4 {
+			return "", errorErrorf("invalid length for type %#02x", type_)
+		}
+		length = int(binary.BigEndian.Uint32(r.Next(4)))
+	default:
+		return "", errorErrorf("type code %#02x is not a recognized string type", type_)
+	}
+
+	if length > r.Len() {
+		return "", errorNew("invalid length")
+	}
+	return string(r.Next(length)), nil
 }
 
 func readBinary(r reader) ([]byte, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return nil, err
 	}
 
-	vari, err := readVariableType(r, amqpType(b))
-	return append([]byte(nil), vari...), err // copy bytes as it shares backing with r
-}
-
-func readUUID(r reader) (UUID, error) {
-	var uuid UUID
-
-	b, err := r.ReadByte()
-	if err != nil {
-		return uuid, err
-	}
-
-	if amqpType(b) != typeCodeUUID {
-		return uuid, errorErrorf("type code %#00x is not a UUID", b)
-	}
-
-	n, err := r.Read(uuid[:])
-	if err != nil {
-		return uuid, err
-	}
-	if n != 16 {
-		return uuid, errInvalidLength
-	}
-
-	return uuid, nil
-}
-
-// readVariableType reads binary, strings and symbols
-//
-// returned bytes are only valid until the next use of r.
-func readVariableType(r reader, of amqpType) ([]byte, error) {
-	switch of {
+	var length int
+	switch amqpType(type_) {
 	case typeCodeNull:
-		return nil, nil
-	case typeCodeVbin8, typeCodeStr8, typeCodeSym8:
+		return nil, errNull
+	case typeCodeVbin8:
 		n, err := r.ReadByte()
 		if err != nil {
 			return nil, err
 		}
-		if uint64(n) > uint64(r.Len()) {
-			return nil, errInvalidLength
-		}
-		return r.Next(int(n)), nil
-	case typeCodeVbin32, typeCodeStr32, typeCodeSym32:
+		length = int(n)
+	case typeCodeVbin32:
 		if r.Len() < 4 {
-			return nil, errorErrorf("invalid length for type %0x", of)
+			return nil, errorErrorf("invalid length for type %#02x", type_)
 		}
-		n := binary.BigEndian.Uint32(r.Next(4))
-		if uint64(n) > uint64(r.Len()) {
-			return nil, errInvalidLength
-		}
-		return r.Next(int(n)), nil
+		length = int(binary.BigEndian.Uint32(r.Next(4)))
 	default:
-		return nil, errorErrorf("type code %#00x is not a recognized variable length type", of)
-	}
-}
-
-func readHeaderSlice(r reader) (elements int, _ error) {
-	b, err := r.ReadByte()
-	if err != nil {
-		return 0, err
+		return nil, errorErrorf("type code %#02x is not a recognized string type", type_)
 	}
 
-	switch amqpType(b) {
-	case typeCodeNull:
-		return 0, errNull
-	case typeCodeList0:
-		return 0, nil
-	case typeCodeList8, typeCodeArray8:
-		l, err := r.ReadByte()
-		if err != nil {
-			return 0, err
-		}
-
-		if int(l) > r.Len() {
-			return 0, errorErrorf("invalid length for type %0x", b)
-		}
-
-		elemByte, err := r.ReadByte()
-		if err != nil {
-			return 0, err
-		}
-
-		elements = int(elemByte)
-	case typeCodeList32, typeCodeArray32:
-		if r.Len() < 4 {
-			return 0, errorErrorf("invalid length for type %0x", b)
-		}
-		l := binary.BigEndian.Uint32(r.Next(4))
-		if int(l) > r.Len() {
-			return 0, errorErrorf("invalid length for type %0x", b)
-		}
-
-		if r.Len() < 4 {
-			return 0, errorErrorf("invalid length for type %0x", b)
-		}
-		elements = int(binary.BigEndian.Uint32(r.Next(4)))
-	default:
-		return 0, errorErrorf("type code %x is not a recognized list type", b)
+	if length > r.Len() {
+		return nil, errorNew("invalid length")
 	}
-
-	if elements > r.Len() {
-		return 0, errInvalidLength
-	}
-	return elements, nil
-}
-
-func init() {
-	// break initialization cycle by assigning in init
-	// typeReaders -> readComposite -> unmarshal -> readAny -> typeReaders
-	typeReaders[0x0] = readComposite
-}
-
-var typeReaders = [256]func(r reader) (interface{}, error){
-	// bool
-	typeCodeBool:      func(r reader) (interface{}, error) { return readBool(r) },
-	typeCodeBoolTrue:  func(r reader) (interface{}, error) { return readBool(r) },
-	typeCodeBoolFalse: func(r reader) (interface{}, error) { return readBool(r) },
-	// uint
-	typeCodeUbyte:      func(r reader) (interface{}, error) { return readUint(r) },
-	typeCodeUshort:     func(r reader) (interface{}, error) { return readUint(r) },
-	typeCodeUint:       func(r reader) (interface{}, error) { return readUint(r) },
-	typeCodeSmallUint:  func(r reader) (interface{}, error) { return readUint(r) },
-	typeCodeUint0:      func(r reader) (interface{}, error) { return readUint(r) },
-	typeCodeUlong:      func(r reader) (interface{}, error) { return readUint(r) },
-	typeCodeSmallUlong: func(r reader) (interface{}, error) { return readUint(r) },
-	typeCodeUlong0:     func(r reader) (interface{}, error) { return readUint(r) },
-	// int
-	typeCodeByte:      func(r reader) (interface{}, error) { return readInt(r) },
-	typeCodeShort:     func(r reader) (interface{}, error) { return readInt(r) },
-	typeCodeInt:       func(r reader) (interface{}, error) { return readInt(r) },
-	typeCodeSmallint:  func(r reader) (interface{}, error) { return readInt(r) },
-	typeCodeLong:      func(r reader) (interface{}, error) { return readInt(r) },
-	typeCodeSmalllong: func(r reader) (interface{}, error) { return readInt(r) },
-	// binary
-	typeCodeVbin8:  func(r reader) (interface{}, error) { return readBinary(r) },
-	typeCodeVbin32: func(r reader) (interface{}, error) { return readBinary(r) },
-	// strings
-	typeCodeStr8:  func(r reader) (interface{}, error) { return readString(r) },
-	typeCodeStr32: func(r reader) (interface{}, error) { return readString(r) },
-	typeCodeSym8:  func(r reader) (interface{}, error) { return readString(r) },
-	typeCodeSym32: func(r reader) (interface{}, error) { return readString(r) },
-	// timestamp
-	typeCodeTimestamp: func(r reader) (interface{}, error) { return readTimestamp(r) },
-	// UUID
-	typeCodeUUID: func(r reader) (interface{}, error) { return readUUID(r) },
-
-	// TODO: implement
-	typeCodeFloat:      func(r reader) (interface{}, error) { return nil, errorNew("float not implemented") },
-	typeCodeDouble:     func(r reader) (interface{}, error) { return nil, errorNew("double not implemented") },
-	typeCodeDecimal32:  func(r reader) (interface{}, error) { return nil, errorNew("decimal32 not implemented") },
-	typeCodeDecimal64:  func(r reader) (interface{}, error) { return nil, errorNew("decimal64 not implemented") },
-	typeCodeDecimal128: func(r reader) (interface{}, error) { return nil, errorNew("decimal128 not implemented") },
-	typeCodeChar:       func(r reader) (interface{}, error) { return nil, errorNew("char not implemented") },
-	typeCodeList0:      func(r reader) (interface{}, error) { return nil, errorNew("list0 not implemented") },
-	typeCodeList8:      func(r reader) (interface{}, error) { return nil, errorNew("list8 not implemented") },
-	typeCodeList32:     func(r reader) (interface{}, error) { return nil, errorNew("list32 not implemented") },
-	typeCodeMap8:       func(r reader) (interface{}, error) { return nil, errorNew("map8 not implemented") },
-	typeCodeMap32:      func(r reader) (interface{}, error) { return nil, errorNew("map32 not implemented") },
-	typeCodeArray8:     func(r reader) (interface{}, error) { return nil, errorNew("array8 not implemented") },
-	typeCodeArray32:    func(r reader) (interface{}, error) { return nil, errorNew("array32 not implemented") },
+	return append([]byte(nil), r.Next(length)...), nil
 }
 
 func readAny(r reader) (interface{}, error) {
-	b, err := r.ReadByte()
+	if r.Len() < 1 {
+		return nil, errorNew("invalid length")
+	}
+
+	type_ := amqpType(r.Bytes()[0])
+	switch type_ {
+	case typeCodeNull:
+		r.ReadByte()
+		return nil, errNull
+
+	// composite
+	case 0x0:
+		return readComposite(r)
+
+	// bool
+	case typeCodeBool, typeCodeBoolTrue, typeCodeBoolFalse:
+		return readBool(r)
+
+	// uint
+	case typeCodeUbyte:
+		return readUbyte(r)
+	case typeCodeUshort:
+		return readUshort(r)
+	case typeCodeUint,
+		typeCodeSmallUint,
+		typeCodeUint0:
+		return readUint32(r)
+	case typeCodeUlong,
+		typeCodeSmallUlong,
+		typeCodeUlong0:
+		return readUlong(r)
+
+	// int
+	case typeCodeByte:
+		return readSbyte(r)
+	case typeCodeShort:
+		return readShort(r)
+	case typeCodeInt,
+		typeCodeSmallint:
+		return readInt32(r)
+	case typeCodeLong,
+		typeCodeSmalllong:
+		return readLong(r)
+
+	// floating point
+	case typeCodeFloat:
+		return readFloat(r)
+	case typeCodeDouble:
+		return readDouble(r)
+
+	// binary
+	case typeCodeVbin8, typeCodeVbin32:
+		return readBinary(r)
+
+	// strings
+	case typeCodeStr8, typeCodeStr32:
+		return readString(r)
+	case typeCodeSym8, typeCodeSym32:
+		// symbols currently decoded as string to avoid
+		// exposing symbol type in message, this may need
+		// to change if users need to distinguish strings
+		// from symbols
+		return readString(r)
+
+	// timestamp
+	case typeCodeTimestamp:
+		return readTimestamp(r)
+
+	// UUID
+	case typeCodeUUID:
+		return readUUID(r)
+
+	// arrays
+	case typeCodeArray8, typeCodeArray32:
+		return readAnyArray(r)
+
+	// lists
+	case typeCodeList0, typeCodeList8, typeCodeList32:
+		return readAnyList(r)
+
+	// maps
+	case typeCodeMap8:
+		return readAnyMap(r)
+	case typeCodeMap32:
+		return readAnyMap(r)
+
+	// TODO: implement
+	case typeCodeDecimal32:
+		return nil, errorNew("decimal32 not implemented")
+	case typeCodeDecimal64:
+		return nil, errorNew("decimal64 not implemented")
+	case typeCodeDecimal128:
+		return nil, errorNew("decimal128 not implemented")
+	case typeCodeChar:
+		return nil, errorNew("char not implemented")
+	default:
+		return nil, errorErrorf("unknown type %#02x", type_)
+	}
+}
+
+func readAnyMap(r reader) (interface{}, error) {
+	var m map[interface{}]interface{}
+	err := (*mapAnyAny)(&m).unmarshal(r)
 	if err != nil {
 		return nil, err
 	}
 
-	if amqpType(b) == typeCodeNull {
-		return nil, nil
+	if len(m) == 0 {
+		return m, nil
 	}
 
-	err = r.UnreadByte()
-	if err != nil {
-		return nil, err
+	stringKeys := true
+Loop:
+	for key, _ := range m {
+		switch key.(type) {
+		case string:
+		case symbol:
+		default:
+			stringKeys = false
+			break Loop
+		}
 	}
 
-	tr := typeReaders[amqpType(b)]
-	if tr == nil {
-		return nil, errorErrorf("unknown type %0x", b)
+	if stringKeys {
+		mm := make(map[string]interface{}, len(m))
+		for key, value := range m {
+			switch key := key.(type) {
+			case string:
+				mm[key] = value
+			case symbol:
+				mm[string(key)] = value
+			}
+		}
+		return mm, nil
 	}
-	return tr(r)
+
+	return m, nil
 }
 
-// roReader is similar to bytes.Reader but does not support rune
-// operations and add Next() to fulfill the reader interface.
-type roReader struct {
-	b []byte
-	i int
+func readAnyList(r reader) (interface{}, error) {
+	var a []interface{}
+	err := (*list)(&a).unmarshal(r)
+	return a, err
 }
 
-func (r *roReader) Read(b []byte) (int, error) {
-	if r.i >= len(r.b) {
-		return 0, io.EOF
+func readAnyArray(r reader) (interface{}, error) {
+	// get the array type
+	buf := r.Bytes()
+	if len(buf) < 1 {
+		return 0, errorNew("invalid length")
 	}
-	n := copy(b, r.b[r.i:])
-	r.i += n
-	return n, nil
-}
-func (r *roReader) ReadByte() (byte, error) {
-	if r.i >= len(r.b) {
-		return 0, io.EOF
+	var typeIdx int
+	switch amqpType(buf[0]) {
+	case typeCodeArray8:
+		typeIdx = 3
+	case typeCodeArray32:
+		typeIdx = 9
+	default:
+		return 0, errorErrorf("invalid array type %02x", buf[0])
 	}
-	b := r.b[r.i]
-	r.i++
-	return b, nil
-}
-
-func (r *roReader) UnreadByte() error {
-	if r.i < 1 {
-		return errorNew("at beginning of slice")
+	if len(buf) < typeIdx+1 {
+		return 0, errorNew("invalid length")
 	}
-	r.i--
-	return nil
-}
 
-func (r *roReader) Bytes() []byte {
-	return r.b[r.i:]
-}
-
-func (r *roReader) Len() int {
-	return len(r.b) - r.i
-}
-
-func (r *roReader) Next(n int) []byte {
-	if r.i+n > len(r.b) {
-		n = len(r.b)
+	switch amqpType(buf[typeIdx]) {
+	case typeCodeByte:
+		var a []int8
+		err := (*arrayInt8)(&a).unmarshal(r)
+		return a, err
+	case typeCodeUbyte:
+		var a ArrayUByte
+		err := a.unmarshal(r)
+		return a, err
+	case typeCodeUshort:
+		var a []uint16
+		err := (*arrayUint16)(&a).unmarshal(r)
+		return a, err
+	case typeCodeShort:
+		var a []int16
+		err := (*arrayInt16)(&a).unmarshal(r)
+		return a, err
+	case typeCodeUint0, typeCodeSmallUint, typeCodeUint:
+		var a []uint32
+		err := (*arrayUint32)(&a).unmarshal(r)
+		return a, err
+	case typeCodeSmallint, typeCodeInt:
+		var a []int32
+		err := (*arrayInt32)(&a).unmarshal(r)
+		return a, err
+	case typeCodeUlong0, typeCodeSmallUlong, typeCodeUlong:
+		var a []uint64
+		err := (*arrayUint64)(&a).unmarshal(r)
+		return a, err
+	case typeCodeSmalllong, typeCodeLong:
+		var a []int64
+		err := (*arrayInt64)(&a).unmarshal(r)
+		return a, err
+	case typeCodeFloat:
+		var a []float32
+		err := (*arrayFloat)(&a).unmarshal(r)
+		return a, err
+	case typeCodeDouble:
+		var a []float64
+		err := (*arrayDouble)(&a).unmarshal(r)
+		return a, err
+	case typeCodeBool, typeCodeBoolTrue, typeCodeBoolFalse:
+		var a []bool
+		err := (*arrayBool)(&a).unmarshal(r)
+		return a, err
+	case typeCodeStr8, typeCodeStr32:
+		var a []string
+		err := (*arrayString)(&a).unmarshal(r)
+		return a, err
+	case typeCodeSym8, typeCodeSym32:
+		var a []symbol
+		err := (*arraySymbol)(&a).unmarshal(r)
+		return a, err
+	case typeCodeVbin8, typeCodeVbin32:
+		var a [][]byte
+		err := (*arrayBinary)(&a).unmarshal(r)
+		return a, err
+	case typeCodeTimestamp:
+		var a []time.Time
+		err := (*arrayTimestamp)(&a).unmarshal(r)
+		return a, err
+	case typeCodeUUID:
+		var a []UUID
+		err := (*arrayUUID)(&a).unmarshal(r)
+		return a, err
+	default:
+		return nil, errorErrorf("array decoding not implemented for %#02x", buf[typeIdx])
 	}
-	return r.b[r.i : r.i+n]
 }
 
 func readComposite(r reader) (interface{}, error) {
-	// create separate reader to determine type without advancing
-	// the original
-	peekReader := &roReader{b: r.Bytes()}
+	buf := r.Bytes()
 
-	byt, err := peekReader.ReadByte()
-	if err != nil {
-		return nil, err
+	if len(buf) < 2 {
+		return nil, errorNew("invalid length for composite")
 	}
 
-	// could be null instead of a composite header
-	if amqpType(byt) == typeCodeNull {
+	switch amqpType(buf[0]) {
+	case 0x0:
+		// compsites start with 0x0
+	case typeCodeNull:
 		return nil, errNull
+	default:
+		return nil, errorErrorf("invalid composite header %#02x", buf[0])
 	}
 
-	// compsites always start with 0x0
-	if byt != 0 {
-		return nil, errorErrorf("invalid composite header %0x", byt)
+	var compositeType uint64
+	switch amqpType(buf[1]) {
+	case typeCodeSmallUlong:
+		if len(buf) < 3 {
+			return nil, errorNew("invalid length for smallulong")
+		}
+		compositeType = uint64(buf[2])
+	case typeCodeUlong:
+		if len(buf) < 10 {
+			return nil, errorNew("invalid length for ulong")
+		}
+		compositeType = uint64(binary.BigEndian.Uint64(buf[2:]))
 	}
 
-	var iface interface{}
-
-	// next, the composite type is encoded as an AMQP ulong
-	v, err := readUlong(peekReader)
-
-	// check if known composite type
-	if err == nil && compositeTypes[amqpType(v)] != nil {
-		iface = compositeTypes[amqpType(v)]()
-	} else {
-		iface = new(describedType) // try as described type
+	if compositeType > math.MaxUint8 {
+		// try as described type
+		var dt describedType
+		err := dt.unmarshal(r)
+		return dt, err
 	}
 
-	_, err = unmarshal(r, iface)
-	return iface, err
-}
+	switch amqpType(compositeType) {
+	// Error
+	case typeCodeError:
+		t := new(Error)
+		err := t.unmarshal(r)
+		return t, err
 
-var compositeTypes = [256]func() interface{}{
-	typeCodeError: func() interface{} { return new(Error) },
 	// Lifetime Policies
-	typeCodeDeleteOnClose:             func() interface{} { return deleteOnClose },
-	typeCodeDeleteOnNoMessages:        func() interface{} { return deleteOnNoMessages },
-	typeCodeDeleteOnNoLinks:           func() interface{} { return deleteOnNoLinks },
-	typeCodeDeleteOnNoLinksOrMessages: func() interface{} { return deleteOnNoLinksOrMessages },
+	case typeCodeDeleteOnClose:
+		t := deleteOnClose
+		err := t.unmarshal(r)
+		return t, err
+	case typeCodeDeleteOnNoMessages:
+		t := deleteOnNoMessages
+		err := t.unmarshal(r)
+		return t, err
+	case typeCodeDeleteOnNoLinks:
+		t := deleteOnNoLinks
+		err := t.unmarshal(r)
+		return t, err
+	case typeCodeDeleteOnNoLinksOrMessages:
+		t := deleteOnNoLinksOrMessages
+		err := t.unmarshal(r)
+		return t, err
+
 	// Delivery States
-	typeCodeStateAccepted: func() interface{} { return new(stateAccepted) },
-	typeCodeStateModified: func() interface{} { return new(stateModified) },
-	typeCodeStateReceived: func() interface{} { return new(stateReceived) },
-	typeCodeStateRejected: func() interface{} { return new(stateRejected) },
-	typeCodeStateReleased: func() interface{} { return new(stateReleased) },
+	case typeCodeStateAccepted:
+		t := new(stateAccepted)
+		err := t.unmarshal(r)
+		return t, err
+	case typeCodeStateModified:
+		t := new(stateModified)
+		err := t.unmarshal(r)
+		return t, err
+	case typeCodeStateReceived:
+		t := new(stateReceived)
+		err := t.unmarshal(r)
+		return t, err
+	case typeCodeStateRejected:
+		t := new(stateRejected)
+		err := t.unmarshal(r)
+		return t, err
+	case typeCodeStateReleased:
+		t := new(stateReleased)
+		err := t.unmarshal(r)
+		return t, err
 
-	typeCodeOpen:                  notImplementedConstructor("typeCodeOpen"),
-	typeCodeBegin:                 notImplementedConstructor("typeCodeBegin"),
-	typeCodeAttach:                notImplementedConstructor("typeCodeAttach"),
-	typeCodeFlow:                  notImplementedConstructor("typeCodeFlow"),
-	typeCodeTransfer:              notImplementedConstructor("typeCodeTransfer"),
-	typeCodeDisposition:           notImplementedConstructor("typeCodeDisposition"),
-	typeCodeDetach:                notImplementedConstructor("typeCodeDetach"),
-	typeCodeEnd:                   notImplementedConstructor("typeCodeEnd"),
-	typeCodeClose:                 notImplementedConstructor("typeCodeClose"),
-	typeCodeSource:                notImplementedConstructor("typeCodeSource"),
-	typeCodeTarget:                notImplementedConstructor("typeCodeTarget"),
-	typeCodeMessageHeader:         notImplementedConstructor("typeCodeMessageHeader"),
-	typeCodeDeliveryAnnotations:   notImplementedConstructor("typeCodeDeliveryAnnotations"),
-	typeCodeMessageAnnotations:    notImplementedConstructor("typeCodeMessageAnnotations"),
-	typeCodeMessageProperties:     notImplementedConstructor("typeCodeMessageProperties"),
-	typeCodeApplicationProperties: notImplementedConstructor("typeCodeApplicationProperties"),
-	typeCodeApplicationData:       notImplementedConstructor("typeCodeApplicationData"),
-	typeCodeAMQPSequence:          notImplementedConstructor("typeCodeAMQPSequence"),
-	typeCodeAMQPValue:             notImplementedConstructor("typeCodeAMQPValue"),
-	typeCodeFooter:                notImplementedConstructor("typeCodeFooter"),
-	typeCodeSASLMechanism:         notImplementedConstructor("typeCodeSASLMechanism"),
-	typeCodeSASLInit:              notImplementedConstructor("typeCodeSASLInit"),
-	typeCodeSASLChallenge:         notImplementedConstructor("typeCodeSASLChallenge"),
-	typeCodeSASLResponse:          notImplementedConstructor("typeCodeSASLResponse"),
-	typeCodeSASLOutcome:           notImplementedConstructor("typeCodeSASLOutcome"),
-}
+	case typeCodeOpen,
+		typeCodeBegin,
+		typeCodeAttach,
+		typeCodeFlow,
+		typeCodeTransfer,
+		typeCodeDisposition,
+		typeCodeDetach,
+		typeCodeEnd,
+		typeCodeClose,
+		typeCodeSource,
+		typeCodeTarget,
+		typeCodeMessageHeader,
+		typeCodeDeliveryAnnotations,
+		typeCodeMessageAnnotations,
+		typeCodeMessageProperties,
+		typeCodeApplicationProperties,
+		typeCodeApplicationData,
+		typeCodeAMQPSequence,
+		typeCodeAMQPValue,
+		typeCodeFooter,
+		typeCodeSASLMechanism,
+		typeCodeSASLInit,
+		typeCodeSASLChallenge,
+		typeCodeSASLResponse,
+		typeCodeSASLOutcome:
+		return nil, errorErrorf("readComposite unmarshal not implemented for %#02x", compositeType)
 
-type notImplemented string
-
-func (ni notImplemented) unmarshal(r reader) error {
-	return errorNew("readComposite unmarshal not implemented for " + string(ni))
-}
-
-func notImplementedConstructor(s string) func() interface{} {
-	return func() interface{} { return notImplemented(s) }
+	default:
+		// try as described type
+		var dt describedType
+		err := dt.unmarshal(r)
+		return dt, err
+	}
 }
 
 func readTimestamp(r reader) (time.Time, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return time.Time{}, err
 	}
 
-	switch t := amqpType(b); {
-	case t == typeCodeNull:
+	switch amqpType(type_) {
+	case typeCodeTimestamp:
+	case typeCodeNull:
 		return time.Time{}, errNull
-	case t != typeCodeTimestamp:
-		return time.Time{}, errorErrorf("invalid type for timestamp %0x", t)
+	default:
+		return time.Time{}, errorErrorf("invalid type for timestamp %02x", type_)
 	}
 
 	if r.Len() < 8 {
 		return time.Time{}, errorErrorf("invalid length for timestamp")
 	}
-	n := binary.BigEndian.Uint64(r.Next(8))
+	n := int64(binary.BigEndian.Uint64(r.Next(8)))
 	rem := n % 1000
 	return time.Unix(int64(n)/1000, int64(rem)*1000000).UTC(), err
 }
 
 func readInt(r reader) (int, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
 	r.UnreadByte()
 
-	switch amqpType(b) {
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, errNull
+
 	// Unsigned
 	case typeCodeUbyte:
 		n, err := readUbyte(r)
 		return int(n), err
 	case typeCodeUshort:
-		n, err := readUlong(r)
+		n, err := readUshort(r)
 		return int(n), err
 	case typeCodeUint0, typeCodeSmallUint, typeCodeUint:
 		n, err := readUint32(r)
@@ -830,153 +1060,216 @@ func readInt(r reader) (int, error) {
 		n, err := readLong(r)
 		return int(n), err
 	default:
-		return 0, errorErrorf("type code %x is not a recognized number type", b)
+		return 0, errorErrorf("type code %#02x is not a recognized number type", type_)
 	}
 }
 
 func readLong(r reader) (int64, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if amqpType(b) == typeCodeSmalllong {
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, errNull
+	case typeCodeSmalllong:
 		n, err := r.ReadByte()
 		return int64(n), err
+	case typeCodeLong:
+		if r.Len() < 8 {
+			return 0, errorNew("invalid ulong")
+		}
+		n := binary.BigEndian.Uint64(r.Next(8))
+		return int64(n), nil
+	default:
+		return 0, errorErrorf("invalid type for uint32 %02x", type_)
 	}
-	if amqpType(b) != typeCodeLong {
-		return 0, errorErrorf("invalid type for uint32 %0x", b)
-	}
-	if r.Len() < 8 {
-		return 0, errorNew("invalid ulong")
-	}
-	n := binary.BigEndian.Uint64(r.Next(8))
-	return int64(n), nil
+
 }
 
 func readInt32(r reader) (int32, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if amqpType(b) == typeCodeSmallint {
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, errNull
+	case typeCodeSmallint:
 		n, err := r.ReadByte()
 		return int32(n), err
+	case typeCodeInt:
+		if r.Len() < 4 {
+			return 0, errorNew("invalid int")
+		}
+		n := binary.BigEndian.Uint32(r.Next(4))
+		return int32(n), nil
+	default:
+		return 0, errorErrorf("invalid type for int32 %02x", type_)
 	}
-	if amqpType(b) != typeCodeInt {
-		return 0, errorErrorf("invalid type for int32 %0x", b)
-	}
-	if r.Len() < 4 {
-		return 0, errorNew("invalid int")
-	}
-	n := binary.BigEndian.Uint32(r.Next(4))
-	return int32(n), nil
 }
 
 func readShort(r reader) (int16, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if amqpType(b) != typeCodeShort {
-		return 0, errorErrorf("invalid type for short %0x", b)
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, errNull
+	case typeCodeShort:
+		if r.Len() < 2 {
+			return 0, errorNew("invalid sshort")
+		}
+		n := binary.BigEndian.Uint16(r.Next(2))
+		return int16(n), nil
+	default:
+		return 0, errorErrorf("invalid type for short %02x", type_)
 	}
-	if r.Len() < 2 {
-		return 0, errorNew("invalid sshort")
-	}
-	n := binary.BigEndian.Uint16(r.Next(2))
-	return int16(n), nil
 }
 
 func readSbyte(r reader) (int8, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if amqpType(b) != typeCodeByte {
-		return 0, errorErrorf("invalid type for int8 %0x", b)
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, errNull
+	case typeCodeByte:
+		n, err := r.ReadByte()
+		return int8(n), err
+	default:
+		return 0, errorErrorf("invalid type for int8 %02x", type_)
 	}
-	n, err := r.ReadByte()
-	return int8(n), err
 }
 
 func readUbyte(r reader) (uint8, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if amqpType(b) != typeCodeUbyte {
-		return 0, errorErrorf("invalid type for ubyte %0x", b)
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, errNull
+	case typeCodeUbyte:
+		return r.ReadByte()
+	default:
+		return 0, errorErrorf("invalid type for ubyte %02x", type_)
 	}
-	return r.ReadByte()
 }
 
 func readUshort(r reader) (uint16, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if amqpType(b) != typeCodeUshort {
-		return 0, errorErrorf("invalid type for ushort %0x", b)
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, errNull
+	case typeCodeUshort:
+		if r.Len() < 2 {
+			return 0, errorNew("invalid ushort")
+		}
+		return binary.BigEndian.Uint16(r.Next(2)), nil
+	default:
+		return 0, errorErrorf("invalid type for ushort %02x", type_)
 	}
-	if r.Len() < 2 {
-		return 0, errorNew("invalid ushort")
-	}
-	return binary.BigEndian.Uint16(r.Next(2)), nil
 }
 
 func readUint32(r reader) (uint32, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if amqpType(b) == typeCodeUint0 {
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, errNull
+	case typeCodeUint0:
 		return 0, nil
-	}
-	if amqpType(b) == typeCodeSmallUint {
+	case typeCodeSmallUint:
 		n, err := r.ReadByte()
 		return uint32(n), err
+	case typeCodeUint:
+		if r.Len() < 4 {
+			return 0, errorNew("invalid uint")
+		}
+		return binary.BigEndian.Uint32(r.Next(4)), nil
+	default:
+		return 0, errorErrorf("invalid type for uint32 %02x", type_)
 	}
-	if amqpType(b) != typeCodeUint {
-		return 0, errorErrorf("invalid type for uint32 %0x", b)
-	}
-	if r.Len() < 4 {
-		return 0, errorNew("invalid uint")
-	}
-	return binary.BigEndian.Uint32(r.Next(4)), nil
 }
 
 func readUlong(r reader) (uint64, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if amqpType(b) == typeCodeUlong0 {
+	switch amqpType(type_) {
+	case typeCodeNull:
+		return 0, errNull
+	case typeCodeUlong0:
 		return 0, nil
-	}
-	if amqpType(b) == typeCodeSmallUlong {
+	case typeCodeSmallUlong:
 		n, err := r.ReadByte()
 		return uint64(n), err
+	case typeCodeUlong:
+		if r.Len() < 8 {
+			return 0, errorNew("invalid ulong")
+		}
+		return binary.BigEndian.Uint64(r.Next(8)), nil
+	default:
+		return 0, errorErrorf("invalid type for uint32 %02x", type_)
 	}
-	if amqpType(b) != typeCodeUlong {
-		return 0, errorErrorf("invalid type for uint32 %0x", b)
+}
+
+func readFloat(r reader) (float32, error) {
+	type_, err := r.ReadByte()
+	if err != nil {
+		return 0, err
 	}
+
+	if amqpType(type_) != typeCodeFloat {
+		return 0, errorErrorf("invalid type for float32 %02x", type_)
+	}
+
+	if r.Len() < 4 {
+		return 0, errorNew("invalid float")
+	}
+
+	bits := binary.BigEndian.Uint32(r.Next(4))
+	return math.Float32frombits(bits), nil
+}
+
+func readDouble(r reader) (float64, error) {
+	type_, err := r.ReadByte()
+	if err != nil {
+		return 0, err
+	}
+
+	if amqpType(type_) != typeCodeDouble {
+		return 0, errorErrorf("invalid type for float64 %02x", type_)
+	}
+
 	if r.Len() < 8 {
-		return 0, errorNew("invalid ulong")
+		return 0, errorNew("invalid double")
 	}
-	return binary.BigEndian.Uint64(r.Next(8)), nil
+
+	bits := binary.BigEndian.Uint64(r.Next(8))
+	return math.Float64frombits(bits), nil
 }
 
 func readBool(r reader) (bool, error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return false, err
 	}
 
-	switch amqpType(b) {
+	switch amqpType(type_) {
 	case typeCodeNull:
 		return false, errNull
 	case typeCodeBool:
-		b, err = r.ReadByte()
+		b, err := r.ReadByte()
 		if err != nil {
 			return false, err
 		}
@@ -986,17 +1279,17 @@ func readBool(r reader) (bool, error) {
 	case typeCodeBoolFalse:
 		return false, nil
 	default:
-		return false, errorErrorf("type code %x is not a recognized bool type", b)
+		return false, errorErrorf("type code %#02x is not a recognized bool type", type_)
 	}
 }
 
 func readUint(r reader) (value uint64, _ error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, err
 	}
 
-	switch amqpType(b) {
+	switch amqpType(type_) {
 	case typeCodeNull:
 		return 0, errNull
 	case typeCodeUint0, typeCodeUlong0:
@@ -1024,22 +1317,45 @@ func readUint(r reader) (value uint64, _ error) {
 		return n, err
 
 	default:
-		return 0, errorErrorf("type code %x is not a recognized number type", b)
+		return 0, errorErrorf("type code %#02x is not a recognized number type", type_)
 	}
 }
 
+func readUUID(r reader) (UUID, error) {
+	var uuid UUID
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return uuid, err
+	}
+
+	if amqpType(type_) != typeCodeUUID {
+		return uuid, errorErrorf("type code %#00x is not a UUID", type_)
+	}
+
+	n, err := r.Read(uuid[:])
+	if err != nil {
+		return uuid, err
+	}
+	if n != 16 {
+		return uuid, errorNew("invalid length")
+	}
+
+	return uuid, nil
+}
+
 func readMapHeader(r reader) (size uint32, count uint32, _ error) {
-	b, err := r.ReadByte()
+	type_, err := r.ReadByte()
 	if err != nil {
 		return 0, 0, err
 	}
 
 	var width int
-	switch amqpType(b) {
+	switch amqpType(type_) {
 	case typeCodeNull:
 		return 0, 0, errNull
 	case typeCodeMap8:
-		b, err = r.ReadByte()
+		b, err := r.ReadByte()
 		if err != nil {
 			return 0, 0, err
 		}
@@ -1052,17 +1368,17 @@ func readMapHeader(r reader) (size uint32, count uint32, _ error) {
 		width = 1
 	case typeCodeMap32:
 		if r.Len() < 8 { // two uint32's
-			return 0, 0, errInvalidLength
+			return 0, 0, errorNew("invalid length")
 		}
 		size = binary.BigEndian.Uint32(r.Next(4))
 		count = binary.BigEndian.Uint32(r.Next(4))
 		width = 4
 	default:
-		return 0, 0, errorErrorf("invalid map type %x", b)
+		return 0, 0, errorErrorf("invalid map type %#02x", type_)
 	}
 
-	if uint64(size) > uint64(r.Len()+width) {
-		return 0, 0, errInvalidLength
+	if uint64(size) > uint64(r.Len()+width) || uint64(count) > uint64(r.Len()) {
+		return 0, 0, errorNew("invalid length")
 	}
 	return size, count, err
 }

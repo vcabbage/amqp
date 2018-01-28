@@ -741,7 +741,7 @@ func (s *source) marshal(wr writer) error {
 		{value: s.DynamicNodeProperties, omit: len(s.DynamicNodeProperties) == 0},
 		{value: &s.DistributionMode, omit: s.DistributionMode == ""},
 		{value: s.Filter, omit: len(s.Filter) == 0},
-		{value: s.DefaultOutcome, omit: s.DefaultOutcome == nil},
+		{value: &s.DefaultOutcome, omit: s.DefaultOutcome == nil},
 		{value: &s.Outcomes, omit: len(s.Outcomes) == 0},
 		{value: &s.Capabilities, omit: len(s.Capabilities) == 0},
 	}...)
@@ -1831,7 +1831,7 @@ func (m *Message) unmarshal(r reader) error {
 	// loop, decoding sections until bytes have been consumed
 	for r.Len() > 0 {
 		// determine type
-		typ, err := peekMessageType(r.Bytes())
+		type_, err := peekMessageType(r.Bytes())
 		if err != nil {
 			return err
 		}
@@ -1842,7 +1842,7 @@ func (m *Message) unmarshal(r reader) error {
 			// unmarshaling section is set to true
 			discardHeader = true
 		)
-		switch amqpType(typ) {
+		switch amqpType(type_) {
 
 		case typeCodeMessageHeader:
 			discardHeader = false
@@ -1871,7 +1871,7 @@ func (m *Message) unmarshal(r reader) error {
 			section = &m.Value
 
 		default:
-			return errorErrorf("unknown message section %x", typ)
+			return errorErrorf("unknown message section %#02x", type_)
 		}
 
 		if discardHeader {
@@ -1900,7 +1900,7 @@ func peekMessageType(buf []byte) (uint8, error) {
 		if checkNull(buf) {
 			return 0, errNull
 		}
-		return 0, errorErrorf("invalid composite header %0x", buf[0])
+		return 0, errorErrorf("invalid composite header %02x", buf[0])
 	}
 
 	// copied from readUlong to avoid allocations
@@ -1917,7 +1917,7 @@ func peekMessageType(buf []byte) (uint8, error) {
 	}
 
 	if t != typeCodeUlong {
-		return 0, errorErrorf("invalid type for uint32 %0x", t)
+		return 0, errorErrorf("invalid type for uint32 %02x", t)
 	}
 
 	if len(buf[2:]) < 8 {
@@ -2306,28 +2306,6 @@ func (*saslOutcome) link() (uint32, bool) {
 	return 0, false
 }
 
-type symbolSlice []symbol
-
-func (s symbolSlice) marshal(wr writer) error {
-	return writeSymbolArray(wr, s)
-}
-
-type amqpUint16 uint16
-
-func (n amqpUint16) marshal(wr writer) error {
-	err := wr.WriteByte(byte(typeCodeUshort))
-	if err != nil {
-		return err
-	}
-	return binaryWriteUint16(wr, uint16(n))
-}
-
-type amqpUint32 uint32
-
-func (n amqpUint32) marshal(wr writer) error {
-	return writeUint32(wr, uint32(n))
-}
-
 // symbol is an AMQP symbolic string.
 type amqpString string
 
@@ -2712,7 +2690,7 @@ func (t describedType) marshal(wr writer) error {
 func (t *describedType) unmarshal(r reader) error {
 	b, err := r.ReadByte()
 	if b != 0x0 {
-		return errorErrorf("invalid described type header %0x", b)
+		return errorErrorf("invalid described type header %02x", b)
 	}
 	_, err = unmarshal(r, &t.descriptor)
 	if err != nil {
@@ -2727,4 +2705,1296 @@ func (t describedType) String() string {
 		t.descriptor,
 		t.value,
 	)
+}
+
+// SLICES
+
+const (
+	// type length sizes
+	array8TLSize  = 2
+	array32TLSize = 5
+)
+
+// ArrayUByte allows encoding []uint8/[]byte as an array
+// rather than binary data.
+type ArrayUByte []uint8
+
+func (a ArrayUByte) marshal(wr writer) error {
+	const typeSize = 1
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCodeUbyte)
+	if err != nil {
+		return err
+	}
+
+	_, err = wr.Write(a)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (a *ArrayUByte) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	if amqpType(type_) != typeCodeUbyte {
+		return errorErrorf("invalid type for []uint16 %02x", type_)
+	}
+
+	if length > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]uint8, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	copy(aa, r.Next(length))
+
+	*a = aa
+	return nil
+}
+
+type arrayInt8 []int8
+
+func (a arrayInt8) marshal(wr writer) error {
+	const typeSize = 1
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCodeByte)
+	if err != nil {
+		return err
+	}
+
+	for _, value := range a {
+		err = wr.WriteByte(uint8(value))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayInt8) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	if amqpType(type_) != typeCodeByte {
+		return errorErrorf("invalid type for []uint16 %02x", type_)
+	}
+
+	if length > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]int8, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	for i, value := range r.Next(length) {
+		aa[i] = int8(value)
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayUint16 []uint16
+
+func (a arrayUint16) marshal(wr writer) error {
+	const typeSize = 2
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCodeUshort)
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		err = binaryWriteUint16(wr, element)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayUint16) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	if amqpType(type_) != typeCodeUshort {
+		return errorErrorf("invalid type for []uint16 %02x", type_)
+	}
+
+	const typeSize = 2
+	if length*typeSize > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]uint16, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	bytes := r.Next(length * 2)
+	var byteIdx int
+	for i := range aa {
+		aa[i] = binary.BigEndian.Uint16(bytes[byteIdx:])
+		byteIdx += 2
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayInt16 []int16
+
+func (a arrayInt16) marshal(wr writer) error {
+	const typeSize = 2
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCodeShort)
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		err = binaryWriteUint16(wr, uint16(element))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayInt16) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	if amqpType(type_) != typeCodeShort {
+		return errorErrorf("invalid type for []uint16 %02x", type_)
+	}
+
+	const typeSize = 2
+	if length*typeSize > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]int16, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	bytes := r.Next(length * 2)
+	var byteIdx int
+	for i := range aa {
+		aa[i] = int16(binary.BigEndian.Uint16(bytes[byteIdx : byteIdx+8]))
+		byteIdx += 2
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayUint32 []uint32
+
+func (a arrayUint32) marshal(wr writer) error {
+	var (
+		typeSize = 1
+		typeCode = typeCodeSmallUint
+	)
+	for _, n := range a {
+		if n > math.MaxUint8 {
+			typeSize = 4
+			typeCode = typeCodeUint
+			break
+		}
+	}
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCode)
+	if err != nil {
+		return err
+	}
+
+	if typeCode == typeCodeUint {
+		for _, element := range a {
+			err := binaryWriteUint32(wr, element)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		for _, element := range a {
+			err := wr.WriteByte(byte(element))
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayUint32) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	aa := (*a)[:0]
+	var zeroed bool
+	if cap(aa) < length {
+		aa = make([]uint32, length)
+		zeroed = true
+	} else {
+		aa = aa[:length]
+	}
+
+	switch amqpType(type_) {
+	case typeCodeUint0:
+		if !zeroed {
+			for i := range aa {
+				aa[i] = 0
+			}
+		}
+	case typeCodeSmallUint:
+		if r.Len() < length {
+			return errorNew("invalid length")
+		}
+
+		for i, n := range r.Next(length) {
+			aa[i] = uint32(n)
+		}
+	case typeCodeUint:
+		const typeSize = 4
+		if length*typeSize > r.Len() {
+			return errorErrorf("invalid length %d", length)
+		}
+
+		bytes := r.Next(length * typeSize)
+		var byteIdx int
+		for i := range aa {
+			aa[i] = binary.BigEndian.Uint32(bytes[byteIdx : byteIdx+4])
+			byteIdx += 4
+		}
+	default:
+		return errorErrorf("invalid type for []uint32 %02x", type_)
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayInt32 []int32
+
+func (a arrayInt32) marshal(wr writer) error {
+	var (
+		typeSize = 1
+		typeCode = typeCodeSmallint
+	)
+	for _, n := range a {
+		if n > math.MaxInt8 {
+			typeSize = 4
+			typeCode = typeCodeInt
+			break
+		}
+	}
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCode)
+	if err != nil {
+		return err
+	}
+
+	if typeCode == typeCodeInt {
+		for _, element := range a {
+			err := binaryWriteUint32(wr, uint32(element))
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		for _, element := range a {
+			err := wr.WriteByte(byte(element))
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayInt32) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]int32, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	switch amqpType(type_) {
+	case typeCodeSmallint:
+		if length > r.Len() {
+			return errorErrorf("invalid length %d", length)
+		}
+
+		for i, n := range r.Next(length) {
+			aa[i] = int32(int8(n))
+		}
+	case typeCodeInt:
+		const typeSize = 4
+		if length*typeSize > r.Len() {
+			return errorErrorf("invalid length %d", length)
+		}
+
+		bytes := r.Next(length * typeSize)
+		var byteIdx int
+		for i := range aa {
+			aa[i] = int32(binary.BigEndian.Uint32(bytes[byteIdx:]))
+			byteIdx += 4
+		}
+	default:
+		return errorErrorf("invalid type for []int32 %02x", type_)
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayUint64 []uint64
+
+func (a arrayUint64) marshal(wr writer) error {
+	var (
+		typeSize = 1
+		typeCode = typeCodeSmallUlong
+	)
+	for _, n := range a {
+		if n > math.MaxUint8 {
+			typeSize = 8
+			typeCode = typeCodeUlong
+			break
+		}
+	}
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCode)
+	if err != nil {
+		return err
+	}
+
+	if typeCode == typeCodeUlong {
+		for _, element := range a {
+			err := binaryWriteUint64(wr, element)
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		for _, element := range a {
+			err := wr.WriteByte(byte(element))
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayUint64) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	aa := (*a)[:0]
+	var zeroed bool
+	if cap(aa) < length {
+		aa = make([]uint64, length)
+		zeroed = true
+	} else {
+		aa = aa[:length]
+	}
+
+	switch amqpType(type_) {
+	case typeCodeUlong0:
+		if !zeroed {
+			for i := range aa {
+				aa[i] = 0
+			}
+		}
+	case typeCodeSmallUlong:
+		if r.Len() < length {
+			return errorNew("invalid length")
+		}
+		bytes := r.Next(length)
+		for i := range aa {
+			aa[i] = uint64(bytes[i])
+		}
+	case typeCodeUlong:
+		const typeSize = 8
+		if r.Len() < length*typeSize {
+			return errorNew("invalid length")
+		}
+		bytes := r.Next(length * typeSize)
+		var byteIdx int
+		for i := range aa {
+			aa[i] = binary.BigEndian.Uint64(bytes[byteIdx : byteIdx+8])
+			byteIdx += 8
+		}
+	default:
+		return errorErrorf("invalid type for []uint64 %02x", type_)
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayInt64 []int64
+
+func (a arrayInt64) marshal(wr writer) error {
+	var (
+		typeSize = 1
+		typeCode = typeCodeSmalllong
+	)
+	for _, n := range a {
+		if n > math.MaxUint8 {
+			typeSize = 8
+			typeCode = typeCodeLong
+			break
+		}
+	}
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCode)
+	if err != nil {
+		return err
+	}
+
+	if typeCode == typeCodeLong {
+		for _, element := range a {
+			err := binaryWriteUint64(wr, uint64(element))
+			if err != nil {
+				return err
+			}
+		}
+	} else {
+		for _, element := range a {
+			err := wr.WriteByte(byte(element))
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayInt64) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]int64, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	switch amqpType(type_) {
+	case typeCodeSmalllong:
+		if r.Len() < length {
+			return errorNew("invalid length")
+		}
+		bytes := r.Next(length)
+		for i := range aa {
+			aa[i] = int64(int8(bytes[i]))
+		}
+	case typeCodeLong:
+		const typeSize = 8
+		if r.Len() < length*typeSize {
+			return errorNew("invalid length")
+		}
+		bytes := r.Next(length * typeSize)
+		var byteIdx int
+		for i := range aa {
+			aa[i] = int64(binary.BigEndian.Uint64(bytes[byteIdx:]))
+			byteIdx += 8
+		}
+	default:
+		return errorErrorf("invalid type for []uint64 %02x", type_)
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayFloat []float32
+
+func (a arrayFloat) marshal(wr writer) error {
+	const typeSize = 4
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCodeFloat)
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		err = binaryWriteUint32(wr, math.Float32bits(element))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayFloat) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	if amqpType(type_) != typeCodeFloat {
+		return errorErrorf("invalid type for []float32 %02x", type_)
+	}
+
+	const typeSize = 4
+	if length*typeSize > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]float32, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	bytes := r.Next(length * typeSize)
+	var byteIdx int
+	for i := range aa {
+		bits := binary.BigEndian.Uint32(bytes[byteIdx:])
+		aa[i] = math.Float32frombits(bits)
+		byteIdx += typeSize
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayDouble []float64
+
+func (a arrayDouble) marshal(wr writer) error {
+	const typeSize = 8
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCodeDouble)
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		err = binaryWriteUint64(wr, math.Float64bits(element))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayDouble) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	if amqpType(type_) != typeCodeDouble {
+		return errorErrorf("invalid type for []float64 %02x", type_)
+	}
+
+	const typeSize = 8
+	if length*typeSize > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]float64, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	bytes := r.Next(length * typeSize)
+	var byteIdx int
+	for i := range aa {
+		bits := binary.BigEndian.Uint64(bytes[byteIdx:])
+		aa[i] = math.Float64frombits(bits)
+		byteIdx += typeSize
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayBool []bool
+
+func (a arrayBool) marshal(wr writer) error {
+	const typeSize = 1
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCodeBool)
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		value := byte(0)
+		if element {
+			value = 1
+		}
+		err = wr.WriteByte(value)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayBool) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]bool, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	switch amqpType(type_) {
+	case typeCodeBool:
+		if length > r.Len() {
+			return errorNew("invalid length")
+		}
+		bytes := r.Next(length)
+		for i, value := range bytes {
+			if value == 0 {
+				aa[i] = false
+			} else {
+				aa[i] = true
+			}
+		}
+
+	case typeCodeBoolTrue:
+		for i := range aa {
+			aa[i] = true
+		}
+	case typeCodeBoolFalse:
+		for i := range aa {
+			aa[i] = false
+		}
+	default:
+		return errorErrorf("invalid type for []bool %02x", type_)
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayString []string
+
+func (a arrayString) marshal(wr writer) error {
+	length := len(a)
+
+	// type
+	err := wr.WriteByte(byte(typeCodeArray32))
+	if err != nil {
+		return err
+	}
+
+	// size
+	sizeIdx := wr.Len()
+	err = binaryWriteUint32(wr, 0)
+	if err != nil {
+		return err
+	}
+	// length
+	err = binaryWriteUint32(wr, uint32(length))
+	if err != nil {
+		return err
+	}
+
+	// element type
+	err = wr.WriteByte(byte(typeCodeStr32))
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		if !utf8.ValidString(element) {
+			return errorNew("not a valid UTF-8 string")
+		}
+
+		err = binaryWriteUint32(wr, uint32(len(element)))
+		if err != nil {
+			return err
+		}
+		_, err = wr.WriteString(element)
+		if err != nil {
+			return err
+		}
+	}
+
+	// overwrite size
+	binary.BigEndian.PutUint32(wr.Bytes()[sizeIdx:], uint32(wr.Len()-(sizeIdx+4)))
+
+	return nil
+}
+
+func (a *arrayString) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	const typeSize = 2 // assume all strings are at least 2 bytes
+	if length*typeSize > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]string, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	dataLen := r.Len()
+	var total int
+
+	switch amqpType(type_) {
+	case typeCodeStr8:
+		for i := range aa {
+			size, err := r.ReadByte()
+			if err != nil {
+				return err
+			}
+			total += int(size) + 1
+			if total > dataLen {
+				return errorNew("invalid length")
+			}
+			aa[i] = string(r.Next(int(size)))
+		}
+	case typeCodeStr32:
+		for i := range aa {
+			total += 4
+			if total > dataLen {
+				return errorNew("invalid length")
+			}
+			size := int(binary.BigEndian.Uint32(r.Next(4)))
+			total += size
+			if total > dataLen {
+				return errorNew("invalid length")
+			}
+			aa[i] = string(r.Next(size))
+		}
+	default:
+		return errorErrorf("invalid type for []string %02x", type_)
+	}
+
+	*a = aa
+	return nil
+}
+
+type arraySymbol []symbol
+
+func (a arraySymbol) marshal(wr writer) error {
+	length := len(a)
+
+	// type
+	err := wr.WriteByte(byte(typeCodeArray32))
+	if err != nil {
+		return err
+	}
+
+	// size
+	sizeIdx := wr.Len()
+	err = binaryWriteUint32(wr, 0)
+	if err != nil {
+		return err
+	}
+	// length
+	err = binaryWriteUint32(wr, uint32(length))
+	if err != nil {
+		return err
+	}
+
+	// element type
+	err = wr.WriteByte(byte(typeCodeSym32))
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		if !utf8.ValidString(string(element)) {
+			return errorNew("not a valid UTF-8 string")
+		}
+
+		err = binaryWriteUint32(wr, uint32(len(element)))
+		if err != nil {
+			return err
+		}
+		_, err = wr.WriteString(string(element))
+		if err != nil {
+			return err
+		}
+	}
+
+	// overwrite size
+	binary.BigEndian.PutUint32(wr.Bytes()[sizeIdx:], uint32(wr.Len()-(sizeIdx+4)))
+
+	return nil
+}
+
+func (a *arraySymbol) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	const typeSize = 2 // assume all symbols are at least 2 bytes
+	if length*typeSize > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]symbol, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	dataLen := r.Len()
+	var total int
+
+	switch amqpType(type_) {
+	case typeCodeSym8:
+		for i := range aa {
+			size, err := r.ReadByte()
+			if err != nil {
+				return err
+			}
+			total += int(size) + 1
+			if total > dataLen {
+				return errorNew("invalid length")
+			}
+			aa[i] = symbol(r.Next(int(size)))
+		}
+	case typeCodeSym32:
+		for i := range aa {
+			total += 4
+			if total > dataLen {
+				return errorNew("invalid length")
+			}
+			size := int(binary.BigEndian.Uint32(r.Next(4)))
+			total += size
+			if total > dataLen {
+				return errorNew("invalid length")
+			}
+			aa[i] = symbol(r.Next(int(size)))
+		}
+	default:
+		return errorErrorf("invalid type for []symbol %02x", type_)
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayBinary [][]byte
+
+func (a arrayBinary) marshal(wr writer) error {
+	length := len(a)
+
+	// type
+	err := wr.WriteByte(byte(typeCodeArray32))
+	if err != nil {
+		return err
+	}
+
+	// size
+	sizeIdx := wr.Len()
+	err = binaryWriteUint32(wr, 0)
+	if err != nil {
+		return err
+	}
+
+	// length
+	err = binaryWriteUint32(wr, uint32(length))
+	if err != nil {
+		return err
+	}
+
+	// element type
+	err = wr.WriteByte(byte(typeCodeVbin32))
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		err = binaryWriteUint32(wr, uint32(len(element)))
+		if err != nil {
+			return err
+		}
+		_, err = wr.Write(element)
+		if err != nil {
+			return err
+		}
+	}
+
+	// overwrite size
+	binary.BigEndian.PutUint32(wr.Bytes()[sizeIdx:], uint32(wr.Len()-(sizeIdx+4)))
+
+	return nil
+}
+
+func (a *arrayBinary) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	const typeSize = 2 // assume all binary is at least 2 bytes
+	if length*typeSize > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([][]byte, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	dataLen := r.Len()
+	var total int
+
+	switch amqpType(type_) {
+	case typeCodeVbin8:
+		for i := range aa {
+			size, err := r.ReadByte()
+			if err != nil {
+				return err
+			}
+			total += int(size) + 1
+			if total > dataLen {
+				return errorErrorf("invalid length %d", length)
+			}
+			aa[i] = append([]byte(nil), r.Next(int(size))...)
+		}
+	case typeCodeVbin32:
+		for i := range aa {
+			total += 4
+			if total > dataLen {
+				return errorNew("invalid length")
+			}
+			size := int(binary.BigEndian.Uint32(r.Next(4)))
+			total += size
+			if total > dataLen {
+				return errorNew("invalid length")
+			}
+			aa[i] = append([]byte(nil), r.Next(size)...)
+		}
+	default:
+		return errorErrorf("invalid type for [][]byte %02x", type_)
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayTimestamp []time.Time
+
+func (a arrayTimestamp) marshal(wr writer) error {
+	const typeSize = 8
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCodeTimestamp)
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		ms := element.UnixNano() / int64(time.Millisecond)
+		err = binaryWriteUint64(wr, uint64(ms))
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayTimestamp) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	const typeSize = 8
+	if length*typeSize > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]time.Time, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	if amqpType(type_) != typeCodeTimestamp {
+		return errorErrorf("invalid type for []time.Time %02x", type_)
+	}
+
+	for i := range aa {
+		ms := int64(binary.BigEndian.Uint64(r.Next(8)))
+		rem := ms % 1000
+		aa[i] = time.Unix(int64(ms)/1000, int64(rem)*1000000).UTC()
+	}
+
+	*a = aa
+	return nil
+}
+
+type arrayUUID []UUID
+
+func (a arrayUUID) marshal(wr writer) error {
+	const typeSize = 16
+
+	err := writeArrayHeader(wr, len(a), typeSize, typeCodeUUID)
+	if err != nil {
+		return err
+	}
+
+	for _, element := range a {
+		_, err = wr.Write(element[:])
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *arrayUUID) unmarshal(r reader) error {
+	_, length, err := readArrayHeader(r)
+	if err != nil {
+		return err
+	}
+
+	type_, err := r.ReadByte()
+	if err != nil {
+		return err
+	}
+
+	const typeSize = 16
+	if length*typeSize > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	aa := (*a)[:0]
+	if cap(aa) < length {
+		aa = make([]UUID, length)
+	} else {
+		aa = aa[:length]
+	}
+
+	if amqpType(type_) != typeCodeUUID {
+		return errorErrorf("invalid type for []UUID %#02x", type_)
+	}
+
+	for i := range aa {
+		_, err = r.Read(aa[i][:])
+		if err != nil {
+			return err
+		}
+	}
+
+	*a = aa
+	return nil
+}
+
+// LIST
+
+type list []interface{}
+
+func (l list) marshal(wr writer) error {
+	length := len(l)
+
+	// type
+	if length == 0 {
+		return wr.WriteByte(byte(typeCodeList0))
+	}
+	err := wr.WriteByte(byte(typeCodeList32))
+	if err != nil {
+		return err
+	}
+
+	// size
+	sizeIdx := wr.Len()
+	err = binaryWriteUint32(wr, 0)
+	if err != nil {
+		return err
+	}
+
+	// length
+	err = binaryWriteUint32(wr, uint32(length))
+	if err != nil {
+		return err
+	}
+
+	for _, element := range l {
+		err = marshal(wr, element)
+		if err != nil {
+			return err
+		}
+	}
+
+	// overwrite size
+	binary.BigEndian.PutUint32(wr.Bytes()[sizeIdx:], uint32(wr.Len()-(sizeIdx+4)))
+
+	return nil
+}
+
+func (l *list) unmarshal(r reader) error {
+	_, length, err := readListHeader(r)
+	if err != nil {
+		return err
+	}
+
+	// assume that all types are at least 1 byte
+	if length > r.Len() {
+		return errorErrorf("invalid length %d", length)
+	}
+
+	ll := *l
+	if cap(ll) < length {
+		ll = make([]interface{}, length)
+	} else {
+		ll = ll[:length]
+	}
+
+	for i := range ll {
+		ll[i], err = readAny(r)
+		if err != nil {
+			return err
+		}
+	}
+
+	*l = ll
+	return nil
 }

@@ -9,13 +9,6 @@ import (
 	"unicode/utf8"
 )
 
-const intSize = 32 << (^uint(0) >> 63)
-
-var (
-	errInvalidLength = errorNew("length field is larger than frame")
-	errNull          = errorNew("error is null")
-)
-
 // writer is the required interface for marshaling AMQP encoded data.
 type writer interface {
 	io.Writer
@@ -86,15 +79,9 @@ func marshal(wr writer, i interface{}) error {
 			err = wr.WriteByte(byte(typeCodeBoolFalse))
 		}
 	case uint:
-		if intSize == 64 {
-			return writeUint64(wr, uint64(t))
-		}
-		return writeUint32(wr, uint32(t))
+		return writeUint64(wr, uint64(t))
 	case *uint:
-		if intSize == 64 {
-			return writeUint64(wr, uint64(*t))
-		}
-		return writeUint32(wr, uint32(*t))
+		return writeUint64(wr, uint64(*t))
 	case uint64:
 		return writeUint64(wr, t)
 	case *uint64:
@@ -132,15 +119,9 @@ func marshal(wr writer, i interface{}) error {
 		}
 		err = wr.WriteByte(*t)
 	case int:
-		if intSize == 64 {
-			return writeInt64(wr, int64(t))
-		}
-		return writeInt32(wr, int32(t))
+		return writeInt64(wr, int64(t))
 	case *int:
-		if intSize == 64 {
-			return writeInt64(wr, int64(*t))
-		}
-		return writeInt32(wr, int32(*t))
+		return writeInt64(wr, int64(*t))
 	case int8:
 		err = wr.WriteByte(byte(typeCodeByte))
 		if err != nil {
@@ -173,10 +154,14 @@ func marshal(wr writer, i interface{}) error {
 		return writeInt64(wr, t)
 	case *int64:
 		return writeInt64(wr, *t)
-	case []symbol:
-		err = writeSymbolArray(wr, t)
-	case *[]symbol:
-		err = writeSymbolArray(wr, *t)
+	case float32:
+		return writeFloat(wr, t)
+	case *float32:
+		return writeFloat(wr, *t)
+	case float64:
+		return writeDouble(wr, t)
+	case *float64:
+		return writeDouble(wr, *t)
 	case string:
 		err = writeString(wr, t)
 	case *string:
@@ -205,6 +190,70 @@ func marshal(wr writer, i interface{}) error {
 		err = writeTimestamp(wr, t)
 	case *time.Time:
 		err = writeTimestamp(wr, *t)
+	case []int8:
+		err = arrayInt8(t).marshal(wr)
+	case *[]int8:
+		err = arrayInt8(*t).marshal(wr)
+	case []uint16:
+		err = arrayUint16(t).marshal(wr)
+	case *[]uint16:
+		err = arrayUint16(*t).marshal(wr)
+	case []int16:
+		err = arrayInt16(t).marshal(wr)
+	case *[]int16:
+		err = arrayInt16(*t).marshal(wr)
+	case []uint32:
+		err = arrayUint32(t).marshal(wr)
+	case *[]uint32:
+		err = arrayUint32(*t).marshal(wr)
+	case []int32:
+		err = arrayInt32(t).marshal(wr)
+	case *[]int32:
+		err = arrayInt32(*t).marshal(wr)
+	case []uint64:
+		err = arrayUint64(t).marshal(wr)
+	case *[]uint64:
+		err = arrayUint64(*t).marshal(wr)
+	case []int64:
+		err = arrayInt64(t).marshal(wr)
+	case *[]int64:
+		err = arrayInt64(*t).marshal(wr)
+	case []float32:
+		err = arrayFloat(t).marshal(wr)
+	case *[]float32:
+		err = arrayFloat(*t).marshal(wr)
+	case []float64:
+		err = arrayDouble(t).marshal(wr)
+	case *[]float64:
+		err = arrayDouble(*t).marshal(wr)
+	case []bool:
+		err = arrayBool(t).marshal(wr)
+	case *[]bool:
+		err = arrayBool(*t).marshal(wr)
+	case []string:
+		err = arrayString(t).marshal(wr)
+	case *[]string:
+		err = arrayString(*t).marshal(wr)
+	case []symbol:
+		err = arraySymbol(t).marshal(wr)
+	case *[]symbol:
+		err = arraySymbol(*t).marshal(wr)
+	case [][]byte:
+		err = arrayBinary(t).marshal(wr)
+	case *[][]byte:
+		err = arrayBinary(*t).marshal(wr)
+	case []time.Time:
+		err = arrayTimestamp(t).marshal(wr)
+	case *[]time.Time:
+		err = arrayTimestamp(*t).marshal(wr)
+	case []UUID:
+		err = arrayUUID(t).marshal(wr)
+	case *[]UUID:
+		err = arrayUUID(*t).marshal(wr)
+	case []interface{}:
+		err = list(t).marshal(wr)
+	case *[]interface{}:
+		err = list(*t).marshal(wr)
 	default:
 		return errorErrorf("marshal not implemented for %T", i)
 	}
@@ -343,6 +392,22 @@ func writeUint64(wr writer, n uint64) error {
 	return binaryWriteUint64(wr, n)
 }
 
+func writeFloat(wr writer, f float32) error {
+	err := wr.WriteByte(byte(typeCodeFloat))
+	if err != nil {
+		return err
+	}
+	return binaryWriteUint32(wr, math.Float32bits(f))
+}
+
+func writeDouble(wr writer, f float64) error {
+	err := wr.WriteByte(byte(typeCodeDouble))
+	if err != nil {
+		return err
+	}
+	return binaryWriteUint64(wr, math.Float64bits(f))
+}
+
 func writeTimestamp(wr writer, t time.Time) error {
 	err := wr.WriteByte(byte(typeCodeTimestamp))
 	if err != nil {
@@ -357,10 +422,6 @@ func writeTimestamp(wr writer, t time.Time) error {
 type marshalField struct {
 	value interface{} // value to be marshaled, use pointers to avoid interface conversion overhead
 	omit  bool        // indicates that this field should be omitted (set to null)
-}
-type marshalField2 struct {
-	marshal func(wr writer) error
-	omit    bool // indicates that this field should be omitted (set to null)
 }
 
 // marshalComposite is a helper for us in a composite's marshal() function.
@@ -458,89 +519,6 @@ func writeDescriptor(wr writer, code amqpType) error {
 	return wr.WriteByte(byte(code))
 }
 
-func writeSymbolArray(wr writer, symbols []symbol) error {
-	ofType := typeCodeSym8
-	for _, symbol := range symbols {
-		if len(symbol) > math.MaxUint8 {
-			ofType = typeCodeSym32
-			break
-		}
-	}
-
-	// always using array32 might waste a couple bytes,
-	// but it simplifies overwriting the size later
-	err := wr.WriteByte(byte(typeCodeArray32))
-	if err != nil {
-		return err
-	}
-
-	// temp size, overwrite later
-	sizeIdx := wr.Len()
-	err = binaryWriteUint32(wr, 0)
-	if err != nil {
-		return err
-	}
-
-	// length
-	preArrayLen := wr.Len()
-	err = binaryWriteUint32(wr, uint32(len(symbols)))
-	if err != nil {
-		return err
-	}
-
-	// array type
-	err = wr.WriteByte(byte(ofType))
-	if err != nil {
-		return err
-	}
-
-	// write symbols
-	for _, symbol := range symbols {
-		err := writeSymbolType(wr, symbol, ofType)
-		if err != nil {
-			return err
-		}
-	}
-
-	// overwrite the size
-	binary.BigEndian.PutUint32(wr.Bytes()[sizeIdx:], uint32(wr.Len()-preArrayLen))
-	return err
-}
-
-func writeSymbol(wr writer, sym symbol) error {
-	ofType := typeCodeSym8
-	if len(sym) > math.MaxUint8 {
-		ofType = typeCodeSym32
-	}
-
-	return writeSymbolType(wr, sym, ofType)
-}
-
-func writeSymbolType(wr writer, sym symbol, typ amqpType) error {
-	if !utf8.ValidString(string(sym)) {
-		return errorNew("not a valid UTF-8 string")
-	}
-
-	l := len(sym)
-
-	switch typ {
-	case typeCodeSym8:
-		err := wr.WriteByte(uint8(l))
-		if err != nil {
-			return err
-		}
-	case typeCodeSym32:
-		err := binaryWriteUint32(wr, uint32(l))
-		if err != nil {
-			return err
-		}
-	default:
-		return errorNew("invalid symbol type")
-	}
-	_, err := wr.WriteString(string(sym))
-	return err
-}
-
 func writeString(wr writer, str string) error {
 	if !utf8.ValidString(str) {
 		return errorNew("not a valid UTF-8 string")
@@ -616,75 +594,6 @@ func writeBinary(wr writer, bin []byte) error {
 	default:
 		return errorNew("too long")
 	}
-}
-
-func writeArray(wr writer, of amqpType, numFields int, size int) error {
-	const isArray = true
-	return writeSlice(wr, isArray, of, numFields, size)
-}
-
-func writeList(wr writer, numFields int, size int) error {
-	const isArray = false
-	return writeSlice(wr, isArray, 0, numFields, size)
-}
-
-func writeSlice(wr writer, isArray bool, of amqpType, numFields int, size int) error {
-	size8 := typeCodeList8
-	size32 := typeCodeList32
-	if isArray {
-		size8 = typeCodeArray8
-		size32 = typeCodeArray32
-	}
-
-	switch {
-	// list0
-	case numFields == 0 && isArray:
-		return wr.WriteByte(byte(typeCodeList0))
-
-	// list8
-	case numFields < 256 && size < 256:
-		err := wr.WriteByte(byte(size8))
-		if err != nil {
-			return err
-		}
-		err = wr.WriteByte(byte(size + 1))
-		if err != nil {
-			return err
-		}
-		err = wr.WriteByte(byte(numFields))
-		if err != nil {
-			return err
-		}
-
-	// list32
-	case numFields < math.MaxUint32 && size < math.MaxUint32:
-		err := wr.WriteByte(byte(size32))
-		if err != nil {
-			return err
-		}
-
-		err = binaryWriteUint32(wr, uint32(size+4))
-		if err != nil {
-			return err
-		}
-
-		err = binaryWriteUint32(wr, uint32(numFields))
-		if err != nil {
-			return err
-		}
-
-	default:
-		return errorNew("too many fields")
-	}
-
-	if isArray {
-		err := wr.WriteByte(byte(of))
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 func writeMap(wr writer, m interface{}) error {
@@ -775,4 +684,45 @@ func writeMap(wr writer, m interface{}) error {
 
 	_, err := buf.WriteTo(wr)
 	return err
+}
+
+func writeArrayHeader(wr writer, length, typeSize int, type_ amqpType) error {
+	size := length * typeSize
+	// array type
+	if size+array8TLSize <= math.MaxUint8 {
+		//type
+		err := wr.WriteByte(byte(typeCodeArray8))
+		if err != nil {
+			return err
+		}
+		// size
+		wr.WriteByte(byte(size + array8TLSize))
+		if err != nil {
+			return err
+		}
+		// length
+		wr.WriteByte(byte(length))
+		if err != nil {
+			return err
+		}
+	} else {
+		//type
+		err := wr.WriteByte(byte(typeCodeArray32))
+		if err != nil {
+			return err
+		}
+		// size
+		err = binaryWriteUint32(wr, uint32(size+array32TLSize))
+		if err != nil {
+			return err
+		}
+		// length
+		err = binaryWriteUint32(wr, uint32(length))
+		if err != nil {
+			return err
+		}
+	}
+
+	// element type
+	return wr.WriteByte(byte(type_))
 }
