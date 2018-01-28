@@ -3,6 +3,7 @@ package amqp
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -24,49 +25,54 @@ type Client struct {
 // Dial connects to an AMQP server.
 //
 // If the addr includes a scheme, it must be "amqp" or "amqps".
-// TLS will be negotiated when the scheme is "amqps".
-//
-// If no port is provided, 5672 will be used.
+// If no port is provided, 5672 will be used for "amqp" and 5671 for "amqps".
 func Dial(addr string, opts ...ConnOption) (*Client, error) {
 	u, err := url.Parse(addr)
 	if err != nil {
 		return nil, err
 	}
-
 	host, port, err := net.SplitHostPort(u.Host)
 	if err != nil {
 		host = u.Host
-		port = "5672" // use default AMQP if parse fails
-	}
-
-	switch u.Scheme {
-	case "amqp", "amqps", "":
-	default:
-		return nil, errorErrorf("unsupported scheme %q", u.Scheme)
-	}
-
-	conn, err := net.Dial("tcp", host+":"+port)
-	if err != nil {
-		return nil, err
+		port = "5672" // use default port values if parse fails
+		if u.Scheme == "amqps" {
+			port = "5671"
+		}
 	}
 
 	// append default options so user specified can overwrite
 	opts = append([]ConnOption{
 		ConnServerHostname(host),
-		ConnTLS(u.Scheme == "amqps"),
 	}, opts...)
 
-	c, err := New(conn, opts...)
+	c, err := newConn(nil, opts...)
 	if err != nil {
 		return nil, err
 	}
-
-	return c, err
+	switch u.Scheme {
+	case "amqp", "":
+		c.net, err = net.Dial("tcp", host+":"+port)
+	case "amqps":
+		c.initTLSConfig()
+		c.tlsNegotiation = false
+		c.net, err = tls.Dial("tcp", host+":"+port, c.tlsConfig)
+	default:
+		return nil, errorErrorf("unsupported scheme %q", u.Scheme)
+	}
+	if err != nil {
+		return nil, err
+	}
+	err = c.start()
+	return &Client{conn: c}, err
 }
 
 // New establishes an AMQP client connection over conn.
 func New(conn net.Conn, opts ...ConnOption) (*Client, error) {
 	c, err := newConn(conn, opts...)
+	if err != nil {
+		return nil, err
+	}
+	err = c.start()
 	return &Client{conn: c}, err
 }
 

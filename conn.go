@@ -207,7 +207,22 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 			return nil, err
 		}
 	}
+	return c, nil
+}
 
+func (c *conn) initTLSConfig() {
+	// create a new config if not already set
+	if c.tlsConfig == nil {
+		c.tlsConfig = new(tls.Config)
+	}
+
+	// TLS config must have ServerName or InsecureSkipVerify set
+	if c.tlsConfig.ServerName == "" && !c.tlsConfig.InsecureSkipVerify {
+		c.tlsConfig.ServerName = c.hostname
+	}
+}
+
+func (c *conn) start() error {
 	// start reader
 	go c.connReader()
 
@@ -220,14 +235,14 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 	if c.err != nil {
 		close(c.txDone) // close here since connWriter hasn't been started yet
 		c.Close()
-		return nil, c.err
+		return c.err
 	}
 
 	// start multiplexor and writer
 	go c.mux()
 	go c.connWriter()
 
-	return c, nil
+	return nil
 }
 
 func (c *conn) Close() error {
@@ -684,15 +699,7 @@ func (c *conn) readProtoHeader() (protoHeader, error) {
 
 // startTLS wraps the conn with TLS and returns to Client.negotiateProto
 func (c *conn) startTLS() stateFunc {
-	// create a new config if not already set
-	if c.tlsConfig == nil {
-		c.tlsConfig = new(tls.Config)
-	}
-
-	// TLS config must have ServerName or InsecureSkipVerify set
-	if c.tlsConfig.ServerName == "" && !c.tlsConfig.InsecureSkipVerify {
-		c.tlsConfig.ServerName = c.hostname
-	}
+	c.initTLSConfig()
 
 	// convoluted method to pause connReader, explorer simpler alternatives
 	c.resumeRead = make(chan struct{})        // 1. create channel
