@@ -182,6 +182,7 @@ func FuzzUnmarshal(data []byte) int {
 
 	for _, t := range types {
 		unmarshal(bytes.NewBuffer(data), t)
+		readAny(bytes.NewBuffer(data))
 	}
 	return 0
 }
