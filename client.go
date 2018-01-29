@@ -292,7 +292,10 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 
 // Address returns the link's address.
 func (s *Sender) Address() string {
-	return s.link.address
+	if s.link.target == nil {
+		return ""
+	}
+	return s.link.target.Address
 }
 
 // Close closes the Sender and AMQP link.
@@ -606,7 +609,6 @@ type link struct {
 	name         string               // our name
 	handle       uint32               // our handle
 	remoteHandle uint32               // remote's handle
-	address      string               // address sent during attach
 	dynamicAddr  bool                 // request a dynamic link address from the server
 	rx           chan frameBody       // sessions sends frames for this link on this channel
 	transfers    chan performTransfer // sender uses for send; receiver uses for receive
@@ -616,6 +618,8 @@ type link struct {
 	doneOnce     sync.Once
 	session      *Session  // parent session
 	receiver     *Receiver // allows link options to modify Receiver
+	source       *source
+	target       *target
 
 	// "The delivery-count is initialized by the sender when a link endpoint is created,
 	// and is incremented whenever a message is sent. Only the sender MAY independently
@@ -628,7 +632,6 @@ type link struct {
 	senderSettleMode   *SenderSettleMode
 	receiverSettleMode *ReceiverSettleMode
 	maxMessageSize     uint64
-	filters            map[symbol]interface{} // source filters sent during attach
 	peerMaxMessageSize uint64
 	detachSent         bool // detach frame has been sent
 	detachReceived     bool
@@ -687,21 +690,22 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		ReceiverSettleMode: l.receiverSettleMode,
 		SenderSettleMode:   l.senderSettleMode,
 		MaxMessageSize:     l.maxMessageSize,
+		Source:             l.source,
+		Target:             l.target,
 	}
 
 	if isReceiver {
 		attach.Role = roleReceiver
-		attach.Source = &source{
-			Address: l.address,
-			Dynamic: l.dynamicAddr,
-			Filter:  l.filters,
+		if attach.Source == nil {
+			attach.Source = new(source)
 		}
+		attach.Source.Dynamic = l.dynamicAddr
 	} else {
 		attach.Role = roleSender
-		attach.Target = &target{
-			Address: l.address,
-			Dynamic: l.dynamicAddr,
+		if attach.Target == nil {
+			attach.Target = new(target)
 		}
+		attach.Target.Dynamic = l.dynamicAddr
 	}
 
 	// send Attach frame
@@ -732,7 +736,7 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	if isReceiver {
 		// if dynamic address requested, copy assigned name to address
 		if l.dynamicAddr && resp.Source != nil {
-			l.address = resp.Source.Address
+			l.source.Address = resp.Source.Address
 		}
 		// deliveryCount is a sequence number, must initialize to sender's initial sequence number
 		l.deliveryCount = resp.InitialDeliveryCount
@@ -744,7 +748,7 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	} else {
 		// if dynamic address requested, copy assigned name to address
 		if l.dynamicAddr && resp.Target != nil {
-			l.address = resp.Target.Address
+			l.target.Address = resp.Target.Address
 		}
 		l.transfers = make(chan performTransfer)
 		if resp.ReceiverSettleMode != nil {
@@ -1015,9 +1019,35 @@ type LinkOption func(*link) error
 //
 // For a Receiver this configures the source address.
 // For a Sender this configures the target address.
+//
+// Deprecated: use LinkSourceAddress or LinkTargetAddress instead.
 func LinkAddress(source string) LinkOption {
 	return func(l *link) error {
-		l.address = source
+		if l.receiver != nil {
+			return LinkSourceAddress(source)(l)
+		}
+		return LinkTargetAddress(source)(l)
+	}
+}
+
+// LinkSourceAddress sets the source address.
+func LinkSourceAddress(addr string) LinkOption {
+	return func(l *link) error {
+		if l.source == nil {
+			l.source = new(source)
+		}
+		l.source.Address = addr
+		return nil
+	}
+}
+
+// LinkTargetAddress sets the target address.
+func LinkTargetAddress(addr string) LinkOption {
+	return func(l *link) error {
+		if l.target == nil {
+			l.target = new(target)
+		}
+		l.target.Address = addr
 		return nil
 	}
 }
@@ -1102,10 +1132,13 @@ func LinkSelectorFilter(filter string) LinkOption {
 	const name = symbol("apache.org:selector-filter:string")
 	code := binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x46, 0x8C, 0x00, 0x00, 0x00, 0x04})
 	return func(l *link) error {
-		if l.filters == nil {
-			l.filters = make(map[symbol]interface{})
+		if l.source == nil {
+			l.source = new(source)
 		}
-		l.filters[name] = describedType{
+		if l.source.Filter == nil {
+			l.source.Filter = make(map[symbol]interface{})
+		}
+		l.source.Filter[name] = describedType{
 			descriptor: code,
 			value:      filter,
 		}
@@ -1116,7 +1149,7 @@ func LinkSelectorFilter(filter string) LinkOption {
 // Receiver receives messages on a single AMQP link.
 type Receiver struct {
 	link         *link                   // underlying link
-	buf          bytes.Buffer            // resable buffer for decoding multi frame messages
+	buf          bytes.Buffer            // reusable buffer for decoding multi frame messages
 	batching     bool                    // enable batching of message dispositions
 	batchMaxAge  time.Duration           // maximum time between the start n batch and sending the batch to the server
 	dispositions chan messageDisposition // message dispositions are sent on this channel when batching is enabled
@@ -1193,7 +1226,10 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 
 // Address returns the link's address.
 func (r *Receiver) Address() string {
-	return r.link.address
+	if r.link.source == nil {
+		return ""
+	}
+	return r.link.source.Address
 }
 
 // Close closes the Receiver and AMQP link.
