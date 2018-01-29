@@ -26,6 +26,9 @@ type Client struct {
 //
 // If the addr includes a scheme, it must be "amqp" or "amqps".
 // If no port is provided, 5672 will be used for "amqp" and 5671 for "amqps".
+//
+// If username and password information is not empty it's used as SASL PLAIN
+// credentials, equal to passing ConnSASLPlain option.
 func Dial(addr string, opts ...ConnOption) (*Client, error) {
 	u, err := url.Parse(addr)
 	if err != nil {
@@ -38,6 +41,14 @@ func Dial(addr string, opts ...ConnOption) (*Client, error) {
 		if u.Scheme == "amqps" {
 			port = "5671"
 		}
+	}
+
+	// prepend SASL credentials when the user/pass segment is not empty
+	if u.User != nil {
+		pass, _ := u.User.Password()
+		opts = append([]ConnOption{
+			ConnSASLPlain(u.User.Username(), pass),
+		}, opts...)
 	}
 
 	// append default options so user specified can overwrite
