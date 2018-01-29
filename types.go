@@ -1796,7 +1796,7 @@ func (m *Message) marshal(wr writer) error {
 		if err != nil {
 			return err
 		}
-		err = writeBinary(wr, m.Data)
+		err = writeBinary(wr, m.Data, true)
 		if err != nil {
 			return err
 		}
@@ -2325,7 +2325,7 @@ func (n amqpUint16) marshal(wr writer) error {
 type amqpUint32 uint32
 
 func (n amqpUint32) marshal(wr writer) error {
-	return writeUint32(wr, uint32(n))
+	return writeUint32(wr, uint32(n), true)
 }
 
 // symbol is an AMQP symbolic string.

@@ -89,24 +89,24 @@ func marshal(wr writer, i interface{}) error {
 		if intSize == 64 {
 			return writeUint64(wr, uint64(t))
 		}
-		return writeUint32(wr, uint32(t))
+		return writeUint32(wr, uint32(t), true)
 	case *uint:
 		if intSize == 64 {
 			return writeUint64(wr, uint64(*t))
 		}
-		return writeUint32(wr, uint32(*t))
+		return writeUint32(wr, uint32(*t), true)
 	case uint64:
 		return writeUint64(wr, t)
 	case *uint64:
 		return writeUint64(wr, *t)
 	case uint32:
-		return writeUint32(wr, t)
+		return writeUint32(wr, t, true)
 	case *uint32:
 		if t == nil {
 			err = wr.WriteByte(byte(typeCodeNull))
 			break
 		}
-		return writeUint32(wr, *t)
+		return writeUint32(wr, *t, true)
 	case uint16:
 		err = wr.WriteByte(byte(typeCodeUshort))
 		if err != nil {
@@ -177,14 +177,26 @@ func marshal(wr writer, i interface{}) error {
 		err = writeSymbolArray(wr, t)
 	case *[]symbol:
 		err = writeSymbolArray(wr, *t)
+	case []string:
+		err = writeArray(wr, t)
+	case *[]string:
+		err = writeArray(wr, *t)
+	case [][]uint8:
+		err = writeArray(wr, t)
+	case *[][]uint8:
+		err = writeArray(wr, *t)
+	case []uint32:
+		err = writeArray(wr, t)
+	case *[]uint32:
+		err = writeArray(wr, *t)
 	case string:
-		err = writeString(wr, t)
+		err = writeString(wr, t, true)
 	case *string:
-		err = writeString(wr, *t)
+		err = writeString(wr, *t, true)
 	case []byte:
-		err = writeBinary(wr, t)
+		err = writeBinary(wr, t, true)
 	case *[]byte:
-		err = writeBinary(wr, *t)
+		err = writeBinary(wr, *t, true)
 	case map[interface{}]interface{}:
 		err = writeMap(wr, t)
 	case *map[interface{}]interface{}:
@@ -301,22 +313,25 @@ func writeInt64(wr writer, n int64) error {
 	return err
 }
 
-func writeUint32(wr writer, n uint32) error {
-	if n == 0 {
-		return wr.WriteByte(byte(typeCodeUint0))
-	}
+func writeUint32(wr writer, n uint32, writeType bool) error {
+	// TODO: breaks writing slices
+	//if n == 0 {
+	//	return wr.WriteByte(byte(typeCodeUint0))
+	//}
+	//
+	//if n < 256 {
+	//	err := wr.WriteByte(byte(typeCodeSmallUint))
+	//	if err != nil {
+	//		return err
+	//	}
+	//	return wr.WriteByte(byte(n))
+	//}
 
-	if n < 256 {
-		err := wr.WriteByte(byte(typeCodeSmallUint))
+	if writeType {
+		err := wr.WriteByte(byte(typeCodeUint))
 		if err != nil {
 			return err
 		}
-		return wr.WriteByte(byte(n))
-	}
-
-	err := wr.WriteByte(byte(typeCodeUint))
-	if err != nil {
-		return err
 	}
 	return binaryWriteUint32(wr, n)
 }
@@ -541,7 +556,7 @@ func writeSymbolType(wr writer, sym symbol, typ amqpType) error {
 	return err
 }
 
-func writeString(wr writer, str string) error {
+func writeString(wr writer, str string, writeType bool) error {
 	if !utf8.ValidString(str) {
 		return errorNew("not a valid UTF-8 string")
 	}
@@ -550,11 +565,13 @@ func writeString(wr writer, str string) error {
 	switch {
 	// Str8
 	case l < 256:
-		err := wr.WriteByte(byte(typeCodeStr8))
-		if err != nil {
-			return err
+		if writeType {
+			err := wr.WriteByte(byte(typeCodeStr8))
+			if err != nil {
+				return err
+			}
 		}
-		err = wr.WriteByte(byte(l))
+		err := wr.WriteByte(byte(l))
 		if err != nil {
 			return err
 		}
@@ -563,12 +580,14 @@ func writeString(wr writer, str string) error {
 
 	// Str32
 	case l < math.MaxUint32:
-		err := wr.WriteByte(byte(typeCodeStr32))
-		if err != nil {
-			return err
+		if writeType {
+			err := wr.WriteByte(byte(typeCodeStr32))
+			if err != nil {
+				return err
+			}
 		}
 
-		err = binaryWriteUint32(wr, uint32(l))
+		err := binaryWriteUint32(wr, uint32(l))
 		if err != nil {
 			return err
 		}
@@ -581,17 +600,19 @@ func writeString(wr writer, str string) error {
 	}
 }
 
-func writeBinary(wr writer, bin []byte) error {
+func writeBinary(wr writer, bin []byte, writeType bool) error {
 	l := len(bin)
 
 	switch {
 	// List8
 	case l < 256:
-		err := wr.WriteByte(byte(typeCodeVbin8))
-		if err != nil {
-			return err
+		if writeType {
+			err := wr.WriteByte(byte(typeCodeVbin8))
+			if err != nil {
+				return err
+			}
 		}
-		err = wr.WriteByte(uint8(l))
+		err := wr.WriteByte(uint8(l))
 		if err != nil {
 			return err
 		}
@@ -600,12 +621,14 @@ func writeBinary(wr writer, bin []byte) error {
 
 	// List32
 	case l < math.MaxUint32:
-		err := wr.WriteByte(byte(typeCodeVbin32))
-		if err != nil {
-			return err
+		if writeType {
+			err := wr.WriteByte(byte(typeCodeVbin32))
+			if err != nil {
+				return err
+			}
 		}
 
-		err = binaryWriteUint32(wr, uint32(l))
+		err := binaryWriteUint32(wr, uint32(l))
 		if err != nil {
 			return err
 		}
@@ -618,17 +641,60 @@ func writeBinary(wr writer, bin []byte) error {
 	}
 }
 
-func writeArray(wr writer, of amqpType, numFields int, size int) error {
+func writeArray(wr writer, v interface{}) error {
 	const isArray = true
-	return writeSlice(wr, isArray, of, numFields, size)
+	return writeSlice(wr, isArray, v)
 }
 
-func writeList(wr writer, numFields int, size int) error {
+func writeList(wr writer, v interface{}) error {
 	const isArray = false
-	return writeSlice(wr, isArray, 0, numFields, size)
+	return writeSlice(wr, isArray, v)
 }
 
-func writeSlice(wr writer, isArray bool, of amqpType, numFields int, size int) error {
+func writeSlice(wr writer, isArray bool, v interface{}) error {
+	var size int
+	switch val := v.(type) {
+	case []string:
+		for i := 0; i < len(val); i++ {
+			size += len(val)
+		}
+		if err := writeSliceHeader(wr, isArray, len(val), size); err != nil {
+			return err
+		}
+		for i, v := range val {
+			if err := writeString(wr, v, !isArray || i == 0); err != nil {
+				return err
+			}
+		}
+	case [][]uint8:
+		for i := 0; i < len(val); i++ {
+			size += len(val)
+		}
+		if err := writeSliceHeader(wr, isArray, len(val), size); err != nil {
+			return err
+		}
+		for i, v := range val {
+			if err := writeBinary(wr, v, !isArray || i == 0); err != nil {
+				return err
+			}
+		}
+	case []uint32:
+		size = len(val) * 4
+		if err := writeSliceHeader(wr, isArray, len(val), size); err != nil {
+			return err
+		}
+		for i, v := range val {
+			if err := writeUint32(wr, v, !isArray || i == 0); err != nil {
+				return err
+			}
+		}
+	default:
+		return errorNew("unsupported slice type")
+	}
+	return nil
+}
+
+func writeSliceHeader(wr writer, isArray bool, numFields, size int) error {
 	size8 := typeCodeList8
 	size32 := typeCodeList32
 	if isArray {
@@ -641,7 +707,7 @@ func writeSlice(wr writer, isArray bool, of amqpType, numFields int, size int) e
 	case numFields == 0 && isArray:
 		return wr.WriteByte(byte(typeCodeList0))
 
-	// list8
+		// list8
 	case numFields < 256 && size < 256:
 		err := wr.WriteByte(byte(size8))
 		if err != nil {
@@ -676,14 +742,6 @@ func writeSlice(wr writer, isArray bool, of amqpType, numFields int, size int) e
 	default:
 		return errorNew("too many fields")
 	}
-
-	if isArray {
-		err := wr.WriteByte(byte(of))
-		if err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 

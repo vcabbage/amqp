@@ -171,6 +171,31 @@ func BenchmarkUnmarshal(b *testing.B) {
 	}
 }
 
+func TestMarshalArray(t *testing.T) {
+	for _, v1 := range []interface{}{
+		[][]byte{{'a', 'b'}},
+		[][]byte{bytes.Repeat([]byte{'a'}, 256)},
+		[]string{"a", "b"},
+		[]string{strings.Repeat("a", 256)},
+		[]uint32{1, 1000},
+	} {
+		var buf bytes.Buffer
+		if err := marshal(&buf, v1); err != nil {
+			t.Fatal(err)
+		}
+
+		var v2 interface{}
+		_, err := unmarshal(&buf, &v2)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if !reflect.DeepEqual(v1, v2) {
+			t.Errorf("marshal(umarshal(%#v)) != %#v", v1, v2)
+		}
+	}
+}
+
 func TestMarshalUnmarshal(t *testing.T) {
 	_, updateFuzzCorpus := os.LookupEnv("UPDATE_FUZZ_CORPUS")
 
