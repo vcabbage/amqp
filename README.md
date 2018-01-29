@@ -63,7 +63,7 @@ func main() {
 	{
 		// Create a sender
 		sender, err := session.NewSender(
-			amqp.LinkAddress("/queue-name"),
+			amqp.LinkTargetAddress("/queue-name"),
 		)
 		if err != nil {
 			log.Fatal("Creating sender link:", err)
@@ -87,7 +87,7 @@ func main() {
 	{
 		// Create a receiver
 		receiver, err := session.NewReceiver(
-			amqp.LinkAddress("/queue-name"),
+			amqp.LinkSourceAddress("/queue-name"),
 			amqp.LinkCredit(10),
 		)
 		if err != nil {
