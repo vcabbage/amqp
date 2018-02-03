@@ -374,6 +374,9 @@ func TestFuzzMarshalCrashers(t *testing.T) {
 			"\x19foo description\xc1\x18\x04\xa1" +
 			"\x05other\xa1\x04info\xa1\x03andU\x00\x00" +
 			"\x03k",
+		17: "\xf0\x00\x00\x00\x01@\x00TRUE\x00",
+		18: "\xf0\x00\x00\x00\x00\x10RTRT",
+		19: "\x00p\x00inp\xf0\x00\x00\x00\x01p\x00inp",
 	}
 
 	for i, tt := range tests {

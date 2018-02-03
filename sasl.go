@@ -17,12 +17,13 @@ const (
 
 type saslCode uint8
 
-func (s saslCode) marshal(wr writer) error {
+func (s saslCode) marshal(wr *buffer) error {
 	return marshal(wr, uint8(s))
 }
 
-func (s *saslCode) unmarshal(r reader) error {
-	_, err := unmarshal(r, (*uint8)(s))
+func (s *saslCode) unmarshal(r *buffer) error {
+	n, err := readUbyte(r)
+	*s = saslCode(n)
 	return err
 }
 
@@ -42,7 +43,7 @@ func ConnSASLPlain(username, password string) ConnOption {
 		c.saslHandlers[saslMechanismPLAIN] = func() stateFunc {
 			// send saslInit with PLAIN payload
 			c.err = c.writeFrame(frame{
-				typ: frameTypeSASL,
+				type_: frameTypeSASL,
 				body: &saslInit{
 					Mechanism:       "PLAIN",
 					InitialResponse: []byte("\x00" + username + "\x00" + password),
@@ -71,7 +72,7 @@ func ConnSASLAnonymous() ConnOption {
 		// add the handler the the map
 		c.saslHandlers[saslMechanismANONYMOUS] = func() stateFunc {
 			c.err = c.writeFrame(frame{
-				typ: frameTypeSASL,
+				type_: frameTypeSASL,
 				body: &saslInit{
 					Mechanism:       saslMechanismANONYMOUS,
 					InitialResponse: []byte("anonymous"),
