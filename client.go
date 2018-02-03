@@ -185,7 +185,7 @@ func (s *Session) Close() error {
 // txFrame sends a frame to the connWriter
 func (s *Session) txFrame(p frameBody, done chan struct{}) {
 	s.conn.wantWriteFrame(frame{
-		typ:     frameTypeAMQP,
+		type_:   frameTypeAMQP,
 		channel: s.channel,
 		body:    p,
 		done:    done,
@@ -234,19 +234,20 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 // Sender sends messages on a single AMQP link.
 type Sender struct {
 	link *link
-	buf  bytes.Buffer
+	buf  buffer
 }
 
 // Send sends a Message.
 //
 // Blocks until the message is sent, ctx completes, or an error occurs.
 func (s *Sender) Send(ctx context.Context, msg *Message) error {
+	s.buf.reset()
 	err := msg.marshal(&s.buf)
 	if err != nil {
 		return err
 	}
 
-	if uint64(s.buf.Len()) > s.link.peerMaxMessageSize {
+	if uint64(s.buf.len()) > s.link.peerMaxMessageSize {
 		return errorErrorf("encoded message size exceeds peer max of %d", s.link.peerMaxMessageSize)
 	}
 
@@ -261,13 +262,14 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 		Handle:            s.link.handle,
 		DeliveryTag:       randBytes(32), // TODO: delivery-tags only need to be unique on link, minimize this
 		MessageFormat:     &messageFormat,
-		More:              s.buf.Len() > 0,
+		More:              s.buf.len() > 0,
 		confirmSettlement: rcvSettleMode != nil && *rcvSettleMode == ModeSecond,
 	}
 
 	for fr.More {
-		fr.Payload = append([]byte(nil), s.buf.Next(maxPayloadSize)...)
-		fr.More = s.buf.Len() > 0
+		buf, _ := s.buf.next(maxPayloadSize)
+		fr.Payload = append([]byte(nil), buf...)
+		fr.More = s.buf.len() > 0
 		if !fr.More {
 			// mark final transfer as settled when sender mode is settled
 			fr.Settled = sndSettleMode != nil && *sndSettleMode == ModeSettled
@@ -320,12 +322,12 @@ func (s *Sender) Close() error {
 const maxTransferFrameHeader = 66 // determined by calcMaxTransferFrameHeader
 
 func calcMaxTransferFrameHeader() int {
-	var buf bytes.Buffer
+	var buf buffer
 
 	maxUint32 := uint32(math.MaxUint32)
 	receiverSettleMode := ReceiverSettleMode(0)
 	err := writeFrame(&buf, frame{
-		typ:     frameTypeAMQP,
+		type_:   frameTypeAMQP,
 		channel: math.MaxUint16,
 		body: &performTransfer{
 			Handle:             maxUint32,
@@ -346,7 +348,7 @@ func calcMaxTransferFrameHeader() int {
 		panic(err)
 	}
 
-	return buf.Len()
+	return buf.len()
 }
 
 // NewSender opens a new sender link on the session.
@@ -1160,7 +1162,7 @@ func LinkSelectorFilter(filter string) LinkOption {
 // Receiver receives messages on a single AMQP link.
 type Receiver struct {
 	link         *link                   // underlying link
-	buf          bytes.Buffer            // reusable buffer for decoding multi frame messages
+	buf          buffer                  // reusable buffer for decoding multi frame messages
 	batching     bool                    // enable batching of message dispositions
 	batchMaxAge  time.Duration           // maximum time between the start n batch and sending the batch to the server
 	dispositions chan messageDisposition // message dispositions are sent on this channel when batching is enabled
@@ -1171,7 +1173,7 @@ type Receiver struct {
 //
 // Blocks until a message is received, ctx completes, or an error occurs.
 func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
-	r.buf.Reset()
+	r.buf.reset()
 
 	msg := Message{receiver: r} // message to be decoded into
 
@@ -1210,7 +1212,7 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 		}
 
 		// add the payload the the buffer
-		r.buf.Write(fr.Payload)
+		r.buf.write(fr.Payload)
 
 		// mark as settled if at least one frame is settled
 		msg.settled = msg.settled || fr.Settled

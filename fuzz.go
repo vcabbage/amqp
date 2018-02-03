@@ -3,7 +3,6 @@
 package amqp
 
 import (
-	"bytes"
 	"context"
 	"time"
 
@@ -181,8 +180,8 @@ func FuzzUnmarshal(data []byte) int {
 	}
 
 	for _, t := range types {
-		unmarshal(bytes.NewBuffer(data), t)
-		readAny(bytes.NewBuffer(data))
+		unmarshal(&buffer{b: data}, t)
+		readAny(&buffer{b: data})
 	}
 	return 0
 }

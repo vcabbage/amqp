@@ -173,8 +173,8 @@ type conn struct {
 	rxDone  chan struct{}
 
 	// connWriter
-	txFrame chan frame   // AMQP frames to be sent by connWriter
-	txBuf   bytes.Buffer // buffer for marshaling frames before transmitting
+	txFrame chan frame // AMQP frames to be sent by connWriter
+	txBuf   buffer     // buffer for marshaling frames before transmitting
 	txDone  chan struct{}
 }
 
@@ -377,27 +377,12 @@ func (c *conn) mux() {
 	}
 }
 
-// frameReader returns io.EOF on each read, this allows
-// ReadFrom to work with a net.conn without blocking until
-// the connection is closed
-type frameReader struct {
-	r io.Reader // underlying reader
-}
-
-func (f *frameReader) Read(p []byte) (int, error) {
-	n, err := f.r.Read(p)
-	if err != nil {
-		return n, err
-	}
-	return n, io.EOF
-}
-
 // connReader reads from the net.Conn, decodes frames, and passes them
 // up via the conn.rxFrame and conn.rxProto channels.
 func (c *conn) connReader() {
 	defer close(c.rxDone)
 
-	buf := new(bytes.Buffer)
+	buf := new(buffer)
 
 	var (
 		negotiating     = true      // true during conn establishment, check for protoHeaders
@@ -405,15 +390,16 @@ func (c *conn) connReader() {
 		frameInProgress bool        // true if in the middle of receiving data for currentHeader
 	)
 
-	// frameReader facilitates reading directly into buf
-	fr := &frameReader{r: c.net}
-
 	for {
+		if buf.len() == 0 {
+			buf.reset()
+		}
+
 		// need to read more if buf doesn't contain the complete frame
 		// or there's not enough in buf to parse the header
-		if frameInProgress || buf.Len() < frameHeaderSize {
+		if frameInProgress || buf.len() < frameHeaderSize {
 			c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
-			_, err := buf.ReadFrom(fr)
+			err := buf.readFromOnce(c.net)
 			if err != nil {
 				if atomic.LoadInt32(&c.pauseRead) == 1 {
 					// need to stop reading during TLS negotiation,
@@ -422,7 +408,6 @@ func (c *conn) connReader() {
 					for range c.resumeRead {
 						// reads indicate paused, resume on close
 					}
-					fr.r = c.net // conn wrapped with TLS
 					continue
 				}
 
@@ -439,12 +424,12 @@ func (c *conn) connReader() {
 		}
 
 		// read more if buf doesn't contain enough to parse the header
-		if buf.Len() < frameHeaderSize {
+		if buf.len() < frameHeaderSize {
 			continue
 		}
 
 		// during negotiation, check for proto frames
-		if negotiating && bytes.Equal(buf.Bytes()[:4], []byte{'A', 'M', 'Q', 'P'}) {
+		if negotiating && bytes.Equal(buf.bytes()[:4], []byte{'A', 'M', 'Q', 'P'}) {
 			p, err := parseProtoHeader(buf)
 			if err != nil {
 				c.connErr <- err
@@ -486,7 +471,7 @@ func (c *conn) connReader() {
 		bodySize := int(currentHeader.Size - frameHeaderSize)
 
 		// the full frame has been received
-		if buf.Len() < bodySize {
+		if buf.len() < bodySize {
 			continue
 		}
 		frameInProgress = false
@@ -497,8 +482,13 @@ func (c *conn) connReader() {
 		}
 
 		// parse the frame
-		payload := bytes.NewBuffer(buf.Next(bodySize))
-		parsedBody, err := parseFrameBody(payload)
+		b, ok := buf.next(bodySize)
+		if !ok {
+			c.connErr <- io.EOF
+			return
+		}
+
+		parsedBody, err := parseFrameBody(&buffer{b: b})
 		if err != nil {
 			c.connErr <- err
 			return
@@ -561,8 +551,8 @@ func (c *conn) connWriter() {
 		case <-c.done:
 			// send close
 			c.writeFrame(frame{
-				typ:  frameTypeAMQP,
-				body: &performClose{},
+				type_: frameTypeAMQP,
+				body:  &performClose{},
 			})
 			return
 		}
@@ -577,19 +567,19 @@ func (c *conn) writeFrame(fr frame) error {
 	}
 
 	// writeFrame into txBuf
-	c.txBuf.Reset()
+	c.txBuf.reset()
 	err := writeFrame(&c.txBuf, fr)
 	if err != nil {
 		return err
 	}
 
 	// validate the frame isn't exceeding peer's max frame size
-	if uint64(c.txBuf.Len()) > uint64(c.peerMaxFrameSize) {
+	if uint64(c.txBuf.len()) > uint64(c.peerMaxFrameSize) {
 		return errorErrorf("frame larger than peer's max frame size")
 	}
 
 	// write to network
-	_, err = c.net.Write(c.txBuf.Bytes())
+	_, err = c.net.Write(c.txBuf.bytes())
 	return err
 }
 
@@ -731,7 +721,7 @@ func (c *conn) startTLS() stateFunc {
 func (c *conn) openAMQP() stateFunc {
 	// send open frame
 	c.err = c.writeFrame(frame{
-		typ: frameTypeAMQP,
+		type_: frameTypeAMQP,
 		body: &performOpen{
 			ContainerID:  string(randBytes(40)),
 			Hostname:     c.hostname,
