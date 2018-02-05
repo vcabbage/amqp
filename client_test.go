@@ -17,20 +17,25 @@ func TestLinkOptions(t *testing.T) {
 			label: "no options",
 		},
 		{
-			label: "selector-filter",
+			label: "link-filters",
 			opts: []LinkOption{
 				LinkSelectorFilter("amqp.annotation.x-opt-offset > '100'"),
 				LinkProperty("x-opt-test1", "test1"),
 				LinkProperty("x-opt-test2", "test2"),
 				LinkProperty("x-opt-test1", "test3"),
 				LinkPropertyInt64("x-opt-test4", 1),
+				LinkSessionFilter("123"),
 			},
 
 			wantSource: &source{
 				Filter: map[symbol]*describedType{
-					"apache.org:selector-filter:string": &describedType{
+					"apache.org:selector-filter:string": {
 						descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x46, 0x8C, 0x00, 0x00, 0x00, 0x04}),
 						value:      "amqp.annotation.x-opt-offset > '100'",
+					},
+					"com.microsoft:session-filter" : {
+						descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x00, 0x13, 0x70, 0x00, 0x00, 0x0C}),
+						value:      "123",
 					},
 				},
 			},
