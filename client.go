@@ -1390,14 +1390,22 @@ func LinkReceiverSettle(mode ReceiverSettleMode) LinkOption {
 	}
 }
 
+// LinkSessionFilter sets a session filter (com.microsoft:session-filter) on the link source.
+// This is used in Azure Service Bus to filter messages by session ID on a receiving link.
+func LinkSessionFilter(sessionID string) LinkOption {
+	// <descriptor name="com.microsoft:session-filter" code="00000013:7000000C"/>
+	return linkSourceFilter("com.microsoft:session-filter", uint64(0x00000137000000C), sessionID)
+}
+
 // LinkSelectorFilter sets a selector filter (apache.org:selector-filter:string) on the link source.
 func LinkSelectorFilter(filter string) LinkOption {
 	// <descriptor name="apache.org:selector-filter:string" code="0x0000468C:0x00000004"/>
-	const (
-		name = symbol("apache.org:selector-filter:string")
-		code = uint64(0x0000468C00000004)
-	)
+	return linkSourceFilter("apache.org:selector-filter:string", uint64(0x0000468C00000004), filter)
+}
 
+// linkSourceFilter sets a filter on the link source.
+func linkSourceFilter(name string, code uint64, value string) LinkOption {
+	nameSym := symbol(name)
 	return func(l *link) error {
 		if l.source == nil {
 			l.source = new(source)
@@ -1405,9 +1413,9 @@ func LinkSelectorFilter(filter string) LinkOption {
 		if l.source.Filter == nil {
 			l.source.Filter = make(map[symbol]*describedType)
 		}
-		l.source.Filter[name] = &describedType{
+		l.source.Filter[nameSym] = &describedType{
 			descriptor: code,
-			value:      filter,
+			value:      value,
 		}
 		return nil
 	}
