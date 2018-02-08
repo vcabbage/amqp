@@ -314,24 +314,29 @@ func (c *conn) mux() {
 
 		// new frame from connReader
 		case fr := <-c.rxFrame:
-			// lookup session and send to Session.mux
-			session, ok := sessionsByRemoteChannel[fr.channel]
-			if !ok {
-				// if this is a begin, RemoteChannel should be used
-				begin, ok := fr.body.(*performBegin)
-				if !ok {
-					c.err = errorErrorf("unexpected frame: %#v", fr.body)
-					continue
-				}
+			var (
+				session *Session
+				ok      bool
+			)
 
-				session, ok = sessionsByChannel[begin.RemoteChannel]
+			switch body := fr.body.(type) {
+			// RemoteChannel should be used when frame is Begin
+			case *performBegin:
+				session, ok = sessionsByChannel[body.RemoteChannel]
 				if !ok {
-					c.err = errorErrorf("unexpected frame: %#v", fr.body)
-					continue
+					break
 				}
 
 				session.remoteChannel = fr.channel
 				sessionsByRemoteChannel[fr.channel] = session
+
+			default:
+				session, ok = sessionsByRemoteChannel[fr.channel]
+			}
+
+			if !ok {
+				c.err = errorErrorf("unexpected frame: %#v", fr.body)
+				continue
 			}
 
 			select {
