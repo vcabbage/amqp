@@ -162,11 +162,9 @@ type frame struct {
 	done chan struct{}
 }
 
-// frameBody is the interface all frame bodies must implement
+// frameBody adds some type safety to frame encoding
 type frameBody interface {
-	// if the frame is for a link, link() should return (link#, true),
-	// otherwise it should return (0, false)
-	link() (handle uint32, ok bool)
+	frameBody()
 }
 
 /*
@@ -198,9 +196,7 @@ type performOpen struct {
 	Properties          map[symbol]interface{}
 }
 
-func (o *performOpen) link() (uint32, bool) {
-	return 0, false
-}
+func (o *performOpen) frameBody() {}
 
 func (o *performOpen) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeOpen, []marshalField{
@@ -283,6 +279,8 @@ type performBegin struct {
 	Properties map[symbol]interface{}
 }
 
+func (b *performBegin) frameBody() {}
+
 func (b *performBegin) String() string {
 	return fmt.Sprintf("Begin{RemoteChannel: %d, NextOutgoingID: %d, IncomingWindow: %d, "+
 		"OutgoingWindow: %d, HandleMax: %d, OfferedCapabilities: %v, DesiredCapabilities: %v, "+
@@ -296,10 +294,6 @@ func (b *performBegin) String() string {
 		b.DesiredCapabilities,
 		b.Properties,
 	)
-}
-
-func (b *performBegin) link() (uint32, bool) {
-	return 0, false
 }
 
 func (b *performBegin) marshal(wr *buffer) error {
@@ -478,6 +472,8 @@ type performAttach struct {
 	Properties map[symbol]interface{}
 }
 
+func (a *performAttach) frameBody() {}
+
 func (a performAttach) String() string {
 	return fmt.Sprintf("Attach{Name: %s, Handle: %d, Role: %s, SenderSettleMode: %s, ReceiverSettleMode: %s, "+
 		"Source: %v, Target: %v, Unsettled: %v, IncompleteUnsettled: %t, InitialDeliveryCount: %d, MaxMessageSize: %d, "+
@@ -497,10 +493,6 @@ func (a performAttach) String() string {
 		a.DesiredCapabilities,
 		a.Properties,
 	)
-}
-
-func (a *performAttach) link() (uint32, bool) {
-	return a.Handle, true
 }
 
 func (a *performAttach) marshal(wr *buffer) error {
@@ -1029,6 +1021,8 @@ type performFlow struct {
 	Properties map[symbol]interface{}
 }
 
+func (f *performFlow) frameBody() {}
+
 func (f *performFlow) String() string {
 	return fmt.Sprintf("Flow{NextIncomingID: %s, IncomingWindow: %d, NextOutgoingID: %d, OutgoingWindow: %d, "+
 		"Handle: %s, DeliveryCount: %s, LinkCredit: %s, Available: %s, Drain: %t, Echo: %t, Properties: %+v}",
@@ -1051,13 +1045,6 @@ func formatUint32Ptr(p *uint32) string {
 		return "<nil>"
 	}
 	return strconv.FormatUint(uint64(*p), 10)
-}
-
-func (f *performFlow) link() (uint32, bool) {
-	if f.Handle == nil {
-		return 0, false
-	}
-	return *f.Handle, true
 }
 
 func (f *performFlow) marshal(wr *buffer) error {
@@ -1252,6 +1239,8 @@ type performTransfer struct {
 	confirmSettlement bool
 }
 
+func (t *performTransfer) frameBody() {}
+
 func (t performTransfer) String() string {
 	deliveryTag := "<nil>"
 	if t.DeliveryID != nil {
@@ -1274,10 +1263,6 @@ func (t performTransfer) String() string {
 		t.Batchable,
 		len(t.Payload),
 	)
-}
-
-func (t *performTransfer) link() (uint32, bool) {
-	return t.Handle, true
 }
 
 func (t *performTransfer) marshal(wr *buffer) error {
@@ -1374,6 +1359,8 @@ type performDisposition struct {
 	Batchable bool
 }
 
+func (d *performDisposition) frameBody() {}
+
 func (d performDisposition) String() string {
 	return fmt.Sprintf("Disposition{Role: %s, First: %d, Last: %s, Settled: %t, State: %s, Batchable: %t}",
 		d.Role,
@@ -1383,10 +1370,6 @@ func (d performDisposition) String() string {
 		d.State,
 		d.Batchable,
 	)
-}
-
-func (*performDisposition) link() (uint32, bool) {
-	return 0, false
 }
 
 func (d *performDisposition) marshal(wr *buffer) error {
@@ -1433,16 +1416,14 @@ type performDetach struct {
 	Error *Error
 }
 
+func (d *performDetach) frameBody() {}
+
 func (d performDetach) String() string {
 	return fmt.Sprintf("Detach{Handle: %d, Closed: %t, Error: %v}",
 		d.Handle,
 		d.Closed,
 		d.Error,
 	)
-}
-
-func (d *performDetach) link() (uint32, bool) {
-	return d.Handle, true
 }
 
 func (d *performDetach) marshal(wr *buffer) error {
@@ -1579,9 +1560,7 @@ type performEnd struct {
 	Error *Error
 }
 
-func (*performEnd) link() (uint32, bool) {
-	return 0, false
-}
+func (e *performEnd) frameBody() {}
 
 func (e *performEnd) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeEnd, []marshalField{
@@ -1609,9 +1588,7 @@ type performClose struct {
 	Error *Error
 }
 
-func (*performClose) link() (uint32, bool) {
-	return 0, false
-}
+func (c *performClose) frameBody() {}
 
 func (c *performClose) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeClose, []marshalField{
@@ -2208,9 +2185,7 @@ type saslInit struct {
 	Hostname        string
 }
 
-func (si *saslInit) link() (uint32, bool) {
-	return 0, false
-}
+func (si *saslInit) frameBody() {}
 
 func (si *saslInit) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeSASLInit, []marshalField{
@@ -2239,6 +2214,8 @@ type saslMechanisms struct {
 	Mechanisms []symbol
 }
 
+func (sm *saslMechanisms) frameBody() {}
+
 func (sm *saslMechanisms) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeSASLMechanism, []marshalField{
 		{value: &sm.Mechanisms, omit: false},
@@ -2249,10 +2226,6 @@ func (sm *saslMechanisms) unmarshal(r *buffer) error {
 	return unmarshalComposite(r, typeCodeSASLMechanism,
 		unmarshalField{field: &sm.Mechanisms, handleNull: func() error { return errorNew("saslMechanisms.Mechanisms is required") }},
 	)
-}
-
-func (*saslMechanisms) link() (uint32, bool) {
-	return 0, false
 }
 
 /*
@@ -2268,6 +2241,8 @@ type saslOutcome struct {
 	AdditionalData []byte
 }
 
+func (so *saslOutcome) frameBody() {}
+
 func (so *saslOutcome) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeSASLOutcome, []marshalField{
 		{value: &so.Code, omit: false},
@@ -2280,10 +2255,6 @@ func (so *saslOutcome) unmarshal(r *buffer) error {
 		{field: &so.Code, handleNull: func() error { return errorNew("saslOutcome.AdditionalData is required") }},
 		{field: &so.AdditionalData},
 	}...)
-}
-
-func (*saslOutcome) link() (uint32, bool) {
-	return 0, false
 }
 
 // symbol is an AMQP symbolic string.
