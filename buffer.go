@@ -101,10 +101,7 @@ func (b *buffer) readFromOnce(r io.Reader) error {
 
 	n, err := r.Read(b.b[l:cap(b.b)])
 	b.b = b.b[:l+n]
-	if err != nil && err != io.EOF {
-		return err
-	}
-	return nil
+	return err
 }
 
 func (b *buffer) write(p []byte) {
