@@ -319,38 +319,6 @@ func (s *Sender) Close() error {
 	return s.link.err
 }
 
-const maxTransferFrameHeader = 66 // determined by calcMaxTransferFrameHeader
-
-func calcMaxTransferFrameHeader() int {
-	var buf buffer
-
-	maxUint32 := uint32(math.MaxUint32)
-	receiverSettleMode := ReceiverSettleMode(0)
-	err := writeFrame(&buf, frame{
-		type_:   frameTypeAMQP,
-		channel: math.MaxUint16,
-		body: &performTransfer{
-			Handle:             maxUint32,
-			DeliveryID:         &maxUint32,
-			DeliveryTag:        bytes.Repeat([]byte{'a'}, 32),
-			MessageFormat:      &maxUint32,
-			Settled:            true,
-			More:               true,
-			ReceiverSettleMode: &receiverSettleMode,
-			State:              nil, // TODO: determine whether state should be included in size
-			Resume:             true,
-			Aborted:            true,
-			Batchable:          true,
-			// Payload omitted as it is appended directly without any header
-		},
-	})
-	if err != nil {
-		panic(err)
-	}
-
-	return buf.len()
-}
-
 // NewSender opens a new sender link on the session.
 func (s *Session) NewSender(opts ...LinkOption) (*Sender, error) {
 	l, err := newLink(s, nil, opts)
@@ -434,81 +402,76 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		// incoming frame for link
 		case fr := <-s.rx:
 			debug(1, "RX(Session): %s", fr.body)
-			// TODO: The link() method is superfluous if type assertions are needed
-			//       for each message and cause logic duplication between session and
-			//       link scoped messages.
-
-			// TODO: how should the two cases below be handled?
-			//       proto error or alright to ignore?
-			handle, ok := fr.body.link()
-			if !ok {
-				switch body := fr.body.(type) {
-				// Disposition frames can reference transfers from more than one
-				// link. Send this frame to all of them.
-				case *performDisposition:
-					start := body.First
-					end := start
-					if body.Last != nil {
-						end = *body.Last
-					}
-					for deliveryID := start; deliveryID <= end; deliveryID++ {
-						handle, ok := handlesByDeliveryID[deliveryID]
-						if !ok {
-							continue
-						}
-						delete(handlesByDeliveryID, deliveryID)
-
-						if body.Settled {
-							// check if settlement confirmation was requested, if so
-							// confirm by closing channel
-							if done, ok := settlementByDeliveryID[deliveryID]; ok {
-								close(done)
-								delete(settlementByDeliveryID, deliveryID)
-							}
-						}
-
-						link, ok := links[handle]
-						if !ok {
-							continue
-						}
-
-						select {
-						case <-s.conn.done:
-						case link.rx <- fr.body:
-						}
-					}
-
-				// Flow frames may be session scoped
-				case *performFlow:
-					updateFlowControl(body)
-
-					if body.Echo {
-						niID := nextIncomingID
-						resp := &performFlow{
-							NextIncomingID: &niID,
-							IncomingWindow: s.incomingWindow,
-							NextOutgoingID: nextOutgoingID,
-							OutgoingWindow: s.outgoingWindow,
-						}
-						debug(1, "TX: %s", resp)
-						s.txFrame(resp, nil)
-					}
-
-				default:
-					fmt.Printf("Unexpected frame: %s\n", body)
-				}
-
-				continue
-			}
-
-			link, linkOk := links[handle]
 
 			switch body := fr.body.(type) {
+			// Disposition frames can reference transfers from more than one
+			// link. Send this frame to all of them.
+			case *performDisposition:
+				start := body.First
+				end := start
+				if body.Last != nil {
+					end = *body.Last
+				}
+				for deliveryID := start; deliveryID <= end; deliveryID++ {
+					handle, ok := handlesByDeliveryID[deliveryID]
+					if !ok {
+						continue
+					}
+					delete(handlesByDeliveryID, deliveryID)
+
+					if body.Settled {
+						// check if settlement confirmation was requested, if so
+						// confirm by closing channel
+						if done, ok := settlementByDeliveryID[deliveryID]; ok {
+							close(done)
+							delete(settlementByDeliveryID, deliveryID)
+						}
+					}
+
+					link, ok := links[handle]
+					if !ok {
+						continue
+					}
+
+					select {
+					case <-s.conn.done:
+					case link.rx <- fr.body:
+					}
+				}
+				continue
+			case *performFlow:
+				updateFlowControl(body)
+
+				if body.Handle != nil {
+					link, ok := links[*body.Handle]
+					if !ok {
+						continue
+					}
+
+					select {
+					case <-s.conn.done:
+					case link.rx <- fr.body:
+					}
+					continue
+				}
+
+				if body.Echo {
+					niID := nextIncomingID
+					resp := &performFlow{
+						NextIncomingID: &niID,
+						IncomingWindow: s.incomingWindow,
+						NextOutgoingID: nextOutgoingID,
+						OutgoingWindow: s.outgoingWindow,
+					}
+					debug(1, "TX: %s", resp)
+					s.txFrame(resp, nil)
+				}
+
 			case *performAttach:
 				// On Attach response link should be looked up by name, then added
 				// to the links map with the remote's handle contained in this
 				// attach frame.
-				link, linkOk = linksByName[body.Name]
+				link, linkOk := linksByName[body.Name]
 				if !linkOk {
 					break
 				}
@@ -516,6 +479,11 @@ func (s *Session) mux(remoteBegin *performBegin) {
 
 				link.remoteHandle = body.Handle
 				links[link.remoteHandle] = link
+
+				select {
+				case <-s.conn.done:
+				case link.rx <- fr.body:
+				}
 
 			case *performTransfer:
 				// "Upon receiving a transfer, the receiving endpoint will
@@ -525,18 +493,29 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				// (depending on policy) decrement its incoming-window."
 				nextIncomingID++
 				remoteOutgoingWindow--
+				link, ok := links[body.Handle]
+				if !ok {
+					continue
+				}
 
-			case *performFlow:
-				updateFlowControl(body)
-			}
+				select {
+				case <-s.conn.done:
+				case link.rx <- fr.body:
+				}
 
-			if !linkOk {
-				continue
-			}
+			case *performDetach:
+				link, ok := links[body.Handle]
+				if !ok {
+					continue
+				}
 
-			select {
-			case <-s.conn.done:
-			case link.rx <- fr.body:
+				select {
+				case <-s.conn.done:
+				case link.rx <- fr.body:
+				}
+
+			default:
+				fmt.Printf("Unexpected frame: %s\n", body)
 			}
 
 		case fr := <-txTransfer:
@@ -1383,4 +1362,36 @@ func (r *Receiver) releaseMessage(id deliveryID) {
 		return
 	}
 	r.sendDisposition(id, nil, dispositionRelease)
+}
+
+const maxTransferFrameHeader = 66 // determined by calcMaxTransferFrameHeader
+
+func calcMaxTransferFrameHeader() int {
+	var buf buffer
+
+	maxUint32 := uint32(math.MaxUint32)
+	receiverSettleMode := ReceiverSettleMode(0)
+	err := writeFrame(&buf, frame{
+		type_:   frameTypeAMQP,
+		channel: math.MaxUint16,
+		body: &performTransfer{
+			Handle:             maxUint32,
+			DeliveryID:         &maxUint32,
+			DeliveryTag:        bytes.Repeat([]byte{'a'}, 32),
+			MessageFormat:      &maxUint32,
+			Settled:            true,
+			More:               true,
+			ReceiverSettleMode: &receiverSettleMode,
+			State:              nil, // TODO: determine whether state should be included in size
+			Resume:             true,
+			Aborted:            true,
+			Batchable:          true,
+			// Payload omitted as it is appended directly without any header
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	return buf.len()
 }
