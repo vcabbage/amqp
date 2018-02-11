@@ -447,11 +447,11 @@ var (
 				FirstAcquirer: true,
 				DeliveryCount: 32,
 			},
-			DeliveryAnnotations: map[interface{}]interface{}{
-				int8(42): "answer",
+			DeliveryAnnotations: Annotations{
+				int64(42): "answer",
 			},
-			Annotations: map[interface{}]interface{}{
-				int8(42): "answer",
+			Annotations: Annotations{
+				int64(42): "answer",
 			},
 			Properties: &MessageProperties{
 				MessageID:          "yo",
@@ -473,7 +473,7 @@ var (
 			},
 			Data:  []byte("A nice little data payload."),
 			Value: uint8(42),
-			Footer: map[interface{}]interface{}{
+			Footer: Annotations{
 				"hash": []uint8{0, 1, 2, 34, 5, 6, 7, 8, 9, 0},
 			},
 		},

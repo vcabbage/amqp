@@ -1648,7 +1648,7 @@ type Message struct {
 	// The delivery-annotations section is used for delivery-specific non-standard
 	// properties at the head of the message. Delivery annotations convey information
 	// from the sending peer to the receiving peer.
-	DeliveryAnnotations map[interface{}]interface{}
+	DeliveryAnnotations Annotations
 	// If the recipient does not understand the annotation it cannot be acted upon
 	// and its effects (such as any implied propagation) cannot be acted upon.
 	// Annotations might be specific to one implementation, or common to multiple
@@ -1664,7 +1664,7 @@ type Message struct {
 
 	// The message-annotations section is used for properties of the message which
 	// are aimed at the infrastructure.
-	Annotations map[interface{}]interface{}
+	Annotations Annotations
 	// The message-annotations section is used for properties of the message which
 	// are aimed at the infrastructure and SHOULD be propagated across every
 	// delivery step. Message annotations convey information about the message.
@@ -1712,12 +1712,42 @@ type Message struct {
 	// can only be calculated or evaluated once the whole bare message has been
 	// constructed or seen (for example message hashes, HMACs, signatures and
 	// encryption details).
-	Footer map[interface{}]interface{}
-	// TODO: implement custom type with validation
+	Footer Annotations
 
 	receiver *Receiver  // Receiver the message was received from
 	id       deliveryID // used when sending disposition
 	settled  bool       // whether transfer was settled by sender
+}
+
+// Annotations keys must be of type string, int, or int64.
+//
+// String keys are encoded as AMQP Symbols.
+type Annotations map[interface{}]interface{}
+
+func (a Annotations) marshal(wr *buffer) error {
+	return writeMap(wr, a)
+}
+
+func (a *Annotations) unmarshal(r *buffer) error {
+	_, count, err := readMapHeader(r)
+	if err != nil {
+		return err
+	}
+
+	m := make(Annotations, count/2)
+	for i := uint32(0); i < count; i += 2 {
+		key, err := readAny(r)
+		if err != nil {
+			return err
+		}
+		value, err := readAny(r)
+		if err != nil {
+			return err
+		}
+		m[key] = value
+	}
+	*a = m
+	return nil
 }
 
 // Accept notifies the server that the message has been
