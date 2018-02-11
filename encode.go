@@ -491,6 +491,33 @@ func writeMap(wr *buffer, m interface{}) error {
 				return err
 			}
 		}
+	case Annotations:
+		pairs = len(m) * 2
+		for key, val := range m {
+			switch key := key.(type) {
+			case string:
+				err := symbol(key).marshal(wr)
+				if err != nil {
+					return err
+				}
+			case symbol:
+				err := key.marshal(wr)
+				if err != nil {
+					return err
+				}
+			case int64:
+				writeInt64(wr, key)
+			case int:
+				writeInt64(wr, int64(key))
+			default:
+				return errorErrorf("unsupported Annotations key type %T", key)
+			}
+
+			err := marshal(wr, val)
+			if err != nil {
+				return err
+			}
+		}
 	default:
 		return errorErrorf("unsupported map type %T", m)
 	}
