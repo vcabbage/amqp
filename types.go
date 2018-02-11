@@ -2710,12 +2710,6 @@ func (t describedType) String() string {
 
 // SLICES
 
-const (
-	// type length sizes
-	array8TLSize  = 2
-	array32TLSize = 5
-)
-
 // ArrayUByte allows encoding []uint8/[]byte as an array
 // rather than binary data.
 type ArrayUByte []uint8
@@ -3429,34 +3423,35 @@ func (a *arrayBool) unmarshal(r *buffer) error {
 type arrayString []string
 
 func (a arrayString) marshal(wr *buffer) error {
-	length := len(a)
-
-	// TODO: check sizes to minimize encoding size
-
-	// type
-	wr.writeByte(byte(typeCodeArray32))
-
-	// size
-	sizeIdx := wr.len()
-	wr.write([]byte{0, 0, 0, 0})
-
-	// length
-	wr.writeUint32(uint32(length))
-
-	// element type
-	wr.writeByte(byte(typeCodeStr32))
-
+	var (
+		elementType       = typeCodeStr8
+		elementsSizeTotal int
+	)
 	for _, element := range a {
 		if !utf8.ValidString(element) {
 			return errorNew("not a valid UTF-8 string")
 		}
 
-		wr.writeUint32(uint32(len(element)))
-		wr.writeString(element)
+		elementsSizeTotal += len(element)
+
+		if len(element) > math.MaxUint8 {
+			elementType = typeCodeStr32
+		}
 	}
 
-	// overwrite size
-	binary.BigEndian.PutUint32(wr.bytes()[sizeIdx:], uint32(wr.len()-(sizeIdx+4)))
+	writeVariableArrayHeader(wr, len(a), elementsSizeTotal, elementType)
+
+	if elementType == typeCodeStr32 {
+		for _, element := range a {
+			wr.writeUint32(uint32(len(element)))
+			wr.writeString(element)
+		}
+	} else {
+		for _, element := range a {
+			wr.writeByte(byte(len(element)))
+			wr.writeString(element)
+		}
+	}
 
 	return nil
 }
@@ -3523,34 +3518,31 @@ func (a *arrayString) unmarshal(r *buffer) error {
 type arraySymbol []symbol
 
 func (a arraySymbol) marshal(wr *buffer) error {
-	length := len(a)
-
-	// TODO: check sizes to minimize encoding size
-
-	// type
-	wr.writeByte(byte(typeCodeArray32))
-
-	// size
-	sizeIdx := wr.len()
-	wr.write([]byte{0, 0, 0, 0})
-
-	// length
-	wr.writeUint32(uint32(length))
-
-	// element type
-	wr.writeByte(byte(typeCodeSym32))
-
+	var (
+		elementType       = typeCodeSym8
+		elementsSizeTotal int
+	)
 	for _, element := range a {
-		if !utf8.ValidString(string(element)) {
-			return errorNew("not a valid UTF-8 string")
-		}
+		elementsSizeTotal += len(element)
 
-		wr.writeUint32(uint32(len(element)))
-		wr.writeString(string(element))
+		if len(element) > math.MaxUint8 {
+			elementType = typeCodeSym32
+		}
 	}
 
-	// overwrite size
-	binary.BigEndian.PutUint32(wr.bytes()[sizeIdx:], uint32(wr.len()-(sizeIdx+4)))
+	writeVariableArrayHeader(wr, len(a), elementsSizeTotal, elementType)
+
+	if elementType == typeCodeSym32 {
+		for _, element := range a {
+			wr.writeUint32(uint32(len(element)))
+			wr.writeString(string(element))
+		}
+	} else {
+		for _, element := range a {
+			wr.writeByte(byte(len(element)))
+			wr.writeString(string(element))
+		}
+	}
 
 	return nil
 }
@@ -3616,30 +3608,31 @@ func (a *arraySymbol) unmarshal(r *buffer) error {
 type arrayBinary [][]byte
 
 func (a arrayBinary) marshal(wr *buffer) error {
-	length := len(a)
-
-	// TODO: check sizes to minimize encoding size
-
-	// type
-	wr.writeByte(byte(typeCodeArray32))
-
-	// size
-	sizeIdx := wr.len()
-	wr.write([]byte{0, 0, 0, 0})
-
-	// length
-	wr.writeUint32(uint32(length))
-
-	// element type
-	wr.writeByte(byte(typeCodeVbin32))
-
+	var (
+		elementType       = typeCodeVbin8
+		elementsSizeTotal int
+	)
 	for _, element := range a {
-		wr.writeUint32(uint32(len(element)))
-		wr.write(element)
+		elementsSizeTotal += len(element)
+
+		if len(element) > math.MaxUint8 {
+			elementType = typeCodeVbin32
+		}
 	}
 
-	// overwrite size
-	binary.BigEndian.PutUint32(wr.bytes()[sizeIdx:], uint32(wr.len()-(sizeIdx+4)))
+	writeVariableArrayHeader(wr, len(a), elementsSizeTotal, elementType)
+
+	if elementType == typeCodeVbin32 {
+		for _, element := range a {
+			wr.writeUint32(uint32(len(element)))
+			wr.write(element)
+		}
+	} else {
+		for _, element := range a {
+			wr.writeByte(byte(len(element)))
+			wr.write(element)
+		}
+	}
 
 	return nil
 }
