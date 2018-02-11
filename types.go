@@ -1531,11 +1531,8 @@ const (
 
 // Error is an AMQP error.
 type Error struct {
-	// TODO: should this implement the error interface?
-
 	// A symbolic value indicating the error condition.
 	Condition ErrorCondition
-	// TODO: make enum
 
 	// descriptive text about the error condition
 	//
@@ -1545,7 +1542,6 @@ type Error struct {
 
 	// map carrying information about the error condition
 	Info map[string]interface{}
-	// TODO: make more user friendly
 }
 
 func (e *Error) marshal(wr *buffer) error {
