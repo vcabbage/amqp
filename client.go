@@ -1167,9 +1167,9 @@ func LinkSelectorFilter(filter string) LinkOption {
 			l.source = new(source)
 		}
 		if l.source.Filter == nil {
-			l.source.Filter = make(map[symbol]interface{})
+			l.source.Filter = make(map[symbol]*describedType)
 		}
-		l.source.Filter[name] = describedType{
+		l.source.Filter[name] = &describedType{
 			descriptor: code,
 			value:      filter,
 		}

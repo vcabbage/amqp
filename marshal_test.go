@@ -280,8 +280,11 @@ var (
 					"lifetime-policy": deleteOnClose,
 				},
 				DistributionMode: "some-mode",
-				Filter: map[symbol]interface{}{
-					"foo:filter": "bar value",
+				Filter: filter{
+					"foo:filter": &describedType{
+						descriptor: "foo:filter",
+						value:      "bar value",
+					},
 				},
 				Outcomes:     []symbol{"amqp:accepted:list"},
 				Capabilities: []symbol{"barCap"},
@@ -323,8 +326,11 @@ var (
 				"lifetime-policy": deleteOnClose,
 			},
 			DistributionMode: "some-mode",
-			Filter: map[symbol]interface{}{
-				"foo:filter": "bar value",
+			Filter: filter{
+				"foo:filter": &describedType{
+					descriptor: "foo:filter",
+					value:      "bar value",
+				},
 			},
 			Outcomes:     []symbol{"amqp:accepted:list"},
 			Capabilities: []symbol{"barCap"},

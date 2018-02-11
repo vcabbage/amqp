@@ -479,6 +479,18 @@ func writeMap(wr *buffer, m interface{}) error {
 				return err
 			}
 		}
+	case filter:
+		pairs = len(m) * 2
+		for key, val := range m {
+			err := key.marshal(wr)
+			if err != nil {
+				return err
+			}
+			err = val.marshal(wr)
+			if err != nil {
+				return err
+			}
+		}
 	default:
 		return errorErrorf("unsupported map type %T", m)
 	}
