@@ -842,6 +842,6 @@ func (c *conn) readFrame() (frame, error) {
 	case p := <-c.rxProto:
 		return fr, errorErrorf("unexpected protocol header %#v", p)
 	case <-deadline:
-		return fr, ErrTimeout // TODO: move to connReader
+		return fr, ErrTimeout
 	}
 }
