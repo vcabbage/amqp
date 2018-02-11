@@ -7,7 +7,6 @@ import (
 	"math"
 	"net"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -133,8 +132,6 @@ func ConnMaxSessions(n int) ConnOption {
 type conn struct {
 	net            net.Conn      // underlying connection
 	connectTimeout time.Duration // time to wait for reads/writes during conn establishment
-	pauseRead      int32         // atomically set to indicate connReader should pause reading from network
-	resumeRead     chan struct{} // connReader reads from channel while paused, until channel is closed
 
 	// TLS
 	tlsNegotiation bool        // negotiate TLS
@@ -168,9 +165,10 @@ type conn struct {
 	connErr    chan error          // connReader/Writer notifications of an error
 
 	// connReader
-	rxProto chan protoHeader // protoHeaders received by connReader
-	rxFrame chan frame       // AMQP frames received by connReader
-	rxDone  chan struct{}
+	rxProto       chan protoHeader // protoHeaders received by connReader
+	rxFrame       chan frame       // AMQP frames received by connReader
+	rxDone        chan struct{}
+	connReaderRun chan func() // functions to be run by conn reader (set deadline on conn to run)
 
 	// connWriter
 	txFrame chan frame // AMQP frames to be sent by connWriter
@@ -195,6 +193,7 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 		rxProto:          make(chan protoHeader),
 		rxFrame:          make(chan frame),
 		rxDone:           make(chan struct{}),
+		connReaderRun:    make(chan func(), 1), // buffered to allow queueing function before interrupt
 		newSession:       make(chan newSessionResp),
 		delSession:       make(chan *Session),
 		txFrame:          make(chan frame),
@@ -406,25 +405,21 @@ func (c *conn) connReader() {
 			c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
 			err := buf.readFromOnce(c.net)
 			if err != nil {
-				if atomic.LoadInt32(&c.pauseRead) == 1 {
-					// need to stop reading during TLS negotiation,
-					// see conn.startTLS()
-					c.pauseRead = 0
-					for range c.resumeRead {
-						// reads indicate paused, resume on close
-					}
-					continue
-				}
-
-				// check if error was due to close in progress
 				select {
+				// check if error was due to close in progress
 				case <-c.done:
 					return
-				default:
-				}
 
-				c.connErr <- err
-				return
+				// if there is a pending connReaderRun function, execute it
+				case f := <-c.connReaderRun:
+					f()
+					continue
+
+				// send error to mux and return
+				default:
+					c.connErr <- err
+					return
+				}
 			}
 		}
 
@@ -696,27 +691,34 @@ func (c *conn) readProtoHeader() (protoHeader, error) {
 func (c *conn) startTLS() stateFunc {
 	c.initTLSConfig()
 
-	// convoluted method to pause connReader, explorer simpler alternatives
-	c.resumeRead = make(chan struct{})        // 1. create channel
-	atomic.StoreInt32(&c.pauseRead, 1)        // 2. indicate should pause
-	c.net.SetReadDeadline(time.Time{}.Add(1)) // 3. set deadline to interrupt connReader
-	c.resumeRead <- struct{}{}                // 4. wait for connReader to read from chan, indicating paused
-	defer close(c.resumeRead)                 // 5. defer connReader resume by closing channel
-	c.net.SetReadDeadline(time.Time{})        // 6. clear deadline
+	done := make(chan struct{})
 
-	// wrap existing net.Conn and perform TLS handshake
-	tlsConn := tls.Client(c.net, c.tlsConfig)
-	if c.connectTimeout != 0 {
-		tlsConn.SetWriteDeadline(time.Now().Add(c.connectTimeout))
+	// this function will be executed by connReader
+	c.connReaderRun <- func() {
+		c.net.SetReadDeadline(time.Time{}) // clear timeout
+
+		// wrap existing net.Conn and perform TLS handshake
+		tlsConn := tls.Client(c.net, c.tlsConfig)
+		if c.connectTimeout != 0 {
+			tlsConn.SetWriteDeadline(time.Now().Add(c.connectTimeout))
+		}
+		c.err = tlsConn.Handshake()
+
+		// swap net.Conn
+		c.net = tlsConn
+		c.tlsComplete = true
+
+		close(done)
 	}
-	c.err = tlsConn.Handshake()
+
+	// set deadline to interrupt connReader
+	c.net.SetReadDeadline(time.Time{}.Add(1))
+
+	<-done
+
 	if c.err != nil {
 		return nil
 	}
-
-	// swap net.Conn
-	c.net = tlsConn
-	c.tlsComplete = true
 
 	// go to next protocol
 	return c.negotiateProto
