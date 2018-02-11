@@ -537,6 +537,12 @@ func writeMap(wr *buffer, m interface{}) error {
 	return nil
 }
 
+// type length sizes
+const (
+	array8TLSize  = 2
+	array32TLSize = 5
+)
+
 func writeArrayHeader(wr *buffer, length, typeSize int, type_ amqpType) {
 	size := length * typeSize
 
@@ -546,13 +552,36 @@ func writeArrayHeader(wr *buffer, length, typeSize int, type_ amqpType) {
 			byte(typeCodeArray8),      // type
 			byte(size + array8TLSize), // size
 			byte(length),              // length
+			byte(type_),               // element type
 		})
 	} else {
 		wr.writeByte(byte(typeCodeArray32))          //type
 		wr.writeUint32(uint32(size + array32TLSize)) // size
 		wr.writeUint32(uint32(length))               // length
+		wr.writeByte(byte(type_))                    // element type
+	}
+}
+
+func writeVariableArrayHeader(wr *buffer, length, elementsSizeTotal int, type_ amqpType) {
+	// 0xA_ == 1, 0xB_ == 4
+	// http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-types-v1.0-os.html#doc-idp82960
+	elementTypeSize := 1
+	if type_&0xf0 == 0xb0 {
+		elementTypeSize = 4
 	}
 
-	// element type
-	wr.writeByte(byte(type_))
+	size := elementsSizeTotal + (length * elementTypeSize) // size excluding array length
+	if size+array8TLSize <= math.MaxUint8 {
+		wr.write([]byte{
+			byte(typeCodeArray8),      // type
+			byte(size + array8TLSize), // size
+			byte(length),              // length
+			byte(type_),               // element type
+		})
+	} else {
+		wr.writeByte(byte(typeCodeArray32))          // type
+		wr.writeUint32(uint32(size + array32TLSize)) // size
+		wr.writeUint32(uint32(length))               // length
+		wr.writeByte(byte(type_))                    // element type
+	}
 }
