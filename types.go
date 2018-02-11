@@ -588,6 +588,35 @@ func (u *unsettled) unmarshal(r *buffer) error {
 	return nil
 }
 
+type filter map[symbol]*describedType
+
+func (f filter) marshal(wr *buffer) error {
+	return writeMap(wr, f)
+}
+
+func (f *filter) unmarshal(r *buffer) error {
+	_, count, err := readMapHeader(r)
+	if err != nil {
+		return err
+	}
+
+	m := make(filter, count/2)
+	for i := uint32(0); i < count; i += 2 {
+		key, err := readString(r)
+		if err != nil {
+			return err
+		}
+		var value describedType
+		err = unmarshal(r, &value)
+		if err != nil {
+			return err
+		}
+		m[symbol(key)] = &value
+	}
+	*f = m
+	return nil
+}
+
 /*
 <type name="source" class="composite" source="list" provides="source">
     <descriptor name="amqp:source:list" code="0x00000000:0x00000028"/>
@@ -696,7 +725,7 @@ type source struct {
 	// actually in place (including any filters defaulted at the node). The receiving
 	// endpoint MUST check that the filter in place meets its needs and take responsibility
 	// for detaching if it does not.
-	Filter map[symbol]interface{} // TODO: implement custom type with validation
+	Filter filter
 
 	// default outcome for unsettled transfers
 	//
