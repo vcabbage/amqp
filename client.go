@@ -237,8 +237,9 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 
 // Sender sends messages on a single AMQP link.
 type Sender struct {
-	link *link
-	buf  buffer
+	link            *link
+	buf             buffer
+	nextDeliveryTag uint64
 }
 
 // Send sends a Message.
@@ -262,12 +263,16 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 		rcvSettleMode  = s.link.receiverSettleMode
 	)
 
+	// use uint64 encoded as []byte as deliveryTag
+	deliveryTag := make([]byte, 8)
+	binary.BigEndian.PutUint64(deliveryTag, s.nextDeliveryTag)
+	s.nextDeliveryTag++
+
 	fr := performTransfer{
-		Handle:            s.link.handle,
-		DeliveryTag:       randBytes(32), // TODO: delivery-tags only need to be unique on link, minimize this
-		MessageFormat:     &messageFormat,
-		More:              s.buf.len() > 0,
-		confirmSettlement: rcvSettleMode != nil && *rcvSettleMode == ModeSecond,
+		Handle:        s.link.handle,
+		DeliveryTag:   deliveryTag,
+		MessageFormat: &messageFormat,
+		More:          s.buf.len() > 0,
 	}
 
 	for fr.More {
@@ -284,6 +289,7 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 			// Session.mux will intercept the done channel and close it when the
 			// receiver has confirmed settlement instead of on net transmit.
 			fr.done = make(chan struct{})
+			fr.confirmSettlement = rcvSettleMode != nil && *rcvSettleMode == ModeSecond
 		}
 
 		select {
@@ -293,7 +299,14 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 		case <-ctx.Done():
 			return errorWrapf(ctx.Err(), "awaiting send")
 		}
+
+		// clear values that are only required on first message
+		fr.DeliveryTag = nil
+		fr.MessageFormat = nil
 	}
+
+	// TODO: The blocking below could slow single link sending. This could be
+	//       alleviated by making Send() concurrency-safe (lock the section above).
 
 	// wait for transfer to be confirmed
 	select {
@@ -340,7 +353,6 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		linksByName = make(map[string]*link) // maping of names to links
 		nextHandle  uint32                   // next handle # to be allocated
 
-		idsByDeliveryTag    = make(map[string]uint32) //mapping of deliveryTags to deliveryIDs
 		handlesByDeliveryID = make(map[uint32]uint32) //mapping of deliveryIDs to handles
 		nextDeliveryID      uint32                    // next deliveryID
 
@@ -557,34 +569,31 @@ func (s *Session) mux(remoteBegin *performBegin) {
 			}
 
 		case fr := <-txTransfer:
-			id, ok := idsByDeliveryTag[string(fr.DeliveryTag)]
-			if !ok {
-				// no entry for tag, allocate new DeliveryID
-				id = nextDeliveryID
-				fr.DeliveryID = &id
+			// nil DeliveryID indicates first message
+			if fr.DeliveryID == nil {
+				// allocate new DeliveryID
+				id := nextDeliveryID
 				nextDeliveryID++
+				fr.DeliveryID = &id
 
-				if fr.More {
-					idsByDeliveryTag[string(fr.DeliveryTag)] = id
-				}
-			} else {
-				// existing entry indicates this isn't the first message,
-				// clear values that are only required on first message
-				fr.DeliveryTag = nil
-				fr.MessageFormat = nil
-
-				if !fr.More {
-					delete(idsByDeliveryTag, string(fr.DeliveryTag))
+				// add to handleByDeliveryID if not sender-settled
+				if !fr.Settled {
+					handlesByDeliveryID[id] = fr.Handle
 				}
 			}
 
-			handlesByDeliveryID[id] = fr.Handle
-			if fr.confirmSettlement {
-				// confirmSettlement requested, add done chan to map
-				// and clear from frame so conn doesn't close it.
-				settlementByDeliveryID[id] = fr.done
+			// frame has been sender-settled, remove from map
+			if fr.Settled {
+				delete(handlesByDeliveryID, *fr.DeliveryID)
+			}
+
+			// if confirmSettlement requested, add done chan to map
+			// and clear from frame so conn doesn't close it.
+			if fr.confirmSettlement && fr.done != nil {
+				settlementByDeliveryID[*fr.DeliveryID] = fr.done
 				fr.done = nil
 			}
+
 			debug(2, "TX(Session): %s", fr)
 			s.txFrame(fr, fr.done)
 
