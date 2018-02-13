@@ -133,6 +133,22 @@ func ConnMaxSessions(n int) ConnOption {
 	}
 }
 
+// ConnProperty sets an entry in the connection properties map sent to the server.
+//
+// This option can be used multiple times.
+func ConnProperty(key, value string) ConnOption {
+	return func(c *conn) error {
+		if key == "" {
+			return errorNew("connection property key must not be empty")
+		}
+		if c.properties == nil {
+			c.properties = make(map[symbol]interface{})
+		}
+		c.properties[symbol(key)] = value
+		return nil
+	}
+}
+
 // conn is an AMQP connection.
 type conn struct {
 	net            net.Conn      // underlying connection
@@ -148,10 +164,11 @@ type conn struct {
 	saslComplete bool                 // SASL negotiation complete
 
 	// local settings
-	maxFrameSize uint32        // max frame size to accept
-	channelMax   uint16        // maximum number of channels to allow
-	hostname     string        // hostname of remote server (set explicitly or parsed from URL)
-	idleTimeout  time.Duration // maximum period between receiving frames
+	maxFrameSize uint32                 // max frame size to accept
+	channelMax   uint16                 // maximum number of channels to allow
+	hostname     string                 // hostname of remote server (set explicitly or parsed from URL)
+	idleTimeout  time.Duration          // maximum period between receiving frames
+	properties   map[symbol]interface{} // additional properties sent upon connection open
 
 	// peer settings
 	peerIdleTimeout  time.Duration // maximum period between sending frames
@@ -745,6 +762,7 @@ func (c *conn) openAMQP() stateFunc {
 			MaxFrameSize: c.maxFrameSize,
 			ChannelMax:   c.channelMax,
 			IdleTimeout:  c.idleTimeout,
+			Properties:   c.properties,
 		},
 		channel: 0,
 	})
