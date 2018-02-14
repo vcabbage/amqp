@@ -3,6 +3,7 @@ package amqp
 import (
 	"bytes"
 	"crypto/tls"
+	"errors"
 	"io"
 	"math"
 	"net"
@@ -19,7 +20,11 @@ const (
 
 // Errors
 var (
-	ErrTimeout = errorNew("timeout waiting for response")
+	ErrTimeout = errors.New("amqp: timeout waiting for response")
+
+	// ErrConnClosed is propagated to Session and Senders/Receivers
+	// when Client.Close() is called.
+	ErrConnClosed = errors.New("amqp: connection closed")
 )
 
 // ConnOption is an function for configuring an AMQP connection.
@@ -153,16 +158,16 @@ type conn struct {
 	peerMaxFrameSize uint32        // maximum frame size peer will accept
 
 	// conn state
-	errMu     sync.Mutex    // mux holds errMu from start until shutdown completes; operations are sequential before mux is started
-	err       error         // error to be returned to client
-	doneOnce  sync.Once     // only close done once
-	done      chan struct{} // indicates the connection is done
-	closeOnce sync.Once
+	errMu sync.Mutex    // mux holds errMu from start until shutdown completes; operations are sequential before mux is started
+	err   error         // error to be returned to client
+	done  chan struct{} // indicates the connection is done
 
 	// mux
-	newSession chan newSessionResp // new Sessions are requested from mux by reading off this channel
-	delSession chan *Session       // session completion is indicated to mux by sending the Session on this channel
-	connErr    chan error          // connReader/Writer notifications of an error
+	newSession   chan newSessionResp // new Sessions are requested from mux by reading off this channel
+	delSession   chan *Session       // session completion is indicated to mux by sending the Session on this channel
+	connErr      chan error          // connReader/Writer notifications of an error
+	closeMux     chan struct{}       // indicates that the mux should stop
+	closeMuxOnce sync.Once
 
 	// connReader
 	rxProto       chan protoHeader // protoHeaders received by connReader
@@ -190,6 +195,7 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 		idleTimeout:      DefaultIdleTimeout,
 		done:             make(chan struct{}),
 		connErr:          make(chan error, 2), // buffered to ensure connReader/Writer won't leak
+		closeMux:         make(chan struct{}),
 		rxProto:          make(chan protoHeader),
 		rxFrame:          make(chan frame),
 		rxDone:           make(chan struct{}),
@@ -245,34 +251,38 @@ func (c *conn) start() error {
 }
 
 func (c *conn) Close() error {
-	c.closeOnce.Do(func() { c.close() })
-	return c.err
+	c.closeMuxOnce.Do(func() { close(c.closeMux) })
+	err := c.getErr()
+	if err == ErrConnClosed {
+		return nil
+	}
+	return err
 }
 
+// close should only be called by conn.mux.
 func (c *conn) close() {
-	c.closeDone() // notify goroutines and blocked functions to exit
-
-	// Client.mux holds err lock until shutdown, block until
-	// shutdown completes, then return the error (if any)
-	c.errMu.Lock()
-	defer c.errMu.Unlock()
+	close(c.done) // notify goroutines and blocked functions to exit
 
 	// wait for writing to stop, allows it to send the final close frame
 	<-c.txDone
 
 	err := c.net.Close()
-	if c.err == nil {
+	switch {
+	// conn.err already set
+	case c.err != nil:
+
+	// conn.err not set and c.net.Close() returned a non-nil error
+	case err != nil:
 		c.err = err
+
+	// no errors
+	default:
+		c.err = ErrConnClosed
 	}
 
 	// check rxDone after closing net, otherwise may block
 	// for up to c.idleTimeout
 	<-c.rxDone
-}
-
-// closeDone closes Client.done if it has not already been closed
-func (c *conn) closeDone() {
-	c.doneOnce.Do(func() { close(c.done) })
 }
 
 // getErr returns conn.err.
@@ -299,11 +309,11 @@ func (c *conn) mux() {
 	// hold the errMu lock until error or done
 	c.errMu.Lock()
 	defer c.errMu.Unlock()
+	defer c.close() // defer order is important. c.errMu unlock indicates that connection is finally complete
 
 	for {
 		// check if last loop returned an error
 		if c.err != nil {
-			c.closeDone()
 			return
 		}
 
@@ -340,7 +350,7 @@ func (c *conn) mux() {
 
 			select {
 			case session.rx <- fr:
-			case <-c.done:
+			case <-c.closeMux:
 				return
 			}
 
@@ -375,7 +385,7 @@ func (c *conn) mux() {
 			delete(sessionsByRemoteChannel, s.remoteChannel)
 
 		// connection is complete
-		case <-c.done:
+		case <-c.closeMux:
 			return
 		}
 	}

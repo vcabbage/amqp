@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -12,6 +13,16 @@ import (
 	"net/url"
 	"sync"
 	"time"
+)
+
+var (
+	// ErrSessionClosed is propagated to Sender/Receivers
+	// when Session.Close() is called.
+	ErrSessionClosed = errors.New("amqp: session closed")
+
+	// ErrLinkClosed returned by send and receive operations when
+	// Sender.Close() or Receiver.Close() are called.
+	ErrLinkClosed = errors.New("amqp: link closed")
 )
 
 // maxSliceLen is equal to math.MaxInt32 or math.MaxInt64, depending on platform
@@ -183,6 +194,9 @@ func newSession(c *conn, channel uint16) *Session {
 func (s *Session) Close() error {
 	s.closeOnce.Do(func() { close(s.close) })
 	<-s.done
+	if s.err == ErrSessionClosed {
+		return nil
+	}
 	return s.err
 }
 
@@ -426,6 +440,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 			// release session
 			select {
 			case s.conn.delSession <- s:
+				s.err = ErrSessionClosed
 			case <-s.conn.done:
 				s.err = s.conn.getErr()
 			}
@@ -928,6 +943,7 @@ func (l *link) mux() {
 						return
 					}
 				case <-l.close:
+					l.err = ErrLinkClosed
 					return
 				case <-l.session.done:
 					l.err = l.session.err
@@ -938,6 +954,8 @@ func (l *link) mux() {
 			// reset credit
 			l.linkCredit = l.receiver.maxCredit
 		}
+
+		// TODO: Look into avoiding the select statement duplication.
 
 		select {
 		// send data
@@ -954,6 +972,7 @@ func (l *link) mux() {
 						return
 					}
 				case <-l.close:
+					l.err = ErrLinkClosed
 					return
 				case <-l.session.done:
 					l.err = l.session.err
@@ -969,6 +988,7 @@ func (l *link) mux() {
 				return
 			}
 		case <-l.close:
+			l.err = ErrLinkClosed
 			return
 		case <-l.session.done:
 			l.err = l.session.err
@@ -983,6 +1003,9 @@ func (l *link) mux() {
 func (l *link) Close() error {
 	l.closeOnce.Do(func() { close(l.close) })
 	<-l.done
+	if l.err == ErrLinkClosed {
+		return nil
+	}
 	return l.err
 }
 
