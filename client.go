@@ -1008,8 +1008,10 @@ func (l *link) detach() {
 	}
 	select {
 	case l.session.tx <- fr:
-	case <-l.session.conn.done:
-		l.err = l.session.conn.getErr()
+	case <-l.session.done:
+		if l.err == nil {
+			l.err = l.session.err
+		}
 		return
 	}
 	l.detachSent = true
@@ -1018,8 +1020,10 @@ func (l *link) detach() {
 	if l.detachReceived {
 		select {
 		case l.session.deallocateHandle <- l:
-		case <-l.session.conn.done:
-			l.err = l.session.conn.getErr()
+		case <-l.session.done:
+			if l.err == nil {
+				l.err = l.session.err
+			}
 		}
 		return
 	}
@@ -1037,16 +1041,22 @@ outer:
 			}
 
 		// connection has ended
-		case <-l.session.conn.done:
-			l.err = l.session.conn.getErr()
+		case <-l.session.done:
+			if l.err == nil {
+				l.err = l.session.err
+			}
+			return
 		}
 	}
 
 	// deallocate handle
 	select {
 	case l.session.deallocateHandle <- l:
-	case <-l.session.conn.done:
-		l.err = l.session.conn.getErr()
+	case <-l.session.done:
+		if l.err == nil {
+			l.err = l.session.err
+		}
+		return
 	}
 }
 
