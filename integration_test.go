@@ -18,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/arm/servicebus"
+	"github.com/Azure/azure-sdk-for-go/services/servicebus/mgmt/2017-04-01/servicebus"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/adal"
 	"github.com/Azure/go-autorest/autorest/azure"
@@ -182,7 +182,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 			// Wait for Azure to update stats
 			time.Sleep(1 * time.Second)
 
-			q, err := queuesClient.Get(resourceGroup, namespace, queueName)
+			q, err := queuesClient.Get(context.Background(), resourceGroup, namespace, queueName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -257,7 +257,7 @@ func TestIntegrationSend(t *testing.T) {
 			// Wait for Azure to update stats
 			time.Sleep(1 * time.Second)
 
-			q, err := queuesClient.Get(resourceGroup, namespace, queueName)
+			q, err := queuesClient.Get(context.Background(), resourceGroup, namespace, queueName)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -271,6 +271,129 @@ func TestIntegrationSend(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestIntegrationClose(t *testing.T) {
+	queueName, _, cleanup := newTestQueue(t, "close")
+	defer cleanup()
+
+	label := "link"
+	t.Run(label, func(t *testing.T) {
+		checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+		// Create client
+		client := newClient(t, label)
+		defer client.Close()
+
+		// Open a session
+		session, err := client.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create a sender
+		receiver, err := session.NewReceiver(
+			amqp.LinkTargetAddress(queueName),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		go func() {
+			err := receiver.Close()
+			if err != nil {
+				t.Fatalf("Expected nil error from receiver.Close(), got: %+v", err)
+			}
+		}()
+
+		_, err = receiver.Receive(context.Background())
+		if err != amqp.ErrLinkClosed {
+			t.Fatalf("Expected ErrLinkClosed from receiver.Receiver, got: %+v", err)
+			return
+		}
+
+		client.Close() // close before leak check
+
+		checkLeaks()
+	})
+
+	label = "session"
+	t.Run(label, func(t *testing.T) {
+		checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+		// Create client
+		client := newClient(t, label)
+		defer client.Close()
+
+		// Open a session
+		session, err := client.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create a sender
+		receiver, err := session.NewReceiver(
+			amqp.LinkTargetAddress(queueName),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		go func() {
+			err := session.Close()
+			if err != nil {
+				t.Fatalf("Expected nil error from session.Close(), got: %+v", err)
+			}
+		}()
+
+		_, err = receiver.Receive(context.Background())
+		if err != amqp.ErrSessionClosed {
+			t.Fatalf("Expected ErrSessionClosed from receiver.Receiver, got: %+v", err)
+			return
+		}
+
+		client.Close() // close before leak check
+
+		checkLeaks()
+	})
+
+	label = "conn"
+	t.Run(label, func(t *testing.T) {
+		checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+		// Create client
+		client := newClient(t, label)
+		defer client.Close()
+
+		// Open a session
+		session, err := client.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create a sender
+		receiver, err := session.NewReceiver(
+			amqp.LinkTargetAddress(queueName),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		go func() {
+			err := client.Close()
+			if err != nil {
+				t.Fatalf("Expected nil error from client.Close(), got: %+v", err)
+			}
+		}()
+
+		_, err = receiver.Receive(context.Background())
+		if err != amqp.ErrConnClosed {
+			t.Fatalf("Expected ErrConnClosed from receiver.Receiver, got: %+v", err)
+			return
+		}
+
+		checkLeaks()
+	})
 }
 
 func dump(i interface{}) {
@@ -349,13 +472,13 @@ func newTestQueue(tb testing.TB, suffix string) (string, servicebus.QueuesClient
 	queuesClient.Authorizer = autorest.NewBearerAuthorizer(token)
 
 	params := servicebus.SBQueue{}
-	_, err = queuesClient.CreateOrUpdate(resourceGroup, namespace, queueName, params)
+	_, err = queuesClient.CreateOrUpdate(context.Background(), resourceGroup, namespace, queueName, params)
 	if err != nil {
 		tb.Fatal(err)
 	}
 
 	cleanup := func() {
-		_, err = queuesClient.Delete(resourceGroup, namespace, queueName)
+		_, err = queuesClient.Delete(context.Background(), resourceGroup, namespace, queueName)
 		if err != nil {
 			tb.Logf("Unable to remove queue: %s - %v", queueName, err)
 		}
