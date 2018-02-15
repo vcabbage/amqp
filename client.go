@@ -271,7 +271,6 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	}
 
 	var (
-		messageFormat  = uint32(0) // Only message-format "0" is defined in spec.
 		maxPayloadSize = int(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
 		sndSettleMode  = s.link.senderSettleMode
 		rcvSettleMode  = s.link.receiverSettleMode
@@ -285,7 +284,7 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 	fr := performTransfer{
 		Handle:        s.link.handle,
 		DeliveryTag:   deliveryTag,
-		MessageFormat: &messageFormat,
+		MessageFormat: &msg.Format,
 		More:          s.buf.len() > 0,
 	}
 
@@ -1257,9 +1256,17 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 			return nil, ctx.Err()
 		}
 
-		// record the delivery ID if this is the first frame of the message
-		if first && fr.DeliveryID != nil {
-			msg.id = (deliveryID)(*fr.DeliveryID)
+		// record the delivery ID and message format if this is
+		// the first frame of the message
+		if first {
+			if fr.DeliveryID != nil {
+				msg.id = (deliveryID)(*fr.DeliveryID)
+			}
+
+			if fr.MessageFormat != nil {
+				msg.Format = *fr.MessageFormat
+			}
+
 			first = false
 		}
 

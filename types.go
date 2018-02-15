@@ -1633,6 +1633,13 @@ func (c *performClose) String() string {
 
 // Message is an AMQP message.
 type Message struct {
+	// Message format code.
+	//
+	// The upper three octets of a message format code identify a particular message
+	// format. The lowest octet indicates the version of said message format. Any
+	// given version of a format is forwards compatible with all higher versions.
+	Format uint32
+
 	// The header section carries standard delivery details about the transfer
 	// of a message through the AMQP network.
 	Header *MessageHeader
