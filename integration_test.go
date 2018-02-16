@@ -122,9 +122,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 
 					for i, data := range tt.data {
 						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-						err = sender.Send(ctx, &amqp.Message{
-							Data: []byte(data),
-						})
+						err = sender.Send(ctx, amqp.NewMessage([]byte(data)))
 						cancel()
 						if err != nil {
 							sendErr = fmt.Errorf("Error after %d sends: %+v", i, err)
@@ -161,8 +159,8 @@ func TestIntegrationRoundTrip(t *testing.T) {
 						// Accept message
 						msg.Accept()
 
-						if !bytes.Equal([]byte(data), msg.Data) {
-							receiveErr = fmt.Errorf("Expected received message %d to be %v, but it was %v", i+1, string(data), string(msg.Data))
+						if !bytes.Equal([]byte(data), msg.GetData()) {
+							receiveErr = fmt.Errorf("Expected received message %d to be %v, but it was %v", i+1, string(data), string(msg.GetData()))
 						}
 					}
 				}()
@@ -240,9 +238,7 @@ func TestIntegrationSend(t *testing.T) {
 
 			for i, data := range tt.data {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				err = sender.Send(ctx, &amqp.Message{
-					Data: []byte(data),
-				})
+				err = sender.Send(ctx, amqp.NewMessage([]byte(data)))
 				cancel()
 				if err != nil {
 					t.Fatalf("Error after %d sends: %+v", i, err)

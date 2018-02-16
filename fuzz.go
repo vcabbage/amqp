@@ -61,9 +61,7 @@ func FuzzConn(data []byte) int {
 		return 0
 	}
 
-	err = sender.Send(context.Background(), &Message{
-		Data: []byte(data),
-	})
+	err = sender.Send(context.Background(), NewMessage(data))
 	if err != nil {
 		return 0
 	}

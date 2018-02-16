@@ -1700,10 +1700,10 @@ type Message struct {
 	// the possibility of a null key) and the values are restricted to be of
 	// simple types only, that is, excluding map, list, and array types.
 
-	// Message payload.
-	Data []byte
+	// Data payloads.
+	Data [][]byte
 	// A data section contains opaque binary data.
-	// TODO: this could be data(s), amqp-sequence(s), amqp-value rather than singe data:
+	// TODO: this could be data(s), amqp-sequence(s), amqp-value rather than single data:
 	// "The body consists of one of the following three choices: one or more data
 	//  sections, one or more amqp-sequence sections, or a single amqp-value section."
 
@@ -1722,35 +1722,24 @@ type Message struct {
 	settled  bool       // whether transfer was settled by sender
 }
 
-// Annotations keys must be of type string, int, or int64.
+// NewMessage returns a *Message with data as the payload.
 //
-// String keys are encoded as AMQP Symbols.
-type Annotations map[interface{}]interface{}
-
-func (a Annotations) marshal(wr *buffer) error {
-	return writeMap(wr, a)
+// This constructor is intended as a helper for basic Messages with a
+// single data payload. It is valid to construct a Message directly for
+// more complex usages.
+func NewMessage(data []byte) *Message {
+	return &Message{
+		Data: [][]byte{data},
+	}
 }
 
-func (a *Annotations) unmarshal(r *buffer) error {
-	_, count, err := readMapHeader(r)
-	if err != nil {
-		return err
+// GetData returns the first []byte from the Data field
+// or nil if Data is empty.
+func (m *Message) GetData() []byte {
+	if len(m.Data) < 1 {
+		return nil
 	}
-
-	m := make(Annotations, count/2)
-	for i := uint32(0); i < count; i += 2 {
-		key, err := readAny(r)
-		if err != nil {
-			return err
-		}
-		value, err := readAny(r)
-		if err != nil {
-			return err
-		}
-		m[key] = value
-	}
-	*a = m
-	return nil
+	return m.Data[0]
 }
 
 // Accept notifies the server that the message has been
@@ -1821,9 +1810,9 @@ func (m *Message) marshal(wr *buffer) error {
 		}
 	}
 
-	if m.Data != nil {
+	for _, data := range m.Data {
 		writeDescriptor(wr, typeCodeApplicationData)
-		err := writeBinary(wr, m.Data)
+		err := writeBinary(wr, data)
 		if err != nil {
 			return err
 		}
@@ -1883,7 +1872,16 @@ func (m *Message) unmarshal(r *buffer) error {
 			section = &m.ApplicationProperties
 
 		case typeCodeApplicationData:
-			section = &m.Data
+			r.skip(3)
+
+			var data []byte
+			err = unmarshal(r, &data)
+			if err != nil {
+				return err
+			}
+
+			m.Data = append(m.Data, data)
+			continue
 
 		case typeCodeFooter:
 			section = &m.Footer
@@ -1949,6 +1947,37 @@ func tryReadNull(r *buffer) bool {
 		return true
 	}
 	return false
+}
+
+// Annotations keys must be of type string, int, or int64.
+//
+// String keys are encoded as AMQP Symbols.
+type Annotations map[interface{}]interface{}
+
+func (a Annotations) marshal(wr *buffer) error {
+	return writeMap(wr, a)
+}
+
+func (a *Annotations) unmarshal(r *buffer) error {
+	_, count, err := readMapHeader(r)
+	if err != nil {
+		return err
+	}
+
+	m := make(Annotations, count/2)
+	for i := uint32(0); i < count; i += 2 {
+		key, err := readAny(r)
+		if err != nil {
+			return err
+		}
+		value, err := readAny(r)
+		if err != nil {
+			return err
+		}
+		m[key] = value
+	}
+	*a = m
+	return nil
 }
 
 /*

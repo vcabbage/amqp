@@ -40,9 +40,7 @@ func Example() {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 
 		// Send message
-		err = sender.Send(ctx, &amqp.Message{
-			Data: []byte("Hello!"),
-		})
+		err = sender.Send(ctx, amqp.NewMessage([]byte("Hello!")))
 		if err != nil {
 			log.Fatal("Sending message:", err)
 		}
@@ -75,7 +73,7 @@ func Example() {
 			// Accept message
 			msg.Accept()
 
-			fmt.Printf("Message received: %s\n", msg.Data)
+			fmt.Printf("Message received: %s\n", msg.GetData())
 		}
 	}
 }
