@@ -471,7 +471,10 @@ var (
 			ApplicationProperties: map[string]interface{}{
 				"baz": "foo",
 			},
-			Data:  []byte("A nice little data payload."),
+			Data: [][]byte{
+				[]byte("A nice little data payload."),
+				[]byte("More payload."),
+			},
 			Value: uint8(42),
 			Footer: Annotations{
 				"hash": []uint8{0, 1, 2, 34, 5, 6, 7, 8, 9, 0},
