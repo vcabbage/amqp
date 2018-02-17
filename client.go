@@ -227,7 +227,7 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 		maxCredit:   DefaultLinkCredit,
 	}
 
-	l, err := newLink(s, r, opts)
+	l, err := attachLink(s, r, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -350,7 +350,7 @@ func (s *Sender) Close() error {
 
 // NewSender opens a new sender link on the session.
 func (s *Session) NewSender(opts ...LinkOption) (*Sender, error) {
-	l, err := newLink(s, nil, opts)
+	l, err := attachLink(s, nil, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -691,29 +691,14 @@ type link struct {
 	err                error // err returned on Close()
 }
 
-// newLink is used by Receiver and Sender to create new links
-func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
-	l := &link{
-		name:     string(randBytes(40)),
-		session:  s,
-		receiver: r,
-		close:    make(chan struct{}),
-		done:     make(chan struct{}),
-		// TODO: this is excessive, especially on 64-bit platforms
-		//       default to a more reasonable max and allow users to
-		//       change via LinkOption
-		maxMessageSize: maxSliceLen,
+// attachLink is used by Receiver and Sender to create new links
+func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
+	l, err := newLink(s, r, opts)
+	if err != nil {
+		return nil, err
 	}
 
 	isReceiver := r != nil
-
-	// configure options
-	for _, o := range opts {
-		err := o(l)
-		if err != nil {
-			return nil, err
-		}
-	}
 
 	// buffer rx to linkCredit so that conn.mux won't block
 	// attempting to send to a slow reader
@@ -810,6 +795,30 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	}
 
 	go l.mux()
+
+	return l, nil
+}
+
+func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
+	l := &link{
+		name:     string(randBytes(40)),
+		session:  s,
+		receiver: r,
+		close:    make(chan struct{}),
+		done:     make(chan struct{}),
+		// TODO: this is excessive, especially on 64-bit platforms
+		//       default to a more reasonable max and allow users to
+		//       change via LinkOption
+		maxMessageSize: maxSliceLen,
+	}
+
+	// configure options
+	for _, o := range opts {
+		err := o(l)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	return l, nil
 }
@@ -1201,8 +1210,11 @@ func LinkReceiverSettle(mode ReceiverSettleMode) LinkOption {
 // LinkSelectorFilter sets a selector filter (apache.org:selector-filter:string) on the link source.
 func LinkSelectorFilter(filter string) LinkOption {
 	// <descriptor name="apache.org:selector-filter:string" code="0x0000468C:0x00000004"/>
-	const name = symbol("apache.org:selector-filter:string")
-	code := binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x46, 0x8C, 0x00, 0x00, 0x00, 0x04})
+	const (
+		name = symbol("apache.org:selector-filter:string")
+		code = uint64(0x0000468C00000004)
+	)
+
 	return func(l *link) error {
 		if l.source == nil {
 			l.source = new(source)

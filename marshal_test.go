@@ -11,9 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/go-cmp/cmp"
-	"github.com/google/go-cmp/cmp/cmpopts"
 )
 
 var exampleFrames = []struct {
@@ -70,11 +67,8 @@ func TestFrameMarshalUnmarshal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%+v", err)
 			}
-			cmpOpts := cmp.Options{
-				DeepAllowUnexported(want.body, payload),
-			}
-			if !cmp.Equal(want.body, payload, cmpOpts...) {
-				t.Errorf("Roundtrip produced different results:\n %s", cmp.Diff(want.body, payload, cmpOpts...))
+			if !testEqual(want.body, payload) {
+				t.Errorf("Roundtrip produced different results:\n %s", testDiff(want.body, payload))
 			}
 		})
 	}
@@ -202,12 +196,8 @@ func TestMarshalUnmarshal(t *testing.T) {
 			}
 
 			cmpType := reflect.Indirect(newType).Interface()
-			cmpOpts := cmp.Options{
-				DeepAllowUnexported(type_, cmpType),
-				cmpopts.EquateNaNs(),
-			}
-			if !cmp.Equal(type_, cmpType, cmpOpts...) {
-				t.Errorf("Roundtrip produced different results:\n %s", cmp.Diff(type_, cmpType, cmpOpts...))
+			if !testEqual(type_, cmpType) {
+				t.Errorf("Roundtrip produced different results:\n %s", testDiff(type_, cmpType))
 			}
 		})
 	}
@@ -227,12 +217,8 @@ func TestReadAny(t *testing.T) {
 				t.Fatalf("%+v", err)
 			}
 
-			cmpOpts := cmp.Options{
-				DeepAllowUnexported(type_, got),
-				cmpopts.EquateNaNs(),
-			}
-			if !cmp.Equal(type_, got, cmpOpts...) {
-				t.Errorf("Roundtrip produced different results:\n %s", cmp.Diff(type_, got, cmpOpts...))
+			if !testEqual(type_, got) {
+				t.Errorf("Roundtrip produced different results:\n %s", testDiff(type_, got))
 			}
 		})
 	}
@@ -621,46 +607,4 @@ func rcvSettle(m ReceiverSettleMode) *ReceiverSettleMode {
 
 func uint32Ptr(u uint32) *uint32 {
 	return &u
-}
-
-// from https://github.com/google/go-cmp/issues/40
-func DeepAllowUnexported(vs ...interface{}) cmp.Option {
-	m := make(map[reflect.Type]struct{})
-	for _, v := range vs {
-		structTypes(reflect.ValueOf(v), m)
-	}
-	var types []interface{}
-	for t := range m {
-		types = append(types, reflect.New(t).Elem().Interface())
-	}
-	return cmp.AllowUnexported(types...)
-}
-
-func structTypes(v reflect.Value, m map[reflect.Type]struct{}) {
-	if !v.IsValid() {
-		return
-	}
-	switch v.Kind() {
-	case reflect.Ptr:
-		if !v.IsNil() {
-			structTypes(v.Elem(), m)
-		}
-	case reflect.Interface:
-		if !v.IsNil() {
-			structTypes(v.Elem(), m)
-		}
-	case reflect.Slice, reflect.Array:
-		for i := 0; i < v.Len(); i++ {
-			structTypes(v.Index(i), m)
-		}
-	case reflect.Map:
-		for _, k := range v.MapKeys() {
-			structTypes(v.MapIndex(k), m)
-		}
-	case reflect.Struct:
-		m[v.Type()] = struct{}{}
-		for i := 0; i < v.NumField(); i++ {
-			structTypes(v.Field(i), m)
-		}
-	}
 }
