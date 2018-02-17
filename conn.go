@@ -256,7 +256,7 @@ func (c *conn) start() error {
 	// check if err occurred
 	if c.err != nil {
 		close(c.txDone) // close here since connWriter hasn't been started yet
-		c.Close()
+		_ = c.Close()
 		return c.err
 	}
 
@@ -429,7 +429,7 @@ func (c *conn) connReader() {
 		// need to read more if buf doesn't contain the complete frame
 		// or there's not enough in buf to parse the header
 		if frameInProgress || buf.len() < frameHeaderSize {
-			c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
+			_ = c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
 			err := buf.readFromOnce(c.net)
 			if err != nil {
 				select {
@@ -577,7 +577,7 @@ func (c *conn) connWriter() {
 		// connection complete
 		case <-c.done:
 			// send close
-			c.writeFrame(frame{
+			_ = c.writeFrame(frame{
 				type_: frameTypeAMQP,
 				body:  &performClose{},
 			})
@@ -590,7 +590,7 @@ func (c *conn) connWriter() {
 // by connWriter after initial negotiation.
 func (c *conn) writeFrame(fr frame) error {
 	if c.connectTimeout != 0 {
-		c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
+		_ = c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
 	}
 
 	// writeFrame into txBuf
@@ -614,7 +614,7 @@ func (c *conn) writeFrame(fr frame) error {
 // network
 func (c *conn) writeProtoHeader(pID protoID) error {
 	if c.connectTimeout != 0 {
-		c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
+		_ = c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
 	}
 	_, err := c.net.Write([]byte{'A', 'M', 'Q', 'P', byte(pID), 1, 0, 0})
 	return err
@@ -722,12 +722,12 @@ func (c *conn) startTLS() stateFunc {
 
 	// this function will be executed by connReader
 	c.connReaderRun <- func() {
-		c.net.SetReadDeadline(time.Time{}) // clear timeout
+		_ = c.net.SetReadDeadline(time.Time{}) // clear timeout
 
 		// wrap existing net.Conn and perform TLS handshake
 		tlsConn := tls.Client(c.net, c.tlsConfig)
 		if c.connectTimeout != 0 {
-			tlsConn.SetWriteDeadline(time.Now().Add(c.connectTimeout))
+			_ = tlsConn.SetWriteDeadline(time.Now().Add(c.connectTimeout))
 		}
 		c.err = tlsConn.Handshake()
 
@@ -739,7 +739,7 @@ func (c *conn) startTLS() stateFunc {
 	}
 
 	// set deadline to interrupt connReader
-	c.net.SetReadDeadline(time.Time{}.Add(1))
+	_ = c.net.SetReadDeadline(time.Time{}.Add(1))
 
 	<-done
 

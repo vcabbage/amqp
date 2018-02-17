@@ -373,7 +373,7 @@ func unmarshalComposite(r *buffer, type_ amqpType, fields ...unmarshalField) err
 		}
 
 		// Unmarshal each of the received fields.
-		err := unmarshal(r, field.field)
+		err = unmarshal(r, field.field)
 		if err != nil {
 			return errorWrapf(err, "unmarshaling field %d", i)
 		}
@@ -406,8 +406,6 @@ type unmarshalField struct {
 type nullHandler func() error
 
 // readCompositeHeader reads and consumes the composite header from r.
-//
-// If the composite is null, errNull will be returned.
 func readCompositeHeader(r *buffer) (_ amqpType, fields int, _ error) {
 	type_, err := r.readType()
 	if err != nil {
@@ -426,57 +424,57 @@ func readCompositeHeader(r *buffer) (_ amqpType, fields int, _ error) {
 	}
 
 	// fields are represented as a list
-	_, fields, err = readListHeader(r)
+	fields, err = readListHeader(r)
 
 	return amqpType(v), fields, err
 }
 
-func readListHeader(r *buffer) (size, length int, _ error) {
+func readListHeader(r *buffer) (length int, _ error) {
 	type_, err := r.readType()
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 
 	listLength := r.len()
 
 	switch type_ {
 	case typeCodeList0:
-		return 0, 0, nil
+		return 0, nil
 	case typeCodeList8:
 		buf, ok := r.next(2)
 		if !ok {
-			return 0, 0, errorNew("invalid length")
+			return 0, errorNew("invalid length")
 		}
 		_ = buf[1]
 
-		size = int(buf[0])
-		if int(size) > listLength-1 {
-			return 0, 0, errorNew("invalid length")
+		size := int(buf[0])
+		if size > listLength-1 {
+			return 0, errorNew("invalid length")
 		}
 		length = int(buf[1])
 	case typeCodeList32:
 		buf, ok := r.next(8)
 		if !ok {
-			return 0, 0, errorNew("invalid length")
+			return 0, errorNew("invalid length")
 		}
 		_ = buf[7]
 
-		size = int(binary.BigEndian.Uint32(buf[:4]))
+		size := int(binary.BigEndian.Uint32(buf[:4]))
 		if size > listLength-4 {
-			return 0, 0, errorNew("invalid length")
+			return 0, errorNew("invalid length")
 		}
 		length = int(binary.BigEndian.Uint32(buf[4:8]))
 	default:
-		return 0, 0, errorErrorf("type code %#02x is not a recognized list type", type_)
+		return 0, errorErrorf("type code %#02x is not a recognized list type", type_)
 	}
 
-	return size, length, nil
+	return length, nil
 }
 
-func readArrayHeader(r *buffer) (size, length int, _ error) {
+func readArrayHeader(r *buffer) (length int, _ error) {
 	type_, err := r.readType()
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 
 	arrayLength := r.len()
@@ -485,31 +483,31 @@ func readArrayHeader(r *buffer) (size, length int, _ error) {
 	case typeCodeArray8:
 		buf, ok := r.next(2)
 		if !ok {
-			return 0, 0, errorNew("invalid length")
+			return 0, errorNew("invalid length")
 		}
 		_ = buf[1]
 
-		size = int(buf[0])
-		if int(size) > arrayLength-1 {
-			return 0, 0, errorNew("invalid length")
+		size := int(buf[0])
+		if size > arrayLength-1 {
+			return 0, errorNew("invalid length")
 		}
 		length = int(buf[1])
 	case typeCodeArray32:
 		buf, ok := r.next(8)
 		if !ok {
-			return 0, 0, errorNew("invalid length")
+			return 0, errorNew("invalid length")
 		}
 		_ = buf[7]
 
-		l := binary.BigEndian.Uint32(buf[:4])
-		if int(l) > arrayLength-4 {
-			return 0, 0, errorErrorf("invalid length for type %02x", type_)
+		size := binary.BigEndian.Uint32(buf[:4])
+		if int(size) > arrayLength-4 {
+			return 0, errorErrorf("invalid length for type %02x", type_)
 		}
 		length = int(binary.BigEndian.Uint32(buf[4:8]))
 	default:
-		return 0, 0, errorErrorf("type code %#02x is not a recognized list type", type_)
+		return 0, errorErrorf("type code %#02x is not a recognized list type", type_)
 	}
-	return size, length, nil
+	return length, nil
 }
 
 func readString(r *buffer) (string, error) {
@@ -684,7 +682,7 @@ func readAnyMap(r *buffer) (interface{}, error) {
 
 	stringKeys := true
 Loop:
-	for key, _ := range m {
+	for key := range m {
 		switch key.(type) {
 		case string:
 		case symbol:
@@ -829,7 +827,7 @@ func readComposite(r *buffer) (interface{}, error) {
 		if len(buf) < 10 {
 			return nil, errorNew("invalid length for ulong")
 		}
-		compositeType = uint64(binary.BigEndian.Uint64(buf[2:]))
+		compositeType = binary.BigEndian.Uint64(buf[2:])
 	}
 
 	if compositeType > math.MaxUint8 {
@@ -1196,40 +1194,45 @@ func readUUID(r *buffer) (UUID, error) {
 	return uuid, nil
 }
 
-func readMapHeader(r *buffer) (size uint32, count uint32, _ error) {
+func readMapHeader(r *buffer) (count uint32, _ error) {
 	type_, err := r.readType()
 	if err != nil {
-		return 0, 0, err
+		return 0, err
 	}
 
-	var width int
+	length := r.len()
+
 	switch type_ {
 	case typeCodeMap8:
 		buf, ok := r.next(2)
 		if !ok {
-			return 0, 0, errorNew("invalid length")
+			return 0, errorNew("invalid length")
 		}
 		_ = buf[1]
 
-		size = uint32(buf[0])
+		size := int(buf[0])
+		if size > length-1 {
+			return 0, errorNew("invalid length")
+		}
 		count = uint32(buf[1])
-		width = 1
 	case typeCodeMap32:
 		buf, ok := r.next(8)
 		if !ok {
-			return 0, 0, errorNew("invalid length")
+			return 0, errorNew("invalid length")
 		}
 		_ = buf[7]
 
-		size = binary.BigEndian.Uint32(buf[:4])
+		size := int(binary.BigEndian.Uint32(buf[:4]))
+		if size > length-4 {
+			return 0, errorNew("invalid length")
+		}
 		count = binary.BigEndian.Uint32(buf[4:8])
-		width = 4
 	default:
-		return 0, 0, errorErrorf("invalid map type %#02x", type_)
+		return 0, errorErrorf("invalid map type %#02x", type_)
 	}
 
-	if uint64(size) > uint64(r.len()+width) || uint64(count) > uint64(r.len()) {
-		return 0, 0, errorNew("invalid length")
+	if int(count) > r.len() {
+		return 0, errorNew("invalid length")
 	}
-	return size, count, err
+	return count, nil
 }

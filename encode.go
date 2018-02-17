@@ -452,8 +452,11 @@ func writeMap(wr *buffer, m interface{}) error {
 	case map[string]interface{}:
 		pairs = len(m) * 2
 		for key, val := range m {
-			writeString(wr, key)
-			err := marshal(wr, val)
+			err := writeString(wr, key)
+			if err != nil {
+				return err
+			}
+			err = marshal(wr, val)
 			if err != nil {
 				return err
 			}
@@ -473,8 +476,11 @@ func writeMap(wr *buffer, m interface{}) error {
 	case unsettled:
 		pairs = len(m) * 2
 		for key, val := range m {
-			writeString(wr, key)
-			err := marshal(wr, val)
+			err := writeString(wr, key)
+			if err != nil {
+				return err
+			}
+			err = marshal(wr, val)
 			if err != nil {
 				return err
 			}
