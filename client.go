@@ -138,7 +138,7 @@ func (c *Client) NewSession() (*Session, error) {
 
 	begin, ok := fr.body.(*performBegin)
 	if !ok {
-		s.Close() // deallocate session on error
+		_ = s.Close() // deallocate session on error
 		return nil, errorErrorf("unexpected begin response: %+v", fr.body)
 	}
 
@@ -782,7 +782,7 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	//       default to a more reasonable max and allow users to
 	//       change via LinkOption
 	l.peerMaxMessageSize = maxSliceLen
-	if resp.MaxMessageSize != 0 && resp.MaxMessageSize < uint64(l.peerMaxMessageSize) {
+	if resp.MaxMessageSize != 0 && resp.MaxMessageSize < l.peerMaxMessageSize {
 		l.peerMaxMessageSize = resp.MaxMessageSize
 	}
 
@@ -1274,7 +1274,7 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 		messageSize += len(fr.Payload)
 		if messageSize > maxMessageSize {
 			// TODO: send error
-			r.Close()
+			_ = r.Close()
 			return nil, errorErrorf("received message larger than max size of ")
 		}
 

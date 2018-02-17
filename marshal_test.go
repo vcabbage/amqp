@@ -50,12 +50,12 @@ func TestFrameMarshalUnmarshal(t *testing.T) {
 
 			err := writeFrame(&buf, tt.frame)
 			if err != nil {
-				t.Error(fmt.Sprintf("%+v", err))
+				t.Fatalf("%+v", err)
 			}
 
 			header, err := parseFrameHeader(&buf)
 			if err != nil {
-				t.Errorf("%+v", err)
+				t.Fatalf("%+v", err)
 			}
 
 			want := tt.frame
@@ -67,6 +67,9 @@ func TestFrameMarshalUnmarshal(t *testing.T) {
 			}
 
 			payload, err := parseFrameBody(&buf)
+			if err != nil {
+				t.Fatalf("%+v", err)
+			}
 			cmpOpts := cmp.Options{
 				DeepAllowUnexported(want.body, payload),
 			}
@@ -216,12 +219,12 @@ func TestReadAny(t *testing.T) {
 			var buf buffer
 			err := marshal(&buf, type_)
 			if err != nil {
-				t.Error(fmt.Sprintf("%+v", err))
+				t.Errorf("%+v", err)
 			}
 
 			got, err := readAny(&buf)
 			if err != nil {
-				t.Fatal(fmt.Sprintf("%+v", err))
+				t.Fatalf("%+v", err)
 			}
 
 			cmpOpts := cmp.Options{
@@ -626,11 +629,11 @@ func DeepAllowUnexported(vs ...interface{}) cmp.Option {
 	for _, v := range vs {
 		structTypes(reflect.ValueOf(v), m)
 	}
-	var typs []interface{}
+	var types []interface{}
 	for t := range m {
-		typs = append(typs, reflect.New(t).Elem().Interface())
+		types = append(types, reflect.New(t).Elem().Interface())
 	}
-	return cmp.AllowUnexported(typs...)
+	return cmp.AllowUnexported(types...)
 }
 
 func structTypes(v reflect.Value, m map[reflect.Type]struct{}) {

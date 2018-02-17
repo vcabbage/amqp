@@ -49,11 +49,17 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) LocalAddr() net.Addr {
-	return &net.TCPAddr{net.IP{127, 0, 0, 1}, 49706, ""}
+	return &net.TCPAddr{
+		IP:   net.IP{127, 0, 0, 1},
+		Port: 49706,
+	}
 }
 
 func (c *Conn) RemoteAddr() net.Addr {
-	return &net.TCPAddr{net.IP{127, 0, 0, 1}, 49706, ""}
+	return &net.TCPAddr{
+		IP:   net.IP{127, 0, 0, 1},
+		Port: 49706,
+	}
 }
 
 func (c *Conn) SetDeadline(t time.Time) error {

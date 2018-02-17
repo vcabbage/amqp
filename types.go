@@ -566,7 +566,7 @@ func (u unsettled) marshal(wr *buffer) error {
 }
 
 func (u *unsettled) unmarshal(r *buffer) error {
-	_, count, err := readMapHeader(r)
+	count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
@@ -595,7 +595,7 @@ func (f filter) marshal(wr *buffer) error {
 }
 
 func (f *filter) unmarshal(r *buffer) error {
-	_, count, err := readMapHeader(r)
+	count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
@@ -1263,7 +1263,7 @@ type performTransfer struct {
 
 	// optional channel to indicate to sender that transfer has completed
 	done chan struct{}
-	// complete when receiver has responded with dispostion (ReceiverSettleMode = second)
+	// complete when receiver has responded with disposition (ReceiverSettleMode = second)
 	// instead of when this message has been sent on network
 	confirmSettlement bool
 }
@@ -1617,7 +1617,7 @@ func (c *performClose) frameBody() {}
 
 func (c *performClose) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeClose, []marshalField{
-		marshalField{value: c.Error, omit: c.Error == nil},
+		{value: c.Error, omit: c.Error == nil},
 	})
 }
 
@@ -1924,9 +1924,9 @@ func peekMessageType(buf []byte) (uint8, error) {
 
 	if t == typeCodeSmallUlong {
 		if len(buf[2:]) == 0 {
-			errorNew("invalid ulong")
+			return 0, errorNew("invalid ulong")
 		}
-		return uint8(buf[2]), nil
+		return buf[2], nil
 	}
 
 	if t != typeCodeUlong {
@@ -1959,7 +1959,7 @@ func (a Annotations) marshal(wr *buffer) error {
 }
 
 func (a *Annotations) unmarshal(r *buffer) error {
-	_, count, err := readMapHeader(r)
+	count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
@@ -2458,7 +2458,7 @@ func (m mapAnyAny) marshal(wr *buffer) error {
 }
 
 func (m *mapAnyAny) unmarshal(r *buffer) error {
-	_, count, err := readMapHeader(r)
+	count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
@@ -2497,7 +2497,7 @@ func (m mapStringAny) marshal(wr *buffer) error {
 }
 
 func (m *mapStringAny) unmarshal(r *buffer) error {
-	_, count, err := readMapHeader(r)
+	count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
@@ -2526,13 +2526,13 @@ func (m mapSymbolAny) marshal(wr *buffer) error {
 	return writeMap(wr, map[symbol]interface{}(m))
 }
 
-func (f *mapSymbolAny) unmarshal(r *buffer) error {
-	_, count, err := readMapHeader(r)
+func (m *mapSymbolAny) unmarshal(r *buffer) error {
+	count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
 
-	m := make(mapSymbolAny, count/2)
+	mm := make(mapSymbolAny, count/2)
 	for i := uint32(0); i < count; i += 2 {
 		key, err := readString(r)
 		if err != nil {
@@ -2542,9 +2542,9 @@ func (f *mapSymbolAny) unmarshal(r *buffer) error {
 		if err != nil {
 			return err
 		}
-		m[symbol(key)] = value
+		mm[symbol(key)] = value
 	}
-	*f = m
+	*m = mm
 	return nil
 }
 
@@ -2609,28 +2609,19 @@ func (p *lifetimePolicy) unmarshal(r *buffer) error {
 	return nil
 }
 
-func (p lifetimePolicy) unmarshalConstant(r *buffer) error {
-	_, ok := r.next(4)
-	if !ok {
-		return errorErrorf("invalid size %d for lifetime-policy", r.len())
-	}
-	return nil
-}
-
+// Sender Settlement Modes
 const (
-	// ModeMixed specifies the sender will send all deliveries initially
-	// unsettled to the receiver.
+	// Sender will send all deliveries initially unsettled to the receiver.
 	ModeUnsettled SenderSettleMode = 0
 
-	// ModeSettled specifies the sender will send all deliveries settled
-	// to the receiver.
+	// Sender will send all deliveries settled to the receiver.
 	ModeSettled SenderSettleMode = 1
 
-	// ModeMixed specifies the sender MAY send a mixture of settled and
-	// unsettled deliveries to the receiver.
+	// Sender MAY send a mixture of settled and unsettled deliveries to the receiver.
 	ModeMixed SenderSettleMode = 2
 )
 
+// SenderSettleMode specifies how the sender will settle messages.
 type SenderSettleMode uint8
 
 func (m *SenderSettleMode) String() string {
@@ -2663,14 +2654,14 @@ func (m *SenderSettleMode) unmarshal(r *buffer) error {
 	return err
 }
 
+// Receiver Settlement Modes
 const (
-	// ModeFirst specifies the receiver will spontaneously settle all
-	// incoming transfers.
+	// Receiver will spontaneously settle all incoming transfers.
 	ModeFirst ReceiverSettleMode = 0
 
-	// ModeSecond specifies receiver will only settle after sending the
-	// disposition to the sender and receiving a disposition indicating
-	// settlement of the delivery from the sender.
+	// Receiver will only settle after sending the disposition to the
+	// sender and receiving a disposition indicating settlement of
+	// the delivery from the sender.
 	//
 	// BUG: When receiving messages, accepting/rejecting/releasing a
 	//      received message does not block and wait for the sender's
@@ -2678,6 +2669,7 @@ const (
 	ModeSecond ReceiverSettleMode = 1
 )
 
+// ReceiverSettleMode specifies how the receiver will settle messages.
 type ReceiverSettleMode uint8
 
 func (m *ReceiverSettleMode) String() string {
@@ -2723,9 +2715,14 @@ func (t describedType) marshal(wr *buffer) error {
 
 func (t *describedType) unmarshal(r *buffer) error {
 	b, err := r.readByte()
+	if err != nil {
+		return err
+	}
+
 	if b != 0x0 {
 		return errorErrorf("invalid described type header %02x", b)
 	}
+
 	err = unmarshal(r, &t.descriptor)
 	if err != nil {
 		return err
@@ -2756,7 +2753,7 @@ func (a ArrayUByte) marshal(wr *buffer) error {
 }
 
 func (a *ArrayUByte) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -2793,7 +2790,7 @@ func (a arrayInt8) marshal(wr *buffer) error {
 }
 
 func (a *arrayInt8) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -2841,7 +2838,7 @@ func (a arrayUint16) marshal(wr *buffer) error {
 }
 
 func (a *arrayUint16) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -2892,7 +2889,7 @@ func (a arrayInt16) marshal(wr *buffer) error {
 }
 
 func (a *arrayInt16) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -2959,7 +2956,7 @@ func (a arrayUint32) marshal(wr *buffer) error {
 }
 
 func (a *arrayUint32) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3052,7 +3049,7 @@ func (a arrayInt32) marshal(wr *buffer) error {
 }
 
 func (a *arrayInt32) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3136,7 +3133,7 @@ func (a arrayUint64) marshal(wr *buffer) error {
 }
 
 func (a *arrayUint64) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3229,7 +3226,7 @@ func (a arrayInt64) marshal(wr *buffer) error {
 }
 
 func (a *arrayInt64) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3297,7 +3294,7 @@ func (a arrayFloat) marshal(wr *buffer) error {
 }
 
 func (a *arrayFloat) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3349,7 +3346,7 @@ func (a arrayDouble) marshal(wr *buffer) error {
 }
 
 func (a *arrayDouble) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3405,7 +3402,7 @@ func (a arrayBool) marshal(wr *buffer) error {
 }
 
 func (a *arrayBool) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3489,7 +3486,7 @@ func (a arrayString) marshal(wr *buffer) error {
 }
 
 func (a *arrayString) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3580,7 +3577,7 @@ func (a arraySymbol) marshal(wr *buffer) error {
 }
 
 func (a *arraySymbol) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3670,7 +3667,7 @@ func (a arrayBinary) marshal(wr *buffer) error {
 }
 
 func (a *arrayBinary) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3743,7 +3740,7 @@ func (a arrayTimestamp) marshal(wr *buffer) error {
 }
 
 func (a *arrayTimestamp) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3773,7 +3770,7 @@ func (a *arrayTimestamp) unmarshal(r *buffer) error {
 	for i := range aa {
 		ms := int64(binary.BigEndian.Uint64(buf[bufIdx:]))
 		bufIdx += typeSize
-		aa[i] = time.Unix(int64(ms)/1000, int64(ms%1000)*1000000).UTC()
+		aa[i] = time.Unix(ms/1000, (ms%1000)*1000000).UTC()
 	}
 
 	*a = aa
@@ -3795,7 +3792,7 @@ func (a arrayUUID) marshal(wr *buffer) error {
 }
 
 func (a *arrayUUID) unmarshal(r *buffer) error {
-	_, length, err := readArrayHeader(r)
+	length, err := readArrayHeader(r)
 	if err != nil {
 		return err
 	}
@@ -3866,7 +3863,7 @@ func (l list) marshal(wr *buffer) error {
 }
 
 func (l *list) unmarshal(r *buffer) error {
-	_, length, err := readListHeader(r)
+	length, err := readListHeader(r)
 	if err != nil {
 		return err
 	}
