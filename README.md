@@ -13,8 +13,7 @@ AMQP 1.0 is not compatible with AMQP 0-9-1 or 0-10, which are
 the most common AMQP protocols in use today. A list of AMQP 1.0 brokers and other
 AMQP 1.0 resources can be found at [github.com/xinchen10/awesome-amqp](https://github.com/xinchen10/awesome-amqp).
 
-This project is currently alpha status, though it is currently being used by my employer
-in a pre-production capacity.
+This project is currently alpha status, though it is currently being used by my employer in a production capacity.
 
 API is subject to change until 1.0.0. If you choose to use this library, please vendor it.
 
@@ -72,9 +71,7 @@ func main() {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 
 		// Send message
-		err = sender.Send(ctx, &amqp.Message{
-			Data: []byte("Hello!"),
-		})
+		err = sender.Send(ctx, amqp.NewMessage([]byte("Hello!")))
 		if err != nil {
 			log.Fatal("Sending message:", err)
 		}
@@ -107,24 +104,11 @@ func main() {
 			// Accept message
 			msg.Accept()
 
-			fmt.Printf("Message received: %s\n", msg.Data)
+			fmt.Printf("Message received: %s\n", msg.GetData())
 		}
 	}
 }
 ```
-
-### Notable Bugs/Shortcomings
-
-- [ ] Closing a sessions does not send an end performative.
-- [ ] Testing should be improved. Currently fuzz testing and basic Azure Service Bus integration testing is being performed.
-
-### Features - Short Term
-
-- [X] Set sender filters to support Azure Event Hubs. (Supported as of 0.3.0)
-
-### Features - Medium Term
-
-- [X] Support message producer operations. (Supported as of 0.2.0)
 
 ### Other Notes
 
