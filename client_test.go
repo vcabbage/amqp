@@ -10,7 +10,8 @@ func TestLinkOptions(t *testing.T) {
 		label string
 		opts  []LinkOption
 
-		wantSource *source
+		wantSource     *source
+		wantProperties map[symbol]interface{}
 	}{
 		{
 			label: "no options",
@@ -19,6 +20,9 @@ func TestLinkOptions(t *testing.T) {
 			label: "selector-filter",
 			opts: []LinkOption{
 				LinkSelectorFilter("amqp.annotation.x-opt-offset > '100'"),
+				LinkProperty("x-opt-test1", "test1"),
+				LinkProperty("x-opt-test2", "test2"),
+				LinkProperty("x-opt-test1", "test3"),
 			},
 
 			wantSource: &source{
@@ -28,6 +32,10 @@ func TestLinkOptions(t *testing.T) {
 						value:      "amqp.annotation.x-opt-offset > '100'",
 					},
 				},
+			},
+			wantProperties: map[symbol]interface{}{
+				"x-opt-test1": "test3",
+				"x-opt-test2": "test2",
 			},
 		},
 	}
@@ -40,7 +48,11 @@ func TestLinkOptions(t *testing.T) {
 			}
 
 			if !testEqual(got.source, tt.wantSource) {
-				t.Errorf("Properties don't match expected:\n %s", testDiff(got.source, tt.wantSource))
+				t.Errorf("Source properties don't match expected:\n %s", testDiff(got.source, tt.wantSource))
+			}
+
+			if !testEqual(got.properties, tt.wantProperties) {
+				t.Errorf("Link properties don't match expected:\n %s", testDiff(got.properties, tt.wantProperties))
 			}
 		})
 	}

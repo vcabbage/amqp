@@ -673,6 +673,7 @@ type link struct {
 	receiver     *Receiver // allows link options to modify Receiver
 	source       *source
 	target       *target
+	properties   map[symbol]interface{} // additional properties sent upon link attach
 
 	// "The delivery-count is initialized by the sender when a link endpoint is created,
 	// and is incremented whenever a message is sent. Only the sender MAY independently
@@ -730,6 +731,7 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		MaxMessageSize:     l.maxMessageSize,
 		Source:             l.source,
 		Target:             l.target,
+		Properties:         l.properties,
 	}
 
 	if isReceiver {
@@ -1108,6 +1110,22 @@ func LinkAddress(source string) LinkOption {
 			return LinkSourceAddress(source)(l)
 		}
 		return LinkTargetAddress(source)(l)
+	}
+}
+
+// LinkProperty sets an entry in the link properties map sent to the server.
+//
+// This option can be used multiple times.
+func LinkProperty(key, value string) LinkOption {
+	return func(l *link) error {
+		if key == "" {
+			return errorNew("link property key must not be empty")
+		}
+		if l.properties == nil {
+			l.properties = make(map[symbol]interface{})
+		}
+		l.properties[symbol(key)] = value
+		return nil
 	}
 }
 
