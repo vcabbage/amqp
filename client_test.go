@@ -23,6 +23,7 @@ func TestLinkOptions(t *testing.T) {
 				LinkProperty("x-opt-test1", "test1"),
 				LinkProperty("x-opt-test2", "test2"),
 				LinkProperty("x-opt-test1", "test3"),
+				LinkPropertyInt64("x-opt-test4", 1),
 			},
 
 			wantSource: &source{
@@ -36,6 +37,7 @@ func TestLinkOptions(t *testing.T) {
 			wantProperties: map[symbol]interface{}{
 				"x-opt-test1": "test3",
 				"x-opt-test2": "test2",
+				"x-opt-test4": int64(1),
 			},
 		},
 	}

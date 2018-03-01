@@ -1117,6 +1117,17 @@ func LinkAddress(source string) LinkOption {
 //
 // This option can be used multiple times.
 func LinkProperty(key, value string) LinkOption {
+	return linkProperty(key, value)
+}
+
+// LinkPropertyInt64 sets an entry in the link properties map sent to the server.
+//
+// This option can be used multiple times.
+func LinkPropertyInt64(key string, value int64) LinkOption {
+	return linkProperty(key, value)
+}
+
+func linkProperty(key string, value interface{}) LinkOption {
 	return func(l *link) error {
 		if key == "" {
 			return errorNew("link property key must not be empty")
