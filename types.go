@@ -1810,11 +1810,30 @@ func (m *Message) marshal(wr *buffer) error {
 		}
 	}
 
-	for _, data := range m.Data {
+	if len(m.Data) == 1 {
 		writeDescriptor(wr, typeCodeApplicationData)
-		err := writeBinary(wr, data)
+		err := writeBinary(wr, m.Data[0])
 		if err != nil {
 			return err
+		}
+	}
+
+	if len(m.Data) > 1 {
+		buf := new(buffer)
+		for _, data := range m.Data {
+			buf.reset()
+			innerMsg := NewMessage(data)
+			innerMsg.ApplicationProperties = m.ApplicationProperties
+			innerMsg.Annotations = m.Annotations
+			err := innerMsg.marshal(buf)
+			if err != nil {
+				return err
+			}
+			writeDescriptor(wr, typeCodeApplicationData)
+			err = writeBinary(wr, buf.b)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
