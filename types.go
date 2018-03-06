@@ -1765,6 +1765,13 @@ func (m *Message) Release() {
 	}
 }
 
+// MarshalBinary encodes the message into binary form
+func (m *Message) MarshalBinary() ([]byte, error) {
+	buf := new(buffer)
+	err := m.marshal(buf)
+	return buf.b, err
+}
+
 func (m *Message) shouldSendDisposition() bool {
 	return !m.settled || (m.receiver.link.receiverSettleMode != nil && *m.receiver.link.receiverSettleMode == ModeSecond)
 }
