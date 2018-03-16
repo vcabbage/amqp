@@ -159,7 +159,7 @@ type frame struct {
 	body    frameBody // body of the frame
 
 	// optional channel which will be closed after net transmit
-	done chan struct{}
+	done chan deliveryState
 }
 
 // frameBody adds some type safety to frame encoding
@@ -1262,7 +1262,7 @@ type performTransfer struct {
 	Payload []byte
 
 	// optional channel to indicate to sender that transfer has completed
-	done chan struct{}
+	done chan deliveryState
 	// complete when receiver has responded with disposition (ReceiverSettleMode = second)
 	// instead of when this message has been sent on network
 	confirmSettlement bool
@@ -1569,6 +1569,10 @@ func (e *Error) String() string {
 		e.Description,
 		e.Info,
 	)
+}
+
+func (e *Error) Error() string {
+	return e.String()
 }
 
 /*
