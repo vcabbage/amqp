@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/services/eventhub/mgmt/2017-04-01/eventhub"
 	"github.com/Azure/azure-sdk-for-go/services/servicebus/mgmt/2017-04-01/servicebus"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/adal"
@@ -33,15 +34,18 @@ func init() {
 }
 
 var (
-	isForkPR       = os.Getenv("CI") != "" && os.Getenv("SERVICEBUS_ACCESS_KEY") == ""
-	subscriptionID = mustGetenv("AZURE_SUBSCRIPTION_ID")
-	resourceGroup  = mustGetenv("AZURE_RESOURCE_GROUP")
-	tenantID       = mustGetenv("AZURE_TENANT_ID")
-	clientID       = mustGetenv("AZURE_CLIENT_ID")
-	clientSecret   = mustGetenv("AZURE_CLIENT_SECRET")
-	namespace      = mustGetenv("SERVICEBUS_NAMESPACE")
-	accessKeyName  = mustGetenv("SERVICEBUS_ACCESS_KEY_NAME")
-	accessKey      = mustGetenv("SERVICEBUS_ACCESS_KEY")
+	isForkPR        = os.Getenv("CI") != "" && os.Getenv("SERVICEBUS_ACCESS_KEY") == ""
+	subscriptionID  = mustGetenv("AZURE_SUBSCRIPTION_ID")
+	resourceGroup   = mustGetenv("AZURE_RESOURCE_GROUP")
+	tenantID        = mustGetenv("AZURE_TENANT_ID")
+	clientID        = mustGetenv("AZURE_CLIENT_ID")
+	clientSecret    = mustGetenv("AZURE_CLIENT_SECRET")
+	namespace       = mustGetenv("SERVICEBUS_NAMESPACE")
+	accessKeyName   = mustGetenv("SERVICEBUS_ACCESS_KEY_NAME")
+	accessKey       = mustGetenv("SERVICEBUS_ACCESS_KEY")
+	ehNamespace     = mustGetenv("EVENTHUB_NAMESPACE")
+	ehAccessKeyName = mustGetenv("EVENTHUB_ACCESS_KEY_NAME")
+	ehAccessKey     = mustGetenv("EVENTHUB_ACCESS_KEY")
 
 	tlsKeyLog = flag.String("tlskeylog", "", "path to write the TLS key log")
 	recordDir = flag.String("recorddir", "", "directory to write connection records to")
@@ -91,7 +95,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
 
 			// Create client
-			client := newClient(t, tt.label,
+			client := newSBClient(t, tt.label,
 				amqp.ConnMaxSessions(tt.sessions),
 			)
 			defer client.Close()
@@ -219,7 +223,7 @@ func TestIntegrationSend(t *testing.T) {
 			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
 
 			// Create client
-			client := newClient(t, tt.label)
+			client := newSBClient(t, tt.label)
 			defer client.Close()
 
 			// Open a session
@@ -278,7 +282,7 @@ func TestIntegrationClose(t *testing.T) {
 		checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
 
 		// Create client
-		client := newClient(t, label)
+		client := newSBClient(t, label)
 		defer client.Close()
 
 		// Open a session
@@ -318,7 +322,7 @@ func TestIntegrationClose(t *testing.T) {
 		checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
 
 		// Create client
-		client := newClient(t, label)
+		client := newSBClient(t, label)
 		defer client.Close()
 
 		// Open a session
@@ -358,7 +362,7 @@ func TestIntegrationClose(t *testing.T) {
 		checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
 
 		// Create client
-		client := newClient(t, label)
+		client := newSBClient(t, label)
 		defer client.Close()
 
 		// Open a session
@@ -392,19 +396,129 @@ func TestIntegrationClose(t *testing.T) {
 	})
 }
 
+func TestIssue48_ReceiverModeSecond(t *testing.T) {
+	const azDescription = "The format code '0x68' at frame buffer offset '39' is invalid or unexpected."
+
+	hubName, _, cleanup := newTestHub(t, "issue48")
+	defer cleanup()
+
+	label := "issue48"
+	t.Run(label, func(t *testing.T) {
+		checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+		// Create client
+		client := newEHClient(t, "issue48")
+		defer client.Close()
+
+		// Open a session
+		session, err := client.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create a sender
+		sender, err := session.NewSender(
+			amqp.LinkTargetAddress(hubName),
+		)
+		if err != nil {
+			t.Fatalf("%+v\n", err)
+		}
+
+		// First send should succeed
+		err = sender.Send(context.Background(), &amqp.Message{
+			Format: 0x80013700,
+			Data: [][]byte{
+				[]byte("hello"),
+				[]byte("there"),
+			},
+		})
+		time.Sleep(1 * time.Second) // Have to wait long enough for disposition to come through.
+		if err != nil {
+			t.Fatalf("Unexpected error response: %+v", err)
+		}
+
+		// Second send should get async error
+		err = sender.Send(context.Background(), &amqp.Message{
+			Data: [][]byte{
+				[]byte("hello"),
+			},
+		})
+		if err == nil {
+			t.Fatal("Expected error, got nil")
+		}
+		if err, ok := err.(*amqp.Error); !ok || err.Description != azDescription {
+			t.Fatalf("Unexpected error response: %+v", err)
+		}
+
+		client.Close() // close before leak check
+
+		checkLeaks()
+	})
+
+	label = "issue48-receiver-mode-second"
+	t.Run(label, func(t *testing.T) {
+		checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+		// Create client
+		client := newEHClient(t, "issue48")
+		defer client.Close()
+
+		// Open a session
+		session, err := client.NewSession()
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Create a sender
+		sender, err := session.NewSender(
+			amqp.LinkTargetAddress(hubName),
+			amqp.LinkReceiverSettle(amqp.ModeSecond),
+		)
+		if err != nil {
+			t.Fatalf("%+v\n", err)
+		}
+
+		err = sender.Send(context.Background(), &amqp.Message{
+			Format: 0x80013700,
+			Data: [][]byte{
+				[]byte("hello"),
+				[]byte("there"),
+			},
+		})
+		if err == nil {
+			t.Fatal("Expected error, got nil")
+		}
+		if err, ok := err.(*amqp.Error); !ok || err.Description != azDescription {
+			t.Fatalf("Unexpected error response: %+v", err)
+		}
+
+		client.Close() // close before leak check
+
+		checkLeaks()
+	})
+}
+
 func dump(i interface{}) {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "\t")
 	enc.Encode(i)
 }
 
-func newClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Client {
+func newEHClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Client {
+	return newClient(t, label, ehNamespace, ehAccessKeyName, ehAccessKey, opts...)
+}
+
+func newSBClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Client {
+	return newClient(t, label, namespace, accessKeyName, accessKey, opts...)
+}
+
+func newClient(t testing.TB, label, ns, username, password string, opts ...amqp.ConnOption) *amqp.Client {
 	opts = append(opts,
-		amqp.ConnSASLPlain(accessKeyName, accessKey),
+		amqp.ConnSASLPlain(username, password),
 	)
 
 	if *tlsKeyLog == "" && *recordDir == "" {
-		client, err := amqp.Dial("amqps://"+namespace+".servicebus.windows.net", opts...)
+		client, err := amqp.Dial("amqps://"+ns+".servicebus.windows.net", opts...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -425,7 +539,7 @@ func newClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Client
 	}
 
 	var conn net.Conn
-	conn, err := tls.Dial("tcp", namespace+".servicebus.windows.net:5671", &tlsConfig)
+	conn, err := tls.Dial("tcp", ns+".servicebus.windows.net:5671", &tlsConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -440,7 +554,7 @@ func newClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Client
 	}
 
 	opts = append(opts,
-		amqp.ConnServerHostname(namespace+".servicebus.windows.net"),
+		amqp.ConnServerHostname(ns+".servicebus.windows.net"),
 	)
 	client, err := amqp.New(conn, opts...)
 	if err != nil {
@@ -481,6 +595,49 @@ func newTestQueue(tb testing.TB, suffix string) (string, servicebus.QueuesClient
 	}
 
 	return queueName, queuesClient, cleanup
+}
+
+func newTestHub(tb testing.TB, suffix string) (string, eventhub.EventHubsClient, func()) {
+	shouldRunIntegration(tb)
+
+	hubName := "integration-" + suffix + "-" + strconv.FormatUint(rand.Uint64(), 10)
+	tb.Log("Creating hub", hubName)
+
+	oauthConfig, err := adal.NewOAuthConfig(azure.PublicCloud.ActiveDirectoryEndpoint, tenantID)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	token, err := adal.NewServicePrincipalToken(*oauthConfig, clientID, clientSecret, azure.PublicCloud.ResourceManagerEndpoint)
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	ehClient := eventhub.NewEventHubsClient(subscriptionID)
+	ehClient.Authorizer = autorest.NewBearerAuthorizer(token)
+
+	params := eventhub.Model{
+		Properties: &eventhub.Properties{
+			PartitionCount:         ptrInt64(2),
+			MessageRetentionInDays: ptrInt64(1), // required on basic
+		},
+	}
+	_, err = ehClient.CreateOrUpdate(context.Background(), resourceGroup, ehNamespace, hubName, params)
+	if err != nil {
+		tb.Fatal(err)
+	}
+
+	cleanup := func() {
+		_, err = ehClient.Delete(context.Background(), resourceGroup, ehNamespace, hubName)
+		if err != nil {
+			tb.Logf("Unable to remove queue: %s - %v", hubName, err)
+		}
+	}
+
+	return hubName, ehClient, cleanup
+}
+
+func ptrInt64(i int64) *int64 {
+	return &i
 }
 
 func mustGetenv(key string) string {
