@@ -24,7 +24,7 @@ func writeFrame(buf *buffer, fr frame) error {
 	}
 
 	// validate size
-	if buf.len() > math.MaxUint32 {
+	if uint(buf.len()) > math.MaxUint32 {
 		return errorNew("frame too large")
 	}
 
@@ -391,7 +391,7 @@ func writeString(wr *buffer, str string) error {
 		return nil
 
 	// Str32
-	case l < math.MaxUint32:
+	case uint(l) < math.MaxUint32:
 		wr.writeByte(byte(typeCodeStr32))
 		wr.writeUint32(uint32(l))
 		wr.writeString(str)
@@ -416,7 +416,7 @@ func writeBinary(wr *buffer, bin []byte) error {
 		return nil
 
 	// List32
-	case l < math.MaxUint32:
+	case uint(l) < math.MaxUint32:
 		wr.writeByte(byte(typeCodeVbin32))
 		wr.writeUint32(uint32(l))
 		wr.write(bin)
@@ -528,7 +528,7 @@ func writeMap(wr *buffer, m interface{}) error {
 		return errorErrorf("unsupported map type %T", m)
 	}
 
-	if pairs > math.MaxUint32-4 {
+	if uint(pairs) > math.MaxUint32-4 {
 		return errorNew("map contains too many elements")
 	}
 
