@@ -2437,7 +2437,7 @@ func (s symbol) marshal(wr *buffer) error {
 		wr.writeString(string(s))
 
 	// Sym32
-	case l < math.MaxUint32:
+	case uint(l) < math.MaxUint32:
 		wr.writeByte(uint8(typeCodeSym32))
 		wr.writeUint32(uint32(l))
 		wr.writeString(string(s))
