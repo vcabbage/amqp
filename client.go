@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -166,6 +167,8 @@ type Session struct {
 	allocateHandle   chan *link // link handles are allocated by sending a link on this channel, nil is sent on link.rx once allocated
 	deallocateHandle chan *link // link handles are deallocated by sending a link on this channel
 
+	nextDeliveryID uint32 // atomically accessed sequence for deliveryIDs
+
 	// used for gracefully closing link
 	close     chan struct{}
 	closeOnce sync.Once
@@ -275,6 +278,7 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 		sndSettleMode  = s.link.senderSettleMode
 		rcvSettleMode  = s.link.receiverSettleMode
 		senderSettled  = sndSettleMode != nil && *sndSettleMode == ModeSettled
+		deliveryID     = atomic.AddUint32(&s.link.session.nextDeliveryID, 1)
 	)
 
 	// use uint64 encoded as []byte as deliveryTag
@@ -284,6 +288,7 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 
 	fr := performTransfer{
 		Handle:        s.link.handle,
+		DeliveryID:    &deliveryID,
 		DeliveryTag:   deliveryTag,
 		MessageFormat: &msg.Format,
 		More:          s.buf.len() > 0,
@@ -315,6 +320,7 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 		}
 
 		// clear values that are only required on first message
+		fr.DeliveryID = nil
 		fr.DeliveryTag = nil
 		fr.MessageFormat = nil
 	}
@@ -369,8 +375,8 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		linksByName = make(map[string]*link) // maping of names to links
 		nextHandle  uint32                   // next handle # to be allocated
 
-		handlesByDeliveryID = make(map[uint32]uint32) //mapping of deliveryIDs to handles
-		nextDeliveryID      uint32                    // next deliveryID
+		handlesByDeliveryID = make(map[uint32]uint32) // mapping of deliveryIDs to handles
+		deliveryIDByHandle  = make(map[uint32]uint32) // mapping of handles to latest deliveryID
 
 		settlementByDeliveryID = make(map[uint32]chan deliveryState)
 
@@ -459,6 +465,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		// handle deallocation request
 		case l := <-s.deallocateHandle:
 			delete(links, l.remoteHandle)
+			delete(deliveryIDByHandle, l.handle)
 			close(l.rx) // close channel to indicate deallocation
 
 		// incoming frame for link
@@ -590,28 +597,32 @@ func (s *Session) mux(remoteBegin *performBegin) {
 			}
 
 		case fr := <-txTransfer:
-			// nil DeliveryID indicates first message
-			if fr.DeliveryID == nil {
-				// allocate new DeliveryID
-				id := nextDeliveryID
-				nextDeliveryID++
-				fr.DeliveryID = &id
+
+			// record current delivery ID
+			var deliveryID uint32
+			if fr.DeliveryID != nil {
+				deliveryID = *fr.DeliveryID
+				deliveryIDByHandle[fr.Handle] = deliveryID
 
 				// add to handleByDeliveryID if not sender-settled
 				if !fr.Settled {
-					handlesByDeliveryID[id] = fr.Handle
+					handlesByDeliveryID[deliveryID] = fr.Handle
 				}
+			} else {
+				// if fr.DeliveryID is nil it must have been added
+				// to deliveryIDByHandle already
+				deliveryID = deliveryIDByHandle[fr.Handle]
 			}
 
 			// frame has been sender-settled, remove from map
 			if fr.Settled {
-				delete(handlesByDeliveryID, *fr.DeliveryID)
+				delete(handlesByDeliveryID, deliveryID)
 			}
 
 			// if confirmSettlement requested, add done chan to map
 			// and clear from frame so conn doesn't close it.
 			if fr.confirmSettlement && fr.done != nil {
-				settlementByDeliveryID[*fr.DeliveryID] = fr.done
+				settlementByDeliveryID[deliveryID] = fr.done
 				fr.done = nil
 			}
 
