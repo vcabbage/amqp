@@ -597,32 +597,31 @@ func (s *Session) mux(remoteBegin *performBegin) {
 			}
 
 		case fr := <-txTransfer:
+
 			// record current delivery ID
+			var deliveryID uint32
 			if fr.DeliveryID != nil {
-				deliveryIDByHandle[fr.Handle] = *fr.DeliveryID
+				deliveryID = *fr.DeliveryID
+				deliveryIDByHandle[fr.Handle] = deliveryID
 
 				// add to handleByDeliveryID if not sender-settled
 				if !fr.Settled {
-					handlesByDeliveryID[*fr.DeliveryID] = fr.Handle
+					handlesByDeliveryID[deliveryID] = fr.Handle
 				}
+			} else {
+				// if fr.DeliveryID is nil it must have been added
+				// to deliveryIDByHandle already
+				deliveryID = deliveryIDByHandle[fr.Handle]
 			}
 
 			// frame has been sender-settled, remove from map
 			if fr.Settled {
-				deliveryID, ok := deliveryIDByHandle[fr.Handle]
-				if !ok { // this should never happen
-					panic("missing delivery id from deliveryIDByHandle")
-				}
 				delete(handlesByDeliveryID, deliveryID)
 			}
 
 			// if confirmSettlement requested, add done chan to map
 			// and clear from frame so conn doesn't close it.
 			if fr.confirmSettlement && fr.done != nil {
-				deliveryID, ok := deliveryIDByHandle[fr.Handle]
-				if !ok { // this should never happen
-					panic("missing delivery id from deliveryIDByHandle")
-				}
 				settlementByDeliveryID[deliveryID] = fr.done
 				fr.done = nil
 			}

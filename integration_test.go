@@ -13,9 +13,11 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -413,22 +415,6 @@ func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
 			label: "1 roundtrip, large payload",
 			data:  []string{strings.Repeat("Hello", 1000/len("Hello"))},
 		},
-		// {
-		// 	label: "3 roundtrip, small payload",
-		// 	data: []string{
-		// 		"2Hey there!",
-		// 		"2Hi there!",
-		// 		"2Ho there!",
-		// 	},
-		// },
-		// {
-		// 	label: "1000 roundtrip, small payload",
-		// 	data: repeatStrings(1000,
-		// 		"3Hey there!",
-		// 		"3Hi there!",
-		// 		"3Ho there!",
-		// 	),
-		// },
 	}
 
 	for _, tt := range tests {
@@ -444,7 +430,7 @@ func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
 			}
 
 			// Create receivers before sending to simplify offsets
-			receive := createEventHubReceivers(t, hubName, session)
+			receive := createEventHubReceivers(t, hubName, session, len(tt.data))
 
 			// Create a sender
 			sender, err := session.NewSender(
@@ -465,6 +451,7 @@ func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
 			// Receive from all partitions
 			received, errs := receive()
 
+			// check total number of messages received
 			var total int
 			for _, count := range received {
 				total += count
@@ -478,19 +465,21 @@ func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
 				}
 			}
 
+			// check that data matches
 			for _, data := range tt.data {
 				count, ok := received[data]
 				if !ok {
 					t.Errorf("Expected to receive message %q but didn't", data)
 					continue
 				}
-				if count <= 1 {
-					delete(received, data)
-				} else {
+				if count > 1 {
 					received[data]--
+				} else {
+					delete(received, data)
 				}
 			}
 
+			// report any unexpected messages
 			for msg, count := range received {
 				t.Errorf("Received %d extra messages: %q", count, msg)
 			}
@@ -502,7 +491,8 @@ func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
 	}
 }
 
-func createEventHubReceivers(t testing.TB, hubName string, session *amqp.Session) func() (map[string]int, []error) {
+func createEventHubReceivers(t testing.TB, hubName string, session *amqp.Session, expectedMessages int) func() (map[string]int, []error) {
+	// Create a receivers on both partitions
 	var receivers []*amqp.Receiver
 	for i := 0; i < 2; i++ {
 		receiver, err := session.NewReceiver(
@@ -519,11 +509,15 @@ func createEventHubReceivers(t testing.TB, hubName string, session *amqp.Session
 
 	return func() (map[string]int, []error) {
 		var (
-			received = make(map[string]int)
-			errs     = make([]error, len(receivers))
-			wg       sync.WaitGroup
+			received  = make(map[string]int)
+			errs      = make([]error, len(receivers))
+			wg        sync.WaitGroup
+			remaining = int32(expectedMessages)
 		)
-		// Create a receivers on both partitions
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+		// receive from each partition concurrently
 		for rxIdx, receiver := range receivers {
 			wg.Add(1)
 			go func(rxIdx int, receiver *amqp.Receiver) {
@@ -531,9 +525,7 @@ func createEventHubReceivers(t testing.TB, hubName string, session *amqp.Session
 				defer receiver.Close()
 
 				for i := 0; ; i++ {
-					ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 					msg, err := receiver.Receive(ctx)
-					cancel()
 					if err != nil {
 						errs[rxIdx] = fmt.Errorf("Error after %d receives: %+v", i, err)
 						return
@@ -543,6 +535,12 @@ func createEventHubReceivers(t testing.TB, hubName string, session *amqp.Session
 					msg.Accept()
 
 					received[string(msg.GetData())]++
+
+					// cancel all receivers once expected messages have been received
+					if atomic.AddInt32(&remaining, -1) < 1 {
+						cancel()
+						return
+					}
 				}
 			}(rxIdx, receiver)
 		}
@@ -553,7 +551,7 @@ func createEventHubReceivers(t testing.TB, hubName string, session *amqp.Session
 }
 
 func TestIssue48_ReceiverModeSecond(t *testing.T) {
-	const azDescription = "The format code '0x68' at frame buffer offset '39' is invalid or unexpected."
+	azDescription := regexp.MustCompile(`The format code '0x68' at frame buffer offset '\d+' is invalid or unexpected`)
 
 	hubName, _, cleanup := newTestHub(t, "issue48")
 	defer cleanup()
@@ -602,7 +600,7 @@ func TestIssue48_ReceiverModeSecond(t *testing.T) {
 		if err == nil {
 			t.Fatal("Expected error, got nil")
 		}
-		if err, ok := err.(*amqp.Error); !ok || err.Description != azDescription {
+		if err, ok := err.(*amqp.Error); !ok || !azDescription.MatchString(err.Description) {
 			t.Fatalf("Unexpected error response: %+v", err)
 		}
 
@@ -644,7 +642,7 @@ func TestIssue48_ReceiverModeSecond(t *testing.T) {
 		if err == nil {
 			t.Fatal("Expected error, got nil")
 		}
-		if err, ok := err.(*amqp.Error); !ok || err.Description != azDescription {
+		if err, ok := err.(*amqp.Error); !ok || !azDescription.MatchString(err.Description) {
 			t.Fatalf("Unexpected error response: %+v", err)
 		}
 
