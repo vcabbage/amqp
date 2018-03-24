@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -394,6 +395,161 @@ func TestIntegrationClose(t *testing.T) {
 
 		checkLeaks()
 	})
+}
+
+func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
+	hubName, _, cleanup := newTestHub(t, "receive")
+	defer cleanup()
+
+	tests := []struct {
+		label string
+		data  []string
+	}{
+		{
+			label: "1 roundtrip, small payload",
+			data:  []string{"1Hello there!"},
+		},
+		{
+			label: "1 roundtrip, large payload",
+			data:  []string{strings.Repeat("Hello", 1000/len("Hello"))},
+		},
+		// {
+		// 	label: "3 roundtrip, small payload",
+		// 	data: []string{
+		// 		"2Hey there!",
+		// 		"2Hi there!",
+		// 		"2Ho there!",
+		// 	},
+		// },
+		// {
+		// 	label: "1000 roundtrip, small payload",
+		// 	data: repeatStrings(1000,
+		// 		"3Hey there!",
+		// 		"3Hi there!",
+		// 		"3Ho there!",
+		// 	),
+		// },
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+			client := newEHClient(t, tt.label)
+
+			// Open a session
+			session, err := client.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Create receivers before sending to simplify offsets
+			receive := createEventHubReceivers(t, hubName, session)
+
+			// Create a sender
+			sender, err := session.NewSender(
+				amqp.LinkTargetAddress(hubName),
+			)
+			if err != nil {
+				t.Fatalf("%+v\n", err)
+			}
+
+			// Send messages
+			for i, data := range tt.data {
+				err = sender.Send(context.Background(), amqp.NewMessage([]byte(data)))
+				if err != nil {
+					t.Fatalf("Error after %d sends: %+v", i, err)
+				}
+			}
+
+			// Receive from all partitions
+			received, errs := receive()
+
+			var total int
+			for _, count := range received {
+				total += count
+			}
+			if total != len(tt.data) {
+				t.Errorf("Expected %d messages, got %d", len(tt.data), total)
+				for i, err := range errs {
+					if err != nil {
+						t.Errorf("Partition %d got error: %+v", i, err)
+					}
+				}
+			}
+
+			for _, data := range tt.data {
+				count, ok := received[data]
+				if !ok {
+					t.Errorf("Expected to receive message %q but didn't", data)
+					continue
+				}
+				if count <= 1 {
+					delete(received, data)
+				} else {
+					received[data]--
+				}
+			}
+
+			for msg, count := range received {
+				t.Errorf("Received %d extra messages: %q", count, msg)
+			}
+
+			client.Close() // close before leak check
+
+			checkLeaks()
+		})
+	}
+}
+
+func createEventHubReceivers(t testing.TB, hubName string, session *amqp.Session) func() (map[string]int, []error) {
+	var receivers []*amqp.Receiver
+	for i := 0; i < 2; i++ {
+		receiver, err := session.NewReceiver(
+			amqp.LinkSourceAddress(hubName+"/ConsumerGroups/$default/Partitions/"+strconv.Itoa(i)),
+			amqp.LinkSelectorFilter("amqp.annotation.x-opt-offset > '@latest'"),
+			amqp.LinkCredit(10),
+			amqp.LinkBatching(false),
+		)
+		if err != nil {
+			t.Fatalf("Error creating receiver: %v", err)
+		}
+		receivers = append(receivers, receiver)
+	}
+
+	return func() (map[string]int, []error) {
+		var (
+			received = make(map[string]int)
+			errs     = make([]error, len(receivers))
+			wg       sync.WaitGroup
+		)
+		// Create a receivers on both partitions
+		for rxIdx, receiver := range receivers {
+			wg.Add(1)
+			go func(rxIdx int, receiver *amqp.Receiver) {
+				defer wg.Done()
+				defer receiver.Close()
+
+				for i := 0; ; i++ {
+					ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+					msg, err := receiver.Receive(ctx)
+					cancel()
+					if err != nil {
+						errs[rxIdx] = fmt.Errorf("Error after %d receives: %+v", i, err)
+						return
+					}
+
+					// Accept message
+					msg.Accept()
+
+					received[string(msg.GetData())]++
+				}
+			}(rxIdx, receiver)
+		}
+		wg.Wait()
+
+		return received, errs
+	}
 }
 
 func TestIssue48_ReceiverModeSecond(t *testing.T) {
