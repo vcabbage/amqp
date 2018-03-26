@@ -412,8 +412,12 @@ func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
 			data:  []string{"1Hello there!"},
 		},
 		{
-			label: "1 roundtrip, large payload",
+			label: "1 roundtrip, medium payload",
 			data:  []string{strings.Repeat("Hello", 1000/len("Hello"))},
+		},
+		{
+			label: "1 roundtrip, large payload",
+			data: []string{strings.Repeat("H", 133793)},
 		},
 	}
 
@@ -442,7 +446,9 @@ func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
 
 			// Send messages
 			for i, data := range tt.data {
-				err = sender.Send(context.Background(), amqp.NewMessage([]byte(data)))
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				err = sender.Send(ctx, amqp.NewMessage([]byte(data)))
+				cancel()
 				if err != nil {
 					t.Fatalf("Error after %d sends: %+v", i, err)
 				}
