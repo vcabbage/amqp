@@ -417,7 +417,7 @@ func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
 		},
 		{
 			label: "1 roundtrip, large payload",
-			data: []string{strings.Repeat("H", 133793)},
+			data:  []string{strings.Repeat("H", 133793)},
 		},
 	}
 

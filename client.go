@@ -865,8 +865,11 @@ func (l *link) mux() {
 
 			l.transfers <- *fr
 
-			l.deliveryCount++
-			l.linkCredit--
+			// decrement link-credit after entire message received
+			if !fr.More {
+				l.deliveryCount++
+				l.linkCredit--
+			}
 
 		// flow control frame
 		case *performFlow:
@@ -1017,8 +1020,12 @@ func (l *link) mux() {
 					return
 				}
 			}
-			l.deliveryCount++
-			l.linkCredit--
+
+			// decrement link-credit after entire message transferred
+			if !tr.More {
+				l.deliveryCount++
+				l.linkCredit--
+			}
 
 		// received frame
 		case fr := <-l.rx:
