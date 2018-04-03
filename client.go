@@ -729,15 +729,15 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 
 	// request handle from Session.mux
 	select {
-	case <-s.conn.done:
-		return nil, s.conn.getErr()
+	case <-s.done:
+		return nil, s.err
 	case s.allocateHandle <- l:
 	}
 
 	// wait for handle allocation
 	select {
-	case <-s.conn.done:
-		return nil, s.conn.getErr()
+	case <-s.done:
+		return nil, s.err
 	case <-l.rx:
 	}
 
@@ -773,8 +773,8 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	// wait for response
 	var fr frameBody
 	select {
-	case <-s.conn.done:
-		return nil, s.conn.getErr()
+	case <-s.done:
+		return nil, s.err
 	case fr = <-l.rx:
 	}
 	debug(3, "RX: %s", fr)
