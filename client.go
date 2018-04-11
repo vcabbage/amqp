@@ -139,7 +139,7 @@ func (c *Client) NewSession() (*Session, error) {
 
 	begin, ok := fr.body.(*performBegin)
 	if !ok {
-		_ = s.Close() // deallocate session on error
+		_ = s.Close(context.Background()) // deallocate session on error
 		return nil, errorErrorf("unexpected begin response: %+v", fr.body)
 	}
 
@@ -193,10 +193,17 @@ func newSession(c *conn, channel uint16) *Session {
 	}
 }
 
-// Close closes the session.
-func (s *Session) Close() error {
+// Close gracefully closes the session.
+//
+// If ctx expires while waiting for servers response, ctx.Err() will be returned.
+// The session will continue to wait for the response until the Client is closed.
+func (s *Session) Close(ctx context.Context) error {
 	s.closeOnce.Do(func() { close(s.close) })
-	<-s.done
+	select {
+	case <-s.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if s.err == ErrSessionClosed {
 		return nil
 	}
@@ -351,10 +358,8 @@ func (s *Sender) Address() string {
 }
 
 // Close closes the Sender and AMQP link.
-func (s *Sender) Close() error {
-	// TODO: Should this timeout? Close() take a context? Use one of the
-	// other timeouts?
-	return s.link.Close()
+func (s *Sender) Close(ctx context.Context) error {
+	return s.link.Close(ctx)
 }
 
 // NewSender opens a new sender link on the session.
@@ -1045,9 +1050,17 @@ func (l *link) mux() {
 // close closes and requests deletion of the link.
 //
 // No operations on link are valid after close.
-func (l *link) Close() error {
+//
+// If ctx expires while waiting for servers response, ctx.Err() will be returned.
+// The session will continue to wait for the response until the Session or Client
+// is closed.
+func (l *link) Close(ctx context.Context) error {
 	l.closeOnce.Do(func() { close(l.close) })
-	<-l.done
+	select {
+	case <-l.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	if l.err == ErrLinkClosed {
 		return nil
 	}
@@ -1350,7 +1363,7 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 		messageSize += len(fr.Payload)
 		if messageSize > maxMessageSize {
 			// TODO: send error
-			_ = r.Close()
+			_ = r.Close(ctx)
 			return nil, errorErrorf("received message larger than max size of ")
 		}
 
@@ -1389,10 +1402,12 @@ func (r *Receiver) Address() string {
 }
 
 // Close closes the Receiver and AMQP link.
-func (r *Receiver) Close() error {
-	// TODO: Should this timeout? Close() take a context? Use one of the
-	// other timeouts?
-	return r.link.Close()
+//
+// If ctx expires while waiting for servers response, ctx.Err() will be returned.
+// The session will continue to wait for the response until the Session or Client
+// is closed.
+func (r *Receiver) Close(ctx context.Context) error {
+	return r.link.Close(ctx)
 }
 
 type messageDisposition struct {

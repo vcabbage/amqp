@@ -37,9 +37,12 @@ func FuzzConn(data []byte) int {
 
 	msg.Accept()
 
-	// r.Close() // disabled until link close timeout implemented
+	ctx, close := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer close()
 
-	s.Close()
+	r.Close(ctx)
+
+	s.Close(ctx)
 
 	// Send
 	client, err = New(testconn.New(data),
@@ -66,9 +69,12 @@ func FuzzConn(data []byte) int {
 		return 0
 	}
 
-	// r.Close() // disabled until link close timeout implemented
+	ctx, close = context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer close()
 
-	s.Close()
+	r.Close(ctx)
+
+	s.Close(ctx)
 
 	return 1
 }
