@@ -36,6 +36,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"time"
 
 	"pack.ag/amqp"
 )
@@ -76,8 +77,8 @@ func main() {
 			log.Fatal("Sending message:", err)
 		}
 
+		sender.Close(ctx)
 		cancel()
-		sender.Close()
 	}
 
 	// Continuously read messages
@@ -90,9 +91,11 @@ func main() {
 		if err != nil {
 			log.Fatal("Creating receiver link:", err)
 		}
-
-		ctx, cancel := context.WithCancel(ctx)
-		defer cancel()
+		defer func() {
+			ctx, cancel := context.WithTimeout(ctx, 1*time.Second)
+			receiver.Close(ctx)
+			cancel()
+		}()
 
 		for {
 			// Receive next message
