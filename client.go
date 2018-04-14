@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -253,13 +254,15 @@ func (s *Session) txFrame(p frameBody, done chan deliveryState) {
 	})
 }
 
-func randBytes(n int) []byte { // TODO: random string gen off SO, replace
-	var letterBytes = []byte("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+// randBytes returns a base64 encoded string of n bytes.
+//
+// A new random source is created to avoid any issues with seeding
+// of the global source.
+func randString(n int) string {
+	localRand := rand.New(rand.NewSource(time.Now().UnixNano()))
 	b := make([]byte, n)
-	for i := range b {
-		b[i] = letterBytes[rand.Int63()%int64(len(letterBytes))]
-	}
-	return b
+	localRand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // NewReceiver opens a new receiver link on the session.
@@ -874,7 +877,7 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 
 func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	l := &link{
-		name:     string(randBytes(40)),
+		name:     randString(40),
 		session:  s,
 		receiver: r,
 		close:    make(chan struct{}),

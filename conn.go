@@ -757,7 +757,7 @@ func (c *conn) openAMQP() stateFunc {
 	c.err = c.writeFrame(frame{
 		type_: frameTypeAMQP,
 		body: &performOpen{
-			ContainerID:  string(randBytes(40)),
+			ContainerID:  randString(40),
 			Hostname:     c.hostname,
 			MaxFrameSize: c.maxFrameSize,
 			ChannelMax:   c.channelMax,
