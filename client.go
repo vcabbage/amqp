@@ -447,32 +447,6 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		remoteOutgoingWindow = remoteBegin.OutgoingWindow
 	)
 
-	updateFlowControl := func(flow *performFlow) {
-		// "When the endpoint receives a flow frame from its peer,
-		// it MUST update the next-incoming-id directly from the
-		// next-outgoing-id of the frame, and it MUST update the
-		// remote-outgoing-window directly from the outgoing-window
-		// of the frame."
-		nextIncomingID = flow.NextOutgoingID
-		remoteOutgoingWindow = flow.OutgoingWindow
-
-		// "The remote-incoming-window is computed as follows:
-		//
-		// next-incoming-id(flow) + incoming-window(flow) - next-outgoing-id(endpoint)
-		//
-		// If the next-incoming-id field of the flow frame is not set, then remote-incoming-window is computed as follows:
-		//
-		// initial-outgoing-id(endpoint) + incoming-window(flow) - next-outgoing-id(endpoint)"
-		remoteIncomingWindow = flow.IncomingWindow - nextOutgoingID
-		if flow.NextIncomingID != nil {
-			remoteIncomingWindow += *flow.NextIncomingID
-		} else {
-			// TODO: This is a protocol error:
-			//       "[...] MUST be set if the peer has received
-			//        the begin frame for the session"
-		}
-	}
-
 	for {
 		txTransfer := s.txTransfer
 		// disable txTransfer if flow control windows have been exceeded
@@ -573,8 +547,39 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				}
 				continue
 			case *performFlow:
-				updateFlowControl(body)
+				if body.NextIncomingID == nil {
+					// This is a protocol error:
+					//       "[...] MUST be set if the peer has received
+					//        the begin frame for the session"
+					s.txFrame(&performEnd{
+						Error: &Error{
+							Condition:   ErrorNotAllowed,
+							Description: "next-incoming-id not set after session established",
+						},
+					}, nil)
+					s.err = errors.New("protocol error: received flow without next-incoming-id after session established")
+					return
+				}
 
+				// "When the endpoint receives a flow frame from its peer,
+				// it MUST update the next-incoming-id directly from the
+				// next-outgoing-id of the frame, and it MUST update the
+				// remote-outgoing-window directly from the outgoing-window
+				// of the frame."
+				nextIncomingID = body.NextOutgoingID
+				remoteOutgoingWindow = body.OutgoingWindow
+
+				// "The remote-incoming-window is computed as follows:
+				//
+				// next-incoming-id(flow) + incoming-window(flow) - next-outgoing-id(endpoint)
+				//
+				// If the next-incoming-id field of the flow frame is not set, then remote-incoming-window is computed as follows:
+				//
+				// initial-outgoing-id(endpoint) + incoming-window(flow) - next-outgoing-id(endpoint)"
+				remoteIncomingWindow = body.IncomingWindow - nextOutgoingID
+				remoteIncomingWindow += *body.NextIncomingID
+
+				// Send to link if handle is set
 				if body.Handle != nil {
 					link, ok := links[*body.Handle]
 					if !ok {
