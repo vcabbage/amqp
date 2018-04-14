@@ -105,7 +105,7 @@ func (c *Client) Close() error {
 }
 
 // NewSession opens a new AMQP session to the server.
-func (c *Client) NewSession() (*Session, error) {
+func (c *Client) NewSession(opts ...SessionOption) (*Session, error) {
 	// get a session allocated by Client.mux
 	var sResp newSessionResp
 	select {
@@ -118,6 +118,14 @@ func (c *Client) NewSession() (*Session, error) {
 		return nil, sResp.err
 	}
 	s := sResp.session
+
+	for _, opt := range opts {
+		err := opt(s)
+		if err != nil {
+			_ = s.Close(context.Background()) // deallocate session on error
+			return nil, err
+		}
+	}
 
 	// send Begin to server
 	begin := &performBegin{
@@ -149,6 +157,32 @@ func (c *Client) NewSession() (*Session, error) {
 	return s, nil
 }
 
+// Default session options
+const (
+	DefaultWindow = 100
+)
+
+// SessionOption is an function for configuring an AMQP session.
+type SessionOption func(*Session) error
+
+// SessionIncomingWindow sets the maximum number of unacknowledged
+// transfer frames the server can send.
+func SessionIncomingWindow(window uint32) SessionOption {
+	return func(s *Session) error {
+		s.incomingWindow = window
+		return nil
+	}
+}
+
+// SessionOutgoingWindow sets the maximum number of unacknowledged
+// transfer frames the client can send.
+func SessionOutgoingWindow(window uint32) SessionOption {
+	return func(s *Session) error {
+		s.outgoingWindow = window
+		return nil
+	}
+}
+
 // Session is an AMQP session.
 //
 // A session multiplexes Receivers.
@@ -178,14 +212,13 @@ type Session struct {
 
 func newSession(c *conn, channel uint16) *Session {
 	return &Session{
-		conn:       c,
-		channel:    channel,
-		rx:         make(chan frame),
-		tx:         make(chan frameBody),
-		txTransfer: make(chan *performTransfer),
-		// TODO: make windows configurable
-		incomingWindow:   5000,
-		outgoingWindow:   math.MaxUint32,
+		conn:             c,
+		channel:          channel,
+		rx:               make(chan frame),
+		tx:               make(chan frameBody),
+		txTransfer:       make(chan *performTransfer),
+		incomingWindow:   DefaultWindow,
+		outgoingWindow:   DefaultWindow,
 		allocateHandle:   make(chan *link),
 		deallocateHandle: make(chan *link),
 		close:            make(chan struct{}),
@@ -581,6 +614,20 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				case link.rx <- fr.body:
 				}
 
+				// Update peer's outgoing window if half has been consumed.
+				if remoteOutgoingWindow < s.incomingWindow/2 {
+					nID := nextIncomingID
+					flow := &performFlow{
+						NextIncomingID: &nID,
+						IncomingWindow: s.incomingWindow,
+						NextOutgoingID: nextOutgoingID,
+						OutgoingWindow: s.outgoingWindow,
+					}
+					debug(1, "TX(Session): %s", flow)
+					s.txFrame(flow, nil)
+					remoteOutgoingWindow = s.incomingWindow
+				}
+
 			case *performDetach:
 				link, ok := links[body.Handle]
 				if !ok {
@@ -650,6 +697,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				fr.OutgoingWindow = s.outgoingWindow
 				debug(1, "TX(Session): %s", fr)
 				s.txFrame(fr, nil)
+				remoteOutgoingWindow = s.incomingWindow
 			case *performTransfer:
 				panic("transfer frames must use txTransfer")
 			default:
@@ -1141,7 +1189,7 @@ outer:
 	}
 }
 
-// LinkOption is an function for configuring an AMQP links.
+// LinkOption is a function for configuring an AMQP link.
 //
 // A link may be a Sender or a Receiver.
 type LinkOption func(*link) error

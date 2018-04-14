@@ -27,7 +27,7 @@ var (
 	ErrConnClosed = errors.New("amqp: connection closed")
 )
 
-// ConnOption is an function for configuring an AMQP connection.
+// ConnOption is a function for configuring an AMQP connection.
 type ConnOption func(*conn) error
 
 // ConnServerHostname sets the hostname sent in the AMQP
