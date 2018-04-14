@@ -221,6 +221,8 @@ func TestIntegrationSend(t *testing.T) {
 		},
 	}
 
+	var totalMessages int
+
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
 			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
@@ -265,8 +267,102 @@ func TestIntegrationSend(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if amc := *q.CountDetails.ActiveMessageCount; int(amc) != len(tt.data) {
-				t.Fatalf("Expected ActiveMessageCount to be 0, but it was %d", amc)
+			totalMessages += len(tt.data)
+			if amc := *q.CountDetails.ActiveMessageCount; int(amc) != totalMessages {
+				t.Fatalf("Expected ActiveMessageCount to be %d, but it was %d", totalMessages, amc)
+			}
+
+			if dead := *q.CountDetails.DeadLetterMessageCount; dead > 0 {
+				t.Fatalf("Expected DeadLetterMessageCount to be 0, but it was %d", dead)
+			}
+		})
+	}
+}
+
+func TestIntegrationSend_Concurrent(t *testing.T) {
+	queueName, queuesClient, cleanup := newTestQueue(t, "receive")
+	defer cleanup()
+
+	tests := []struct {
+		label string
+		data  []string
+	}{
+		{
+			label: "3 send, small payload",
+			data: []string{
+				"2Hey there!",
+				"2Hi there!",
+				"2Ho there!",
+			},
+		},
+		{
+			label: "3 roundtrip, medium payload",
+			data: []string{
+				strings.Repeat("A", 10000),
+				strings.Repeat("B", 10000),
+				strings.Repeat("C", 10000),
+			},
+		},
+	}
+
+	var totalMessages int
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+			// Create client
+			client := newSBClient(t, tt.label)
+			defer client.Close()
+
+			// Open a session
+			session, err := client.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Create a sender
+			sender, err := session.NewSender(
+				amqp.LinkTargetAddress(queueName),
+				amqp.LinkReceiverSettle(amqp.ModeSecond),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var wg sync.WaitGroup
+			wg.Add(len(tt.data))
+			for i, data := range tt.data {
+				go func(i int, data string) {
+					defer wg.Done()
+
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					err := sender.Send(ctx, amqp.NewMessage([]byte(data)))
+					cancel()
+					if err != nil {
+						t.Fatalf("Error on send %d: %+v", i, err)
+						return
+					}
+				}(i, data)
+			}
+			wg.Wait()
+
+			testClose(t, sender.Close)
+			client.Close() // close before leak check
+
+			checkLeaks() // this is done here because queuesClient starts additional goroutines
+
+			// Wait for Azure to update stats
+			time.Sleep(1 * time.Second)
+
+			q, err := queuesClient.Get(context.Background(), resourceGroup, namespace, queueName)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			totalMessages += len(tt.data)
+			if amc := *q.CountDetails.ActiveMessageCount; int(amc) != totalMessages {
+				t.Fatalf("Expected ActiveMessageCount to be %d, but it was %d", totalMessages, amc)
 			}
 
 			if dead := *q.CountDetails.DeadLetterMessageCount; dead > 0 {
