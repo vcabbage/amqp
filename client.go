@@ -297,7 +297,9 @@ func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
 
 // Sender sends messages on a single AMQP link.
 type Sender struct {
-	link            *link
+	link *link
+
+	mu              sync.Mutex // protects buf and nextDeliveryTag
 	buf             buffer
 	nextDeliveryTag uint64
 }
@@ -305,15 +307,46 @@ type Sender struct {
 // Send sends a Message.
 //
 // Blocks until the message is sent, ctx completes, or an error occurs.
+//
+// Send is safe for concurrent use. Since only a single message can be
+// sent on a link at a time, this is most useful when settlement confirmation
+// has been requested (receiver settle mode is "Second"). In this case,
+// additional messages can be sent while the current goroutine is waiting
+// for the confirmation.
 func (s *Sender) Send(ctx context.Context, msg *Message) error {
-	s.buf.reset()
-	err := msg.marshal(&s.buf)
+	done, err := s.send(ctx, msg)
 	if err != nil {
 		return err
 	}
 
+	// wait for transfer to be confirmed
+	select {
+	case state := <-done:
+		if state, ok := state.(*stateRejected); ok {
+			return state.Error
+		}
+		return nil
+	case <-s.link.done:
+		return s.link.err
+	case <-ctx.Done():
+		return errorWrapf(ctx.Err(), "awaiting send")
+	}
+}
+
+// send is separated from Send so that the mutex unlock can be deferred without
+// locking the transfer confirmation that happens in Send.
+func (s *Sender) send(ctx context.Context, msg *Message) (chan deliveryState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.buf.reset()
+	err := msg.marshal(&s.buf)
+	if err != nil {
+		return nil, err
+	}
+
 	if uint64(s.buf.len()) > s.link.peerMaxMessageSize {
-		return errorErrorf("encoded message size exceeds peer max of %d", s.link.peerMaxMessageSize)
+		return nil, errorErrorf("encoded message size exceeds peer max of %d", s.link.peerMaxMessageSize)
 	}
 
 	var (
@@ -357,9 +390,9 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 		select {
 		case s.link.transfers <- fr:
 		case <-s.link.done:
-			return s.link.err
+			return nil, s.link.err
 		case <-ctx.Done():
-			return errorWrapf(ctx.Err(), "awaiting send")
+			return nil, errorWrapf(ctx.Err(), "awaiting send")
 		}
 
 		// clear values that are only required on first message
@@ -368,21 +401,7 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 		fr.MessageFormat = nil
 	}
 
-	// TODO: The blocking below could slow single link sending. This could be
-	//       alleviated by making Send() concurrency-safe (lock the section above).
-
-	// wait for transfer to be confirmed
-	select {
-	case state := <-fr.done:
-		if state, ok := state.(*stateRejected); ok {
-			return state.Error
-		}
-		return nil
-	case <-s.link.done:
-		return s.link.err
-	case <-ctx.Done():
-		return errorWrapf(ctx.Err(), "awaiting send")
-	}
+	return fr.done, nil
 }
 
 // Address returns the link's address.
