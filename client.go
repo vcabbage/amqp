@@ -133,6 +133,7 @@ func (c *Client) NewSession(opts ...SessionOption) (*Session, error) {
 		NextOutgoingID: 0,
 		IncomingWindow: s.incomingWindow,
 		OutgoingWindow: s.outgoingWindow,
+		HandleMax:      s.handleMax,
 	}
 	debug(1, "TX: %s", begin)
 	s.txFrame(begin, nil)
@@ -160,7 +161,8 @@ func (c *Client) NewSession(opts ...SessionOption) (*Session, error) {
 
 // Default session options
 const (
-	DefaultWindow = 100
+	DefaultMaxLinks = 4294967296
+	DefaultWindow   = 100
 )
 
 // SessionOption is an function for configuring an AMQP session.
@@ -184,6 +186,25 @@ func SessionOutgoingWindow(window uint32) SessionOption {
 	}
 }
 
+// SessionMaxLinks sets the maximum number of links (Senders/Receivers)
+// allowed on the session.
+//
+// n must be in the range 1 to 4294967296.
+//
+// Default: 4294967296.
+func SessionMaxLinks(n int) SessionOption {
+	return func(s *Session) error {
+		if n < 1 {
+			return errorNew("max sessions cannot be less than 1")
+		}
+		if n > 4294967296 {
+			return errorNew("max sessions cannot be greater than 4294967296")
+		}
+		s.handleMax = uint32(n - 1)
+		return nil
+	}
+}
+
 // Session is an AMQP session.
 //
 // A session multiplexes Receivers.
@@ -199,6 +220,7 @@ type Session struct {
 	incomingWindow uint32
 	outgoingWindow uint32
 
+	handleMax        uint32
 	allocateHandle   chan *link // link handles are allocated by sending a link on this channel, nil is sent on link.rx once allocated
 	deallocateHandle chan *link // link handles are deallocated by sending a link on this channel
 
@@ -220,6 +242,7 @@ func newSession(c *conn, channel uint16) *Session {
 		txTransfer:       make(chan *performTransfer),
 		incomingWindow:   DefaultWindow,
 		outgoingWindow:   DefaultWindow,
+		handleMax:        DefaultMaxLinks - 1,
 		allocateHandle:   make(chan *link),
 		deallocateHandle: make(chan *link),
 		close:            make(chan struct{}),
@@ -431,9 +454,9 @@ func (s *Session) mux(remoteBegin *performBegin) {
 	defer close(s.done)
 
 	var (
-		links       = make(map[uint32]*link) // mapping of remote handles to links
-		linksByName = make(map[string]*link) // maping of names to links
-		nextHandle  uint32                   // next handle # to be allocated
+		links       = make(map[uint32]*link)    // mapping of remote handles to links
+		linksByName = make(map[string]*link)    // maping of names to links
+		handles     = &bitmap{max: s.handleMax} // allocated handles
 
 		handlesByDeliveryID = make(map[uint32]uint32) // mapping of deliveryIDs to handles
 		deliveryIDByHandle  = make(map[uint32]uint32) // mapping of handles to latest deliveryID
@@ -490,16 +513,22 @@ func (s *Session) mux(remoteBegin *performBegin) {
 
 		// handle allocation request
 		case l := <-s.allocateHandle:
-			// TODO: handle max session/wrapping
-			l.handle = nextHandle   // allocate handle to the link
+			next, ok := handles.next()
+			if !ok {
+				l.err = errorErrorf("reached session handle max (%d)", s.handleMax)
+				l.rx <- nil
+				continue
+			}
+
+			l.handle = next         // allocate handle to the link
 			linksByName[l.name] = l // add to mapping
-			nextHandle++            // increment the next handle
 			l.rx <- nil             // send nil on channel to indicate allocation complete
 
 		// handle deallocation request
 		case l := <-s.deallocateHandle:
 			delete(links, l.remoteHandle)
 			delete(deliveryIDByHandle, l.handle)
+			handles.remove(l.handle)
 			close(l.rx) // close channel to indicate deallocation
 
 		// incoming frame for link
@@ -819,6 +848,11 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	case <-s.done:
 		return nil, s.err
 	case <-l.rx:
+	}
+
+	// check for link request error
+	if l.err != nil {
+		return nil, l.err
 	}
 
 	attach := &performAttach{

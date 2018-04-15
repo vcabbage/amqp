@@ -371,6 +371,100 @@ func TestIntegrationSend_Concurrent(t *testing.T) {
 		})
 	}
 }
+func TestIntegrationSessionHandleMax(t *testing.T) {
+	queueName, _, cleanup := newTestQueue(t, "sessionwrap")
+	defer cleanup()
+
+	tests := []struct {
+		maxLinks int
+		links    int
+		close    int
+		error    *regexp.Regexp
+	}{
+		{
+			maxLinks: 4,
+			links:    5,
+			error:    regexp.MustCompile(`handle max \(3\)`),
+		},
+		{
+			maxLinks: 5,
+			links:    5,
+		},
+		{
+			maxLinks: 4,
+			links:    5,
+			close:    1,
+		},
+		{
+			maxLinks: 4,
+			links:    8,
+			close:    4,
+		},
+		{
+			maxLinks: 62,
+			links:    64,
+			close:    2,
+		},
+		{
+			maxLinks: 62,
+			links:    64,
+			close:    1,
+			error:    regexp.MustCompile(`handle max \(61\)`),
+		},
+	}
+
+	for _, tt := range tests {
+		label := fmt.Sprintf("max %d, links %d, close %d", tt.maxLinks, tt.links, tt.close)
+		t.Run(label, func(t *testing.T) {
+			// checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+			// Create client
+			client := newSBClient(t, label)
+			defer client.Close()
+
+			// Open a session
+			session, err := client.NewSession(
+				amqp.SessionMaxLinks(tt.maxLinks),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var matches int
+
+			// Create a sender
+			for i := 0; i < tt.links; i++ {
+				sender, err := session.NewSender(
+					amqp.LinkTargetAddress(queueName),
+				)
+				switch {
+				case err == nil:
+				case tt.error == nil:
+					t.Fatal(err)
+				case !tt.error.MatchString(err.Error()):
+					t.Errorf("expect error to match %q, but it was %q", tt.error, err)
+				default:
+					matches++
+				}
+
+				if tt.close > 0 {
+					err = sender.Close(context.Background())
+					if err != nil {
+						t.Fatal(err)
+					}
+					tt.close--
+				}
+			}
+
+			if tt.error != nil && matches == 0 {
+				t.Errorf("expect an error")
+			}
+			if tt.error != nil && matches > 1 {
+				t.Errorf("expected 1 matching error, got %d", matches)
+			}
+		})
+	}
+}
 
 func TestIntegrationClose(t *testing.T) {
 	queueName, _, cleanup := newTestQueue(t, "close")
