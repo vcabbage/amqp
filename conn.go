@@ -115,10 +115,6 @@ func ConnConnectTimeout(d time.Duration) ConnOption {
 //
 // n must be in the range 1 to 65536.
 //
-// BUG: Currently this limits how many channels can ever
-//      be opened on this connection rather than how many
-//      channels can be open at the same time.
-//
 // Default: 65536.
 func ConnMaxSessions(n int) ConnOption {
 	return func(c *conn) error {
@@ -311,12 +307,16 @@ func (c *conn) getErr() error {
 	return c.err
 }
 
-// mux is start in it's own goroutine after initial connection establishment.
-//  It handles muxing of sessions, keepalives, and connection errors.
+// mux is started in it's own goroutine after initial connection establishment.
+// It handles muxing of sessions, keepalives, and connection errors.
 func (c *conn) mux() {
 	var (
+		// allocated channels
+		channels = &bitmap{max: uint32(c.channelMax)}
+
 		// create the next session to allocate
-		nextSession = newSessionResp{session: newSession(c, 0)}
+		nextChannel, _ = channels.next()
+		nextSession    = newSessionResp{session: newSession(c, uint16(nextChannel))}
 
 		// map channels to sessions
 		sessionsByChannel       = make(map[uint16]*Session)
@@ -383,23 +383,25 @@ func (c *conn) mux() {
 				continue
 			}
 
+			// save session into map
 			ch := nextSession.session.channel
 			sessionsByChannel[ch] = nextSession.session
 
-			if ch >= c.channelMax {
-				nextSession.session = nil
-				nextSession.err = errorErrorf("reached connection channel max (%d)", c.channelMax)
+			// get next available channel
+			next, ok := channels.next()
+			if !ok {
+				nextSession = newSessionResp{err: errorErrorf("reached connection channel max (%d)", c.channelMax)}
 				continue
 			}
 
 			// create the next session to send
-			nextSession.session = newSession(c, ch+1)
+			nextSession = newSessionResp{session: newSession(c, uint16(next))}
 
 		// session deletion
 		case s := <-c.delSession:
-			// TODO: allow channel number reuse
 			delete(sessionsByChannel, s.channel)
 			delete(sessionsByRemoteChannel, s.remoteChannel)
+			channels.remove(uint32(s.channel))
 
 		// connection is complete
 		case <-c.closeMux:
