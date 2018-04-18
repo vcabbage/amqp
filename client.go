@@ -1436,9 +1436,9 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 	msg := Message{receiver: r} // message to be decoded into
 
 	var (
-		maxMessageSize = int(r.link.maxMessageSize)
-		messageSize    = 0
-		first          = true // receiving the first frame of the message
+		maxMessageSize        = r.link.maxMessageSize
+		messageSize    uint64 = 0
+		first                 = true // receiving the first frame of the message
 	)
 
 	for {
@@ -1467,7 +1467,7 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 		}
 
 		// ensure maxMessageSize will not be exceeded
-		messageSize += len(fr.Payload)
+		messageSize += uint64(len(fr.Payload))
 		if maxMessageSize != 0 && messageSize > maxMessageSize {
 			// TODO: send error
 			_ = r.Close(ctx)
