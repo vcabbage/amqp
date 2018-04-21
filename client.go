@@ -960,8 +960,17 @@ func (l *link) mux() {
 		case *performTransfer:
 			debug(3, "RX: %s", fr)
 			if isSender {
-				// TODO: send error to remote
-				l.err = errorErrorf("Sender received transfer frame")
+				// Senders should never receive transfer frames, but handle it just in case.
+				l.session.txFrame(&performDetach{
+					Handle: l.handle,
+					Closed: true,
+					Error: &Error{
+						Condition:   ErrorNotAllowed,
+						Description: "sender cannot process transfer frame",
+					},
+				}, nil)
+				l.detachSent = true
+				l.err = errorErrorf("sender received transfer frame")
 				return false
 			}
 
