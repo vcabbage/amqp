@@ -1219,15 +1219,14 @@ func (l *link) detach() {
 	}
 
 	// wait for remote to detach
-outer:
+Loop:
 	for {
-		// TODO: timeout
 		select {
 		// read from link until detach with Close == true is received,
 		// other frames are discarded.
 		case fr := <-l.rx:
 			if fr, ok := fr.(*performDetach); ok && fr.Closed {
-				break outer
+				break Loop
 			}
 
 		// connection has ended
