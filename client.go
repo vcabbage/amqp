@@ -566,10 +566,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 						continue
 					}
 
-					select {
-					case <-s.conn.done:
-					case link.rx <- fr.body:
-					}
+					s.muxFrameToLink(link, fr.body)
 				}
 				continue
 			case *performFlow:
@@ -612,10 +609,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 						continue
 					}
 
-					select {
-					case <-s.conn.done:
-					case link.rx <- fr.body:
-					}
+					s.muxFrameToLink(link, fr.body)
 					continue
 				}
 
@@ -644,10 +638,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				link.remoteHandle = body.Handle
 				links[link.remoteHandle] = link
 
-				select {
-				case <-s.conn.done:
-				case link.rx <- fr.body:
-				}
+				s.muxFrameToLink(link, fr.body)
 
 			case *performTransfer:
 				// "Upon receiving a transfer, the receiving endpoint will
@@ -686,11 +677,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				if !ok {
 					continue
 				}
-
-				select {
-				case <-s.conn.done:
-				case link.rx <- fr.body:
-				}
+				s.muxFrameToLink(link, fr.body)
 
 			case *performEnd:
 				s.txFrame(&performEnd{}, nil)
@@ -758,6 +745,14 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				s.txFrame(fr, nil)
 			}
 		}
+	}
+}
+
+func (s *Session) muxFrameToLink(l *link, fr frameBody) {
+	select {
+	case l.rx <- fr:
+	case <-l.done:
+	case <-s.conn.done:
 	}
 }
 
@@ -949,119 +944,11 @@ func (l *link) mux() {
 	defer l.detach()
 
 	var (
-		isReceiver             = l.receiver != nil
-		isSender               = !isReceiver
-		errOnRejectDisposition = isSender && (l.receiverSettleMode == nil || *l.receiverSettleMode == ModeFirst)
+		isReceiver = l.receiver != nil
+		isSender   = !isReceiver
 	)
 
-	handleRx := func(fr frameBody) bool {
-		switch fr := fr.(type) {
-		// message frame
-		case *performTransfer:
-			debug(3, "RX: %s", fr)
-			if isSender {
-				// Senders should never receive transfer frames, but handle it just in case.
-				l.session.txFrame(&performDetach{
-					Handle: l.handle,
-					Closed: true,
-					Error: &Error{
-						Condition:   ErrorNotAllowed,
-						Description: "sender cannot process transfer frame",
-					},
-				}, nil)
-				l.detachSent = true
-				l.err = errorErrorf("sender received transfer frame")
-				return false
-			}
-
-			l.transfers <- *fr
-
-			// decrement link-credit after entire message received
-			if !fr.More {
-				l.deliveryCount++
-				l.linkCredit--
-			}
-
-		// flow control frame
-		case *performFlow:
-			debug(3, "RX: %s", fr)
-			if isReceiver {
-				if fr.DeliveryCount != nil {
-					l.deliveryCount = *fr.DeliveryCount
-				}
-			} else {
-				l.linkCredit = *fr.LinkCredit - l.deliveryCount
-				if fr.DeliveryCount != nil {
-					// DeliveryCount can be nil if the receiver hasn't processed
-					// the attach. That shouldn't be the case here, but it's
-					// what ActiveMQ does.
-					l.linkCredit += *fr.DeliveryCount
-				}
-			}
-
-			if fr.Echo {
-				var (
-					// copy because sent by pointer below; prevent race
-					linkCredit    = l.linkCredit
-					deliveryCount = l.deliveryCount
-				)
-
-				// send flow
-				fr := &performFlow{
-					Handle:        &l.handle,
-					DeliveryCount: &deliveryCount,
-					LinkCredit:    &linkCredit, // max number of messages
-				}
-				debug(1, "TX: %s", fr)
-				l.session.txFrame(fr, nil)
-			}
-
-		// remote side is closing links
-		case *performDetach:
-			debug(1, "RX: %s", fr)
-			// don't currently support link detach and reattach
-			if !fr.Closed {
-				l.err = errorErrorf("non-closing detach not supported: %+v", fr)
-				return false
-			}
-
-			// set detach received and close link
-			l.detachReceived = true
-
-			l.err = errorWrapf(DetachError{fr.Error}, "received detach frame")
-			return false
-
-		case *performDisposition:
-			debug(3, "RX: %s", fr)
-
-			// If sending async and a message is rejected, cause a link error.
-			//
-			// This isn't ideal, but there isn't a clear better way to handle it.
-			if fr, ok := fr.State.(*stateRejected); ok && errOnRejectDisposition {
-				l.err = fr.Error
-				return false
-			}
-
-			if fr.Settled {
-				return true
-			}
-
-			resp := &performDisposition{
-				Role:    roleSender,
-				First:   fr.First,
-				Last:    fr.Last,
-				Settled: true,
-			}
-			debug(1, "TX: %s", resp)
-			l.session.txFrame(resp, nil)
-
-		default:
-			debug(1, "RX: %s", fr)
-			fmt.Printf("Unexpected frame: %s\n", fr)
-		}
-		return true
-	}
-
+Loop:
 	for {
 		var outgoingTransfers chan performTransfer
 		switch {
@@ -1071,56 +958,37 @@ func (l *link) mux() {
 
 		// if receiver and linkCredit is half used, send more
 		case isReceiver && l.linkCredit <= l.receiver.maxCredit/2:
-			var (
-				// copy because sent by pointer below; prevent race
-				linkCredit    = l.receiver.maxCredit
-				deliveryCount = l.deliveryCount
-			)
-
-			// send flow
-			fr := &performFlow{
-				Handle:        &l.handle,
-				DeliveryCount: &deliveryCount,
-				LinkCredit:    &linkCredit, // max number of messages
+			l.err = l.muxFlow()
+			if l.err != nil {
+				return
 			}
-			debug(3, "TX: %s", fr)
-		FlowLoop:
-			for {
-				// Ensure we never block the session mux
-				select {
-				case l.session.tx <- fr:
-					break FlowLoop
-				case fr := <-l.rx:
-					if !handleRx(fr) {
-						return
-					}
-				case <-l.close:
-					l.err = ErrLinkClosed
-					return
-				case <-l.session.done:
-					l.err = l.session.err
-					return
-				}
-			}
-
-			// reset credit
-			l.linkCredit = l.receiver.maxCredit
 		}
 
-		// TODO: Look into avoiding the select statement duplication.
-
 		select {
+		// received frame
+		case fr := <-l.rx:
+			l.err = l.muxHandleFrame(fr)
+			if l.err != nil {
+				return
+			}
+
 		// send data
 		case tr := <-outgoingTransfers:
 			debug(3, "TX(link): %s", tr)
-		Loop:
+
+			// Ensure the session mux is not blocked
 			for {
-				// Ensure we never block the session mux
 				select {
 				case l.session.txTransfer <- &tr:
-					break Loop
+					// decrement link-credit after entire message transferred
+					if !tr.More {
+						l.deliveryCount++
+						l.linkCredit--
+					}
+					continue Loop
 				case fr := <-l.rx:
-					if !handleRx(fr) {
+					l.err = l.muxHandleFrame(fr)
+					if l.err != nil {
 						return
 					}
 				case <-l.close:
@@ -1132,17 +1000,6 @@ func (l *link) mux() {
 				}
 			}
 
-			// decrement link-credit after entire message transferred
-			if !tr.More {
-				l.deliveryCount++
-				l.linkCredit--
-			}
-
-		// received frame
-		case fr := <-l.rx:
-			if !handleRx(fr) {
-				return
-			}
 		case <-l.close:
 			l.err = ErrLinkClosed
 			return
@@ -1151,6 +1008,152 @@ func (l *link) mux() {
 			return
 		}
 	}
+}
+
+// muxFlow sends tr to the session mux.
+func (l *link) muxFlow() error {
+	var (
+		// copy because sent by pointer below; prevent race
+		linkCredit    = l.receiver.maxCredit
+		deliveryCount = l.deliveryCount
+	)
+
+	fr := &performFlow{
+		Handle:        &l.handle,
+		DeliveryCount: &deliveryCount,
+		LinkCredit:    &linkCredit, // max number of messages
+	}
+	debug(3, "TX: %s", fr)
+
+	// Ensure the session mux is not blocked
+	for {
+		select {
+		case l.session.tx <- fr:
+			// reset credit
+			l.linkCredit = l.receiver.maxCredit
+			return nil
+		case fr := <-l.rx:
+			err := l.muxHandleFrame(fr)
+			if err != nil {
+				return err
+			}
+		case <-l.close:
+			return ErrLinkClosed
+		case <-l.session.done:
+			return l.session.err
+		}
+	}
+}
+
+// muxHandleFrame processes fr based on type.
+func (l *link) muxHandleFrame(fr frameBody) error {
+	var (
+		isSender               = l.receiver == nil
+		errOnRejectDisposition = isSender && (l.receiverSettleMode == nil || *l.receiverSettleMode == ModeFirst)
+	)
+
+	switch fr := fr.(type) {
+	// message frame
+	case *performTransfer:
+		debug(3, "RX: %s", fr)
+		if isSender {
+			// Senders should never receive transfer frames, but handle it just in case.
+			l.session.txFrame(&performDetach{
+				Handle: l.handle,
+				Closed: true,
+				Error: &Error{
+					Condition:   ErrorNotAllowed,
+					Description: "sender cannot process transfer frame",
+				},
+			}, nil)
+			l.detachSent = true
+			return errorErrorf("sender received transfer frame")
+		}
+
+		l.transfers <- *fr
+
+		// decrement link-credit after entire message received
+		if !fr.More {
+			l.deliveryCount++
+			l.linkCredit--
+		}
+
+	// flow control frame
+	case *performFlow:
+		debug(3, "RX: %s", fr)
+		if isSender {
+			l.linkCredit = *fr.LinkCredit - l.deliveryCount
+			if fr.DeliveryCount != nil {
+				// DeliveryCount can be nil if the receiver hasn't processed
+				// the attach. That shouldn't be the case here, but it's
+				// what ActiveMQ does.
+				l.linkCredit += *fr.DeliveryCount
+			}
+		} else if fr.DeliveryCount != nil {
+			l.deliveryCount = *fr.DeliveryCount
+		}
+
+		if !fr.Echo {
+			return nil
+		}
+
+		var (
+			// copy because sent by pointer below; prevent race
+			linkCredit    = l.linkCredit
+			deliveryCount = l.deliveryCount
+		)
+
+		// send flow
+		resp := &performFlow{
+			Handle:        &l.handle,
+			DeliveryCount: &deliveryCount,
+			LinkCredit:    &linkCredit, // max number of messages
+		}
+		debug(1, "TX: %s", resp)
+		l.session.txFrame(resp, nil)
+
+	// remote side is closing links
+	case *performDetach:
+		debug(1, "RX: %s", fr)
+		// don't currently support link detach and reattach
+		if !fr.Closed {
+			return errorErrorf("non-closing detach not supported: %+v", fr)
+		}
+
+		// set detach received and close link
+		l.detachReceived = true
+
+		return errorWrapf(DetachError{fr.Error}, "received detach frame")
+
+	case *performDisposition:
+		debug(3, "RX: %s", fr)
+
+		// If sending async and a message is rejected, cause a link error.
+		//
+		// This isn't ideal, but there isn't a clear better way to handle it.
+		if fr, ok := fr.State.(*stateRejected); ok && errOnRejectDisposition {
+			return fr.Error
+		}
+
+		if fr.Settled {
+			return nil
+		}
+
+		resp := &performDisposition{
+			Role:    roleSender,
+			First:   fr.First,
+			Last:    fr.Last,
+			Settled: true,
+		}
+		debug(1, "TX: %s", resp)
+		l.session.txFrame(resp, nil)
+
+	default:
+		debug(1, "RX: %s", fr)
+		fmt.Printf("Unexpected frame: %s\n", fr)
+	}
+
+	return nil
 }
 
 // close closes and requests deletion of the link.
