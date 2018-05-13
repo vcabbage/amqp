@@ -968,6 +968,9 @@ Loop:
 		// received frame
 		case fr := <-l.rx:
 			l.err = l.muxHandleFrame(fr)
+			if l.err != nil {
+				return
+			}
 
 		// send data
 		case tr := <-outgoingTransfers:
@@ -985,24 +988,23 @@ Loop:
 					continue Loop
 				case fr := <-l.rx:
 					l.err = l.muxHandleFrame(fr)
+					if l.err != nil {
+						return
+					}
 				case <-l.close:
 					l.err = ErrLinkClosed
+					return
 				case <-l.session.done:
 					l.err = l.session.err
-				}
-
-				if l.err != nil {
 					return
 				}
 			}
 
 		case <-l.close:
 			l.err = ErrLinkClosed
+			return
 		case <-l.session.done:
 			l.err = l.session.err
-		}
-
-		if l.err != nil {
 			return
 		}
 	}
