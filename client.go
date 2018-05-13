@@ -677,7 +677,6 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				if !ok {
 					continue
 				}
-
 				s.muxFrameToLink(link, fr.body)
 
 			case *performEnd:
@@ -752,7 +751,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 func (s *Session) muxFrameToLink(l *link, fr frameBody) {
 	select {
 	case l.rx <- fr:
-	case <-l.close:
+	case <-l.done:
 	case <-s.conn.done:
 	}
 }
@@ -949,6 +948,7 @@ func (l *link) mux() {
 		isSender   = !isReceiver
 	)
 
+Loop:
 	for {
 		var outgoingTransfers chan performTransfer
 		switch {
@@ -965,12 +965,15 @@ func (l *link) mux() {
 		}
 
 		select {
+		// received frame
+		case fr := <-l.rx:
+			l.err = l.muxHandleFrame(fr)
+
 		// send data
 		case tr := <-outgoingTransfers:
 			debug(3, "TX(link): %s", tr)
 
 			// Ensure the session mux is not blocked
-		TxLoop:
 			for {
 				select {
 				case l.session.txTransfer <- &tr:
@@ -979,7 +982,7 @@ func (l *link) mux() {
 						l.deliveryCount++
 						l.linkCredit--
 					}
-					break TxLoop
+					continue Loop
 				case fr := <-l.rx:
 					l.err = l.muxHandleFrame(fr)
 				case <-l.close:
@@ -992,9 +995,7 @@ func (l *link) mux() {
 					return
 				}
 			}
-		// received frame
-		case fr := <-l.rx:
-			l.err = l.muxHandleFrame(fr)
+
 		case <-l.close:
 			l.err = ErrLinkClosed
 		case <-l.session.done:
@@ -1042,10 +1043,10 @@ func (l *link) muxFlow() error {
 	}
 }
 
+// muxHandleFrame processes fr based on type.
 func (l *link) muxHandleFrame(fr frameBody) error {
 	var (
-		isReceiver             = l.receiver != nil
-		isSender               = !isReceiver
+		isSender               = l.receiver == nil
 		errOnRejectDisposition = isSender && (l.receiverSettleMode == nil || *l.receiverSettleMode == ModeFirst)
 	)
 
@@ -1078,11 +1079,7 @@ func (l *link) muxHandleFrame(fr frameBody) error {
 	// flow control frame
 	case *performFlow:
 		debug(3, "RX: %s", fr)
-		if isReceiver {
-			if fr.DeliveryCount != nil {
-				l.deliveryCount = *fr.DeliveryCount
-			}
-		} else {
+		if isSender {
 			l.linkCredit = *fr.LinkCredit - l.deliveryCount
 			if fr.DeliveryCount != nil {
 				// DeliveryCount can be nil if the receiver hasn't processed
@@ -1090,24 +1087,28 @@ func (l *link) muxHandleFrame(fr frameBody) error {
 				// what ActiveMQ does.
 				l.linkCredit += *fr.DeliveryCount
 			}
+		} else if fr.DeliveryCount != nil {
+			l.deliveryCount = *fr.DeliveryCount
 		}
 
-		if fr.Echo {
-			var (
-				// copy because sent by pointer below; prevent race
-				linkCredit    = l.linkCredit
-				deliveryCount = l.deliveryCount
-			)
-
-			// send flow
-			fr := &performFlow{
-				Handle:        &l.handle,
-				DeliveryCount: &deliveryCount,
-				LinkCredit:    &linkCredit, // max number of messages
-			}
-			debug(1, "TX: %s", fr)
-			l.session.txFrame(fr, nil)
+		if !fr.Echo {
+			return nil
 		}
+
+		var (
+			// copy because sent by pointer below; prevent race
+			linkCredit    = l.linkCredit
+			deliveryCount = l.deliveryCount
+		)
+
+		// send flow
+		resp := &performFlow{
+			Handle:        &l.handle,
+			DeliveryCount: &deliveryCount,
+			LinkCredit:    &linkCredit, // max number of messages
+		}
+		debug(1, "TX: %s", resp)
+		l.session.txFrame(resp, nil)
 
 	// remote side is closing links
 	case *performDetach:
