@@ -566,10 +566,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 						continue
 					}
 
-					select {
-					case <-s.conn.done:
-					case link.rx <- fr.body:
-					}
+					s.muxFrameToLink(link, fr.body)
 				}
 				continue
 			case *performFlow:
@@ -612,10 +609,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 						continue
 					}
 
-					select {
-					case <-s.conn.done:
-					case link.rx <- fr.body:
-					}
+					s.muxFrameToLink(link, fr.body)
 					continue
 				}
 
@@ -644,10 +638,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				link.remoteHandle = body.Handle
 				links[link.remoteHandle] = link
 
-				select {
-				case <-s.conn.done:
-				case link.rx <- fr.body:
-				}
+				s.muxFrameToLink(link, fr.body)
 
 			case *performTransfer:
 				// "Upon receiving a transfer, the receiving endpoint will
@@ -687,10 +678,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 					continue
 				}
 
-				select {
-				case <-s.conn.done:
-				case link.rx <- fr.body:
-				}
+				s.muxFrameToLink(link, fr.body)
 
 			case *performEnd:
 				s.txFrame(&performEnd{}, nil)
@@ -758,6 +746,14 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				s.txFrame(fr, nil)
 			}
 		}
+	}
+}
+
+func (s *Session) muxFrameToLink(l *link, fr frameBody) {
+	select {
+	case l.rx <- fr:
+	case <-l.close:
+	case <-s.conn.done:
 	}
 }
 
