@@ -510,7 +510,7 @@ var (
 		&stateModified{
 			DeliveryFailed:    true,
 			UndeliverableHere: true,
-			MessageAnnotations: map[symbol]interface{}{
+			MessageAnnotations: Annotations{
 				"more": "annotations",
 			},
 		},
