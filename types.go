@@ -1782,9 +1782,9 @@ func (m *Message) Release() {
 // undeliverableHere indicates that the server must not redeliver
 // the message to this link.
 //
-// messageAnnotations is an annotation map to be merged with the
-// existing message annotations, overwriting existing keys if
-// necessary.
+// messageAnnotations is an optional annotation map to be merged
+// with the existing message annotations, overwriting existing keys
+// if necessary.
 func (m *Message) Modify(deliveryFailed, undeliverableHere bool, messageAnnotations Annotations) {
 	if m.shouldSendDisposition() {
 		m.receiver.messageDisposition(m.id, &stateModified{
