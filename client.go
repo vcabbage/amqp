@@ -1542,19 +1542,11 @@ func (r *Receiver) Close(ctx context.Context) error {
 }
 
 type messageDisposition struct {
-	id          deliveryID
-	disposition disposition
+	id    deliveryID
+	state interface{}
 }
 
 type deliveryID uint32
-
-type disposition int
-
-const (
-	dispositionAccept disposition = iota
-	dispositionReject
-	dispositionRelease
-)
 
 func (r *Receiver) dispositionBatcher() {
 	// batch operations:
@@ -1580,16 +1572,17 @@ func (r *Receiver) dispositionBatcher() {
 		case msgDis := <-r.dispositions:
 
 			// not accepted or batch out of order
-			if msgDis.disposition != dispositionAccept || (batchStarted && last+1 != msgDis.id) {
+			_, isAccept := msgDis.state.(*stateAccepted)
+			if !isAccept || (batchStarted && last+1 != msgDis.id) {
 				// send the current batch, if any
 				if batchStarted {
 					lastCopy := last
-					r.sendDisposition(first, &lastCopy, dispositionAccept)
+					r.sendDisposition(first, &lastCopy, &stateAccepted{})
 					batchStarted = false
 				}
 
 				// send the current message
-				r.sendDisposition(msgDis.id, nil, msgDis.disposition)
+				r.sendDisposition(msgDis.id, nil, msgDis.state)
 				continue
 			}
 
@@ -1607,7 +1600,7 @@ func (r *Receiver) dispositionBatcher() {
 			// send batch if current size == batchSize
 			if uint32(last-first+1) >= batchSize {
 				lastCopy := last
-				r.sendDisposition(first, &lastCopy, dispositionAccept)
+				r.sendDisposition(first, &lastCopy, &stateAccepted{})
 				batchStarted = false
 				if !batchTimer.Stop() {
 					<-batchTimer.C // batch timer must be drained if stop returns false
@@ -1617,7 +1610,7 @@ func (r *Receiver) dispositionBatcher() {
 		// maxBatchAge elapsed, send batch
 		case <-batchTimer.C:
 			lastCopy := last
-			r.sendDisposition(first, &lastCopy, dispositionAccept)
+			r.sendDisposition(first, &lastCopy, &stateAccepted{})
 			batchStarted = false
 			batchTimer.Stop()
 
@@ -1628,49 +1621,25 @@ func (r *Receiver) dispositionBatcher() {
 }
 
 // sendDisposition sends a disposition frame to the peer
-func (r *Receiver) sendDisposition(first deliveryID, last *deliveryID, disp disposition) {
+func (r *Receiver) sendDisposition(first deliveryID, last *deliveryID, state interface{}) {
 	fr := &performDisposition{
 		Role:    roleReceiver,
 		First:   uint32(first),
 		Last:    (*uint32)(last),
 		Settled: r.link.receiverSettleMode == nil || *r.link.receiverSettleMode == ModeFirst,
-	}
-
-	switch disp {
-	case dispositionAccept:
-		fr.State = new(stateAccepted)
-	case dispositionReject:
-		fr.State = new(stateRejected)
-	case dispositionRelease:
-		fr.State = new(stateReleased)
+		State:   state,
 	}
 
 	debug(1, "TX: %s", fr)
 	r.link.session.txFrame(fr, nil)
 }
 
-func (r *Receiver) acceptMessage(id deliveryID) {
+func (r *Receiver) messageDisposition(id deliveryID, state interface{}) {
 	if r.batching {
-		r.dispositions <- messageDisposition{id: id, disposition: dispositionAccept}
+		r.dispositions <- messageDisposition{id: id, state: state}
 		return
 	}
-	r.sendDisposition(id, nil, dispositionAccept)
-}
-
-func (r *Receiver) rejectMessage(id deliveryID) {
-	if r.batching {
-		r.dispositions <- messageDisposition{id: id, disposition: dispositionReject}
-		return
-	}
-	r.sendDisposition(id, nil, dispositionReject)
-}
-
-func (r *Receiver) releaseMessage(id deliveryID) {
-	if r.batching {
-		r.dispositions <- messageDisposition{id: id, disposition: dispositionRelease}
-		return
-	}
-	r.sendDisposition(id, nil, dispositionRelease)
+	r.sendDisposition(id, nil, state)
 }
 
 const maxTransferFrameHeader = 66 // determined by calcMaxTransferFrameHeader

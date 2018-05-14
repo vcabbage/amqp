@@ -1750,14 +1750,18 @@ func (m *Message) GetData() []byte {
 // accepted and does not require redelivery.
 func (m *Message) Accept() {
 	if m.shouldSendDisposition() {
-		m.receiver.acceptMessage(m.id)
+		m.receiver.messageDisposition(m.id, &stateAccepted{})
 	}
 }
 
 // Reject notifies the server that the message is invalid.
-func (m *Message) Reject() {
+//
+// Rejection error is optional.
+func (m *Message) Reject(e *Error) {
 	if m.shouldSendDisposition() {
-		m.receiver.rejectMessage(m.id)
+		m.receiver.messageDisposition(m.id, &stateRejected{
+			Error: e,
+		})
 	}
 }
 
@@ -1765,7 +1769,29 @@ func (m *Message) Reject() {
 // may be redelivered to this or another consumer.
 func (m *Message) Release() {
 	if m.shouldSendDisposition() {
-		m.receiver.releaseMessage(m.id)
+		m.receiver.messageDisposition(m.id, &stateReleased{})
+	}
+}
+
+// Modify notifies the server that the message was not acted upon
+// and should be modifed.
+//
+// deliveryFailed indicates that the server must consider this and
+// unsuccessful delivery attempt and increment the delivery count.
+//
+// undeliverableHere indicates that the server must not redeliver
+// the message to this link.
+//
+// messageAnnotations is an optional annotation map to be merged
+// with the existing message annotations, overwriting existing keys
+// if necessary.
+func (m *Message) Modify(deliveryFailed, undeliverableHere bool, messageAnnotations Annotations) {
+	if m.shouldSendDisposition() {
+		m.receiver.messageDisposition(m.id, &stateModified{
+			DeliveryFailed:     deliveryFailed,
+			UndeliverableHere:  undeliverableHere,
+			MessageAnnotations: messageAnnotations,
+		})
 	}
 }
 
@@ -1779,8 +1805,6 @@ func (m *Message) MarshalBinary() ([]byte, error) {
 func (m *Message) shouldSendDisposition() bool {
 	return !m.settled || (m.receiver.link.receiverSettleMode != nil && *m.receiver.link.receiverSettleMode == ModeSecond)
 }
-
-// TODO: add support for sending Modified disposition
 
 func (m *Message) marshal(wr *buffer) error {
 	if m.Header != nil {
@@ -2312,7 +2336,7 @@ type stateModified struct {
 	// the value in this field associated with that key replaces the one in the
 	// existing headers; where the existing message-annotations has no such value,
 	// the value in this map is added.
-	MessageAnnotations map[symbol]interface{}
+	MessageAnnotations Annotations
 }
 
 func (sm *stateModified) marshal(wr *buffer) error {
