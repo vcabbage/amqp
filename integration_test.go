@@ -206,6 +206,141 @@ func TestIntegrationRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIntegrationReceiverModeSecond(t *testing.T) {
+	queueName, queuesClient, cleanup := newTestQueue(t, "receiver-mode-second")
+	defer cleanup()
+
+	tests := []struct {
+		label    string
+		sessions int
+		data     []string
+	}{
+		{
+			label:    "3 roundtrip, small payload",
+			sessions: 1,
+			data: []string{
+				"2Hey there!",
+				"2Hi there!",
+				"2Ho there!",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+			// Create client
+			client := newSBClient(t, tt.label,
+				amqp.ConnMaxSessions(tt.sessions),
+			)
+			defer client.Close()
+
+			for i := 0; i < tt.sessions; i++ {
+				// Open a session
+				session, err := client.NewSession()
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				// Create a sender
+				sender, err := session.NewSender(
+					amqp.LinkTargetAddress(queueName),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				// Perform test concurrently for speed and to catch races
+				var wg sync.WaitGroup
+				wg.Add(2)
+
+				var sendErr error
+				go func() {
+					defer wg.Done()
+					defer testClose(t, sender.Close)
+
+					for i, data := range tt.data {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						err = sender.Send(ctx, amqp.NewMessage([]byte(data)))
+						cancel()
+						if err != nil {
+							sendErr = fmt.Errorf("Error after %d sends: %+v", i, err)
+							return
+						}
+					}
+				}()
+
+				var receiveErr error
+				go func() {
+					defer wg.Done()
+
+					// Create a receiver
+					receiver, err := session.NewReceiver(
+						amqp.LinkSourceAddress(queueName),
+						amqp.LinkReceiverSettle(amqp.ModeSecond),
+						amqp.LinkBatching(false),
+					)
+					if err != nil {
+						receiveErr = err
+						return
+					}
+					defer testClose(t, receiver.Close)
+
+					for i, data := range tt.data {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						msg, err := receiver.Receive(ctx)
+						cancel()
+						if err != nil {
+							receiveErr = fmt.Errorf("Error after %d receives: %+v", i, err)
+							return
+						}
+
+						// Accept message
+						err = msg.Accept()
+						if err != nil {
+							receiveErr = fmt.Errorf("Error accepting message: %+v", err)
+							return
+						}
+
+						if !bytes.Equal([]byte(data), msg.GetData()) {
+							receiveErr = fmt.Errorf("Expected received message %d to be %v, but it was %v", i+1, string(data), string(msg.GetData()))
+							return
+						}
+					}
+				}()
+
+				wg.Wait()
+
+				if sendErr != nil || receiveErr != nil {
+					t.Error("Send error:", sendErr)
+					t.Fatal("Receive error:", receiveErr)
+				}
+			}
+
+			client.Close() // close before leak check
+
+			checkLeaks() // this is done here because queuesClient starts additional goroutines
+
+			// Wait for Azure to update stats
+			time.Sleep(1 * time.Second)
+
+			q, err := queuesClient.Get(context.Background(), resourceGroup, namespace, queueName)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if amc := *q.CountDetails.ActiveMessageCount; amc != 0 {
+				t.Fatalf("Expected ActiveMessageCount to be 0, but it was %d", amc)
+			}
+
+			if dead := *q.CountDetails.DeadLetterMessageCount; dead > 0 {
+				t.Fatalf("Expected DeadLetterMessageCount to be 0, but it was %d", dead)
+			}
+		})
+	}
+}
+
 func TestIntegrationSend(t *testing.T) {
 	queueName, queuesClient, cleanup := newTestQueue(t, "receive")
 	defer cleanup()

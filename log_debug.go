@@ -8,7 +8,7 @@ import "strconv"
 
 var (
 	debugLevel = 1
-	logger     = log.New(os.Stderr, "", 0)
+	logger     = log.New(os.Stderr, "", log.Lmicroseconds)
 )
 
 func init() {

@@ -629,10 +629,12 @@ var keepaliveFrame = []byte{0x00, 0x00, 0x00, 0x08, 0x02, 0x00, 0x00, 0x00}
 
 // wantWriteFrame is used by sessions and links to send frame to
 // connWriter.
-func (c *conn) wantWriteFrame(fr frame) {
+func (c *conn) wantWriteFrame(fr frame) error {
 	select {
 	case c.txFrame <- fr:
+		return nil
 	case <-c.done:
+		return c.getErr()
 	}
 }
 
