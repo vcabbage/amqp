@@ -1721,9 +1721,9 @@ type Message struct {
 	// encryption details).
 	Footer Annotations
 
-	receiver *Receiver  // Receiver the message was received from
-	id       deliveryID // used when sending disposition
-	settled  bool       // whether transfer was settled by sender
+	receiver   *Receiver // Receiver the message was received from
+	deliveryID uint32    // used when sending disposition
+	settled    bool      // whether transfer was settled by sender
 }
 
 // NewMessage returns a *Message with data as the payload.
@@ -1748,29 +1748,30 @@ func (m *Message) GetData() []byte {
 
 // Accept notifies the server that the message has been
 // accepted and does not require redelivery.
-func (m *Message) Accept() {
-	if m.shouldSendDisposition() {
-		m.receiver.messageDisposition(m.id, &stateAccepted{})
+func (m *Message) Accept() error {
+	if !m.shouldSendDisposition() {
+		return nil
 	}
+	return m.receiver.messageDisposition(m.deliveryID, &stateAccepted{})
 }
 
 // Reject notifies the server that the message is invalid.
 //
 // Rejection error is optional.
-func (m *Message) Reject(e *Error) {
-	if m.shouldSendDisposition() {
-		m.receiver.messageDisposition(m.id, &stateRejected{
-			Error: e,
-		})
+func (m *Message) Reject(e *Error) error {
+	if !m.shouldSendDisposition() {
+		return nil
 	}
+	return m.receiver.messageDisposition(m.deliveryID, &stateRejected{Error: e})
 }
 
 // Release releases the message back to the server. The message
 // may be redelivered to this or another consumer.
-func (m *Message) Release() {
+func (m *Message) Release() error {
 	if m.shouldSendDisposition() {
-		m.receiver.messageDisposition(m.id, &stateReleased{})
+		return nil
 	}
+	return m.receiver.messageDisposition(m.deliveryID, &stateReleased{})
 }
 
 // Modify notifies the server that the message was not acted upon
@@ -1785,14 +1786,15 @@ func (m *Message) Release() {
 // messageAnnotations is an optional annotation map to be merged
 // with the existing message annotations, overwriting existing keys
 // if necessary.
-func (m *Message) Modify(deliveryFailed, undeliverableHere bool, messageAnnotations Annotations) {
-	if m.shouldSendDisposition() {
-		m.receiver.messageDisposition(m.id, &stateModified{
-			DeliveryFailed:     deliveryFailed,
-			UndeliverableHere:  undeliverableHere,
-			MessageAnnotations: messageAnnotations,
-		})
+func (m *Message) Modify(deliveryFailed, undeliverableHere bool, messageAnnotations Annotations) error {
+	if !m.shouldSendDisposition() {
+		return nil
 	}
+	return m.receiver.messageDisposition(m.deliveryID, &stateModified{
+		DeliveryFailed:     deliveryFailed,
+		UndeliverableHere:  undeliverableHere,
+		MessageAnnotations: messageAnnotations,
+	})
 }
 
 // MarshalBinary encodes the message into binary form
@@ -2697,10 +2699,6 @@ const (
 	// Receiver will only settle after sending the disposition to the
 	// sender and receiving a disposition indicating settlement of
 	// the delivery from the sender.
-	//
-	// BUG: When receiving messages, accepting/rejecting/releasing a
-	//      received message does not block and wait for the sender's
-	//      confirmation disposition.
 	ModeSecond ReceiverSettleMode = 1
 )
 
