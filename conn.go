@@ -431,7 +431,9 @@ func (c *conn) connReader() {
 		// need to read more if buf doesn't contain the complete frame
 		// or there's not enough in buf to parse the header
 		if frameInProgress || buf.len() < frameHeaderSize {
-			_ = c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
+			if c.idleTimeout > 0 {
+				_ = c.net.SetReadDeadline(time.Now().Add(c.idleTimeout))
+			}
 			err := buf.readFromOnce(c.net)
 			if err != nil {
 				select {
