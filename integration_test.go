@@ -163,6 +163,9 @@ func TestIntegrationRoundTrip(t *testing.T) {
 							return
 						}
 
+						// Simulate processing after receiving. (This has revealed flow control bugs.)
+						time.Sleep(10 * time.Millisecond)
+
 						// Accept message
 						msg.Accept()
 
