@@ -189,10 +189,10 @@ type performOpen struct {
 	MaxFrameSize        uint32        // default: 4294967295
 	ChannelMax          uint16        // default: 65535
 	IdleTimeout         time.Duration // from milliseconds
-	OutgoingLocales     []symbol
-	IncomingLocales     []symbol
-	OfferedCapabilities []symbol
-	DesiredCapabilities []symbol
+	OutgoingLocales     multiSymbol
+	IncomingLocales     multiSymbol
+	OfferedCapabilities multiSymbol
+	DesiredCapabilities multiSymbol
 	Properties          map[symbol]interface{}
 }
 
@@ -267,12 +267,12 @@ type performBegin struct {
 
 	// the extension capabilities the sender supports
 	// http://www.amqp.org/specification/1.0/session-capabilities
-	OfferedCapabilities []symbol
+	OfferedCapabilities multiSymbol
 
 	// the extension capabilities the sender can use if the receiver supports them
 	// The sender MUST NOT attempt to use any capability other than those it
 	// has declared in desired-capabilities field.
-	DesiredCapabilities []symbol
+	DesiredCapabilities multiSymbol
 
 	// session properties
 	// http://www.amqp.org/specification/1.0/session-properties
@@ -459,13 +459,13 @@ type performAttach struct {
 
 	// the extension capabilities the sender supports
 	// http://www.amqp.org/specification/1.0/link-capabilities
-	OfferedCapabilities []symbol
+	OfferedCapabilities multiSymbol
 
 	// the extension capabilities the sender can use if the receiver supports them
 	//
 	// The sender MUST NOT attempt to use any capability other than those it
 	// has declared in desired-capabilities field.
-	DesiredCapabilities []symbol
+	DesiredCapabilities multiSymbol
 
 	// link properties
 	// http://www.amqp.org/specification/1.0/link-properties
@@ -743,12 +743,12 @@ type source struct {
 	//
 	// When present, the values MUST be a symbolic descriptor of a valid outcome,
 	// e.g., "amqp:accepted:list".
-	Outcomes []symbol
+	Outcomes multiSymbol
 
 	// the extension capabilities the sender supports/desires
 	//
 	// http://www.amqp.org/specification/1.0/source-capabilities
-	Capabilities []symbol
+	Capabilities multiSymbol
 }
 
 func (s *source) marshal(wr *buffer) error {
@@ -895,7 +895,7 @@ type target struct {
 	// the extension capabilities the sender supports/desires
 	//
 	// http://www.amqp.org/specification/1.0/target-capabilities
-	Capabilities []symbol
+	Capabilities multiSymbol
 }
 
 func (t *target) marshal(wr *buffer) error {
@@ -2402,7 +2402,7 @@ func (si *saslInit) unmarshal(r *buffer) error {
 */
 
 type saslMechanisms struct {
-	Mechanisms []symbol
+	Mechanisms multiSymbol
 }
 
 func (sm *saslMechanisms) frameBody() {}
@@ -3922,4 +3922,30 @@ func (l *list) unmarshal(r *buffer) error {
 
 	*l = ll
 	return nil
+}
+
+// multiSymbol can decode a single symbol or an array.
+type multiSymbol []symbol
+
+func (ms multiSymbol) marshal(wr *buffer) error {
+	return marshal(wr, []symbol(ms))
+}
+
+func (ms *multiSymbol) unmarshal(r *buffer) error {
+	type_, err := r.peekType()
+	if err != nil {
+		return err
+	}
+
+	if type_ == typeCodeSym8 || type_ == typeCodeSym32 {
+		s, err := readString(r)
+		if err != nil {
+			return err
+		}
+
+		*ms = []symbol{symbol(s)}
+		return nil
+	}
+
+	return unmarshal(r, (*[]symbol)(ms))
 }
