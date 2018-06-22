@@ -18,12 +18,18 @@ func parseFrameHeader(r *buffer) (frameHeader, error) {
 	}
 	_ = buf[7]
 
-	return frameHeader{
+	fh := frameHeader{
 		Size:       binary.BigEndian.Uint32(buf[0:4]),
 		DataOffset: buf[4],
 		FrameType:  buf[5],
 		Channel:    binary.BigEndian.Uint16(buf[6:8]),
-	}, nil
+	}
+
+	if fh.Size < frameHeaderSize {
+		return fh, errorErrorf("received frame header with invalid size %d", fh.Size)
+	}
+
+	return fh, nil
 }
 
 // parseProtoHeader reads the proto header from r and returns the results
@@ -356,7 +362,7 @@ func unmarshalComposite(r *buffer, type_ amqpType, fields ...unmarshalField) err
 
 	// Validate the field count is less than or equal to the number of fields
 	// provided. Fields may be omitted by the sender if they are not set.
-	if numFields > len(fields) {
+	if numFields > int64(len(fields)) {
 		return errorErrorf("invalid field count %d for %#0x", numFields, type_)
 	}
 
@@ -406,7 +412,7 @@ type unmarshalField struct {
 type nullHandler func() error
 
 // readCompositeHeader reads and consumes the composite header from r.
-func readCompositeHeader(r *buffer) (_ amqpType, fields int, _ error) {
+func readCompositeHeader(r *buffer) (_ amqpType, fields int64, _ error) {
 	type_, err := r.readType()
 	if err != nil {
 		return 0, 0, err
@@ -429,7 +435,7 @@ func readCompositeHeader(r *buffer) (_ amqpType, fields int, _ error) {
 	return amqpType(v), fields, err
 }
 
-func readListHeader(r *buffer) (length int, _ error) {
+func readListHeader(r *buffer) (length int64, _ error) {
 	type_, err := r.readType()
 	if err != nil {
 		return 0, err
@@ -451,7 +457,7 @@ func readListHeader(r *buffer) (length int, _ error) {
 		if size > listLength-1 {
 			return 0, errorNew("invalid length")
 		}
-		length = int(buf[1])
+		length = int64(buf[1])
 	case typeCodeList32:
 		buf, ok := r.next(8)
 		if !ok {
@@ -463,7 +469,7 @@ func readListHeader(r *buffer) (length int, _ error) {
 		if size > listLength-4 {
 			return 0, errorNew("invalid length")
 		}
-		length = int(binary.BigEndian.Uint32(buf[4:8]))
+		length = int64(binary.BigEndian.Uint32(buf[4:8]))
 	default:
 		return 0, errorErrorf("type code %#02x is not a recognized list type", type_)
 	}
@@ -471,7 +477,7 @@ func readListHeader(r *buffer) (length int, _ error) {
 	return length, nil
 }
 
-func readArrayHeader(r *buffer) (length int, _ error) {
+func readArrayHeader(r *buffer) (length int64, _ error) {
 	type_, err := r.readType()
 	if err != nil {
 		return 0, err
@@ -491,7 +497,7 @@ func readArrayHeader(r *buffer) (length int, _ error) {
 		if size > arrayLength-1 {
 			return 0, errorNew("invalid length")
 		}
-		length = int(buf[1])
+		length = int64(buf[1])
 	case typeCodeArray32:
 		buf, ok := r.next(8)
 		if !ok {
@@ -503,7 +509,7 @@ func readArrayHeader(r *buffer) (length int, _ error) {
 		if int(size) > arrayLength-4 {
 			return 0, errorErrorf("invalid length for type %02x", type_)
 		}
-		length = int(binary.BigEndian.Uint32(buf[4:8]))
+		length = int64(binary.BigEndian.Uint32(buf[4:8]))
 	default:
 		return 0, errorErrorf("type code %#02x is not a recognized list type", type_)
 	}
@@ -516,20 +522,20 @@ func readString(r *buffer) (string, error) {
 		return "", err
 	}
 
-	var length int
+	var length int64
 	switch type_ {
 	case typeCodeStr8, typeCodeSym8:
 		n, err := r.readByte()
 		if err != nil {
 			return "", err
 		}
-		length = int(n)
+		length = int64(n)
 	case typeCodeStr32, typeCodeSym32:
 		buf, ok := r.next(4)
 		if !ok {
 			return "", errorErrorf("invalid length for type %#02x", type_)
 		}
-		length = int(binary.BigEndian.Uint32(buf))
+		length = int64(binary.BigEndian.Uint32(buf))
 	default:
 		return "", errorErrorf("type code %#02x is not a recognized string type", type_)
 	}
@@ -547,20 +553,20 @@ func readBinary(r *buffer) ([]byte, error) {
 		return nil, err
 	}
 
-	var length int
+	var length int64
 	switch type_ {
 	case typeCodeVbin8:
 		n, err := r.readByte()
 		if err != nil {
 			return nil, err
 		}
-		length = int(n)
+		length = int64(n)
 	case typeCodeVbin32:
 		buf, ok := r.next(4)
 		if !ok {
 			return nil, errorErrorf("invalid length for type %#02x", type_)
 		}
-		length = int(binary.BigEndian.Uint32(buf))
+		length = int64(binary.BigEndian.Uint32(buf))
 	default:
 		return nil, errorErrorf("type code %#02x is not a recognized string type", type_)
 	}

@@ -2842,7 +2842,7 @@ func (a *arrayInt8) unmarshal(r *buffer) error {
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]int8, length)
 	} else {
 		aa = aa[:length]
@@ -2891,7 +2891,7 @@ func (a *arrayUint16) unmarshal(r *buffer) error {
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]uint16, length)
 	} else {
 		aa = aa[:length]
@@ -2942,7 +2942,7 @@ func (a *arrayInt16) unmarshal(r *buffer) error {
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]int16, length)
 	} else {
 		aa = aa[:length]
@@ -3002,7 +3002,7 @@ func (a *arrayUint32) unmarshal(r *buffer) error {
 	}
 	switch type_ {
 	case typeCodeUint0:
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]uint32, length)
 		} else {
 			aa = aa[:length]
@@ -3016,7 +3016,7 @@ func (a *arrayUint32) unmarshal(r *buffer) error {
 			return errorNew("invalid length")
 		}
 
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]uint32, length)
 		} else {
 			aa = aa[:length]
@@ -3032,7 +3032,7 @@ func (a *arrayUint32) unmarshal(r *buffer) error {
 			return errorErrorf("invalid length %d", length)
 		}
 
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]uint32, length)
 		} else {
 			aa = aa[:length]
@@ -3100,7 +3100,7 @@ func (a *arrayInt32) unmarshal(r *buffer) error {
 			return errorNew("invalid length")
 		}
 
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]int32, length)
 		} else {
 			aa = aa[:length]
@@ -3116,7 +3116,7 @@ func (a *arrayInt32) unmarshal(r *buffer) error {
 			return errorErrorf("invalid length %d", length)
 		}
 
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]int32, length)
 		} else {
 			aa = aa[:length]
@@ -3179,7 +3179,7 @@ func (a *arrayUint64) unmarshal(r *buffer) error {
 	}
 	switch type_ {
 	case typeCodeUlong0:
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]uint64, length)
 		} else {
 			aa = aa[:length]
@@ -3193,7 +3193,7 @@ func (a *arrayUint64) unmarshal(r *buffer) error {
 			return errorNew("invalid length")
 		}
 
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]uint64, length)
 		} else {
 			aa = aa[:length]
@@ -3209,7 +3209,7 @@ func (a *arrayUint64) unmarshal(r *buffer) error {
 			return errorNew("invalid length")
 		}
 
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]uint64, length)
 		} else {
 			aa = aa[:length]
@@ -3277,7 +3277,7 @@ func (a *arrayInt64) unmarshal(r *buffer) error {
 			return errorNew("invalid length")
 		}
 
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]int64, length)
 		} else {
 			aa = aa[:length]
@@ -3293,7 +3293,7 @@ func (a *arrayInt64) unmarshal(r *buffer) error {
 			return errorNew("invalid length")
 		}
 
-		if cap(aa) < length {
+		if int64(cap(aa)) < length {
 			aa = make([]int64, length)
 		} else {
 			aa = aa[:length]
@@ -3347,7 +3347,7 @@ func (a *arrayFloat) unmarshal(r *buffer) error {
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]float32, length)
 	} else {
 		aa = aa[:length]
@@ -3399,7 +3399,7 @@ func (a *arrayDouble) unmarshal(r *buffer) error {
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]float64, length)
 	} else {
 		aa = aa[:length]
@@ -3441,7 +3441,7 @@ func (a *arrayBool) unmarshal(r *buffer) error {
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]bool, length)
 	} else {
 		aa = aa[:length]
@@ -3525,12 +3525,12 @@ func (a *arrayString) unmarshal(r *buffer) error {
 	}
 
 	const typeSize = 2 // assume all strings are at least 2 bytes
-	if length*typeSize > r.len() {
+	if length*typeSize > int64(r.len()) {
 		return errorErrorf("invalid length %d", length)
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]string, length)
 	} else {
 		aa = aa[:length]
@@ -3548,7 +3548,7 @@ func (a *arrayString) unmarshal(r *buffer) error {
 				return err
 			}
 
-			buf, ok := r.next(int(size))
+			buf, ok := r.next(int64(size))
 			if !ok {
 				return errorNew("invalid length")
 			}
@@ -3561,7 +3561,7 @@ func (a *arrayString) unmarshal(r *buffer) error {
 			if !ok {
 				return errorNew("invalid length")
 			}
-			size := int(binary.BigEndian.Uint32(buf))
+			size := int64(binary.BigEndian.Uint32(buf))
 
 			buf, ok = r.next(size)
 			if !ok {
@@ -3616,12 +3616,12 @@ func (a *arraySymbol) unmarshal(r *buffer) error {
 	}
 
 	const typeSize = 2 // assume all symbols are at least 2 bytes
-	if length*typeSize > r.len() {
+	if length*typeSize > int64(r.len()) {
 		return errorErrorf("invalid length %d", length)
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]symbol, length)
 	} else {
 		aa = aa[:length]
@@ -3639,7 +3639,7 @@ func (a *arraySymbol) unmarshal(r *buffer) error {
 				return err
 			}
 
-			buf, ok := r.next(int(size))
+			buf, ok := r.next(int64(size))
 			if !ok {
 				return errorNew("invalid length")
 			}
@@ -3651,7 +3651,7 @@ func (a *arraySymbol) unmarshal(r *buffer) error {
 			if !ok {
 				return errorNew("invalid length")
 			}
-			size := int(binary.BigEndian.Uint32(buf))
+			size := int64(binary.BigEndian.Uint32(buf))
 
 			buf, ok = r.next(size)
 			if !ok {
@@ -3706,12 +3706,12 @@ func (a *arrayBinary) unmarshal(r *buffer) error {
 	}
 
 	const typeSize = 2 // assume all binary is at least 2 bytes
-	if length*typeSize > r.len() {
+	if length*typeSize > int64(r.len()) {
 		return errorErrorf("invalid length %d", length)
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([][]byte, length)
 	} else {
 		aa = aa[:length]
@@ -3729,7 +3729,7 @@ func (a *arrayBinary) unmarshal(r *buffer) error {
 				return err
 			}
 
-			buf, ok := r.next(int(size))
+			buf, ok := r.next(int64(size))
 			if !ok {
 				return errorErrorf("invalid length %d", length)
 			}
@@ -3743,7 +3743,7 @@ func (a *arrayBinary) unmarshal(r *buffer) error {
 			}
 			size := binary.BigEndian.Uint32(buf)
 
-			buf, ok = r.next(int(size))
+			buf, ok = r.next(int64(size))
 			if !ok {
 				return errorNew("invalid length")
 			}
@@ -3793,7 +3793,7 @@ func (a *arrayTimestamp) unmarshal(r *buffer) error {
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]time.Time, length)
 	} else {
 		aa = aa[:length]
@@ -3845,7 +3845,7 @@ func (a *arrayUUID) unmarshal(r *buffer) error {
 	}
 
 	aa := (*a)[:0]
-	if cap(aa) < length {
+	if int64(cap(aa)) < length {
 		aa = make([]UUID, length)
 	} else {
 		aa = aa[:length]
@@ -3902,12 +3902,12 @@ func (l *list) unmarshal(r *buffer) error {
 	}
 
 	// assume that all types are at least 1 byte
-	if length > r.len() {
+	if length > int64(r.len()) {
 		return errorErrorf("invalid length %d", length)
 	}
 
 	ll := *l
-	if cap(ll) < length {
+	if int64(cap(ll)) < length {
 		ll = make([]interface{}, length)
 	} else {
 		ll = ll[:length]

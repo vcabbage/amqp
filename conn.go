@@ -499,10 +499,10 @@ func (c *conn) connReader() {
 			return
 		}
 
-		bodySize := int(currentHeader.Size - frameHeaderSize)
+		bodySize := int64(currentHeader.Size - frameHeaderSize)
 
 		// the full frame has been received
-		if buf.len() < bodySize {
+		if int64(buf.len()) < bodySize {
 			continue
 		}
 		frameInProgress = false

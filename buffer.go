@@ -11,15 +11,15 @@ type buffer struct {
 	i int
 }
 
-func (b *buffer) next(n int) ([]byte, bool) {
+func (b *buffer) next(n int64) ([]byte, bool) {
 	if b.readCheck(n) {
 		buf := b.b[b.i:len(b.b)]
 		b.i = len(b.b)
 		return buf, false
 	}
 
-	buf := b.b[b.i : b.i+n]
-	b.i += n
+	buf := b.b[b.i : b.i+int(n)]
+	b.i += int(n)
 	return buf, true
 }
 
@@ -32,8 +32,8 @@ func (b *buffer) reset() {
 	b.i = 0
 }
 
-func (b *buffer) readCheck(n int) bool {
-	return b.i+n > len(b.b)
+func (b *buffer) readCheck(n int64) bool {
+	return int64(b.i)+n > int64(len(b.b))
 }
 
 func (b *buffer) readByte() (byte, error) {
