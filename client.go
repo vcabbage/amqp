@@ -194,7 +194,7 @@ func SessionMaxLinks(n int) SessionOption {
 		if n < 1 {
 			return errorNew("max sessions cannot be less than 1")
 		}
-		if n > 4294967296 {
+		if int64(n) > 4294967296 {
 			return errorNew("max sessions cannot be greater than 4294967296")
 		}
 		s.handleMax = uint32(n - 1)
