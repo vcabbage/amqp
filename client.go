@@ -370,7 +370,7 @@ func (s *Sender) send(ctx context.Context, msg *Message) (chan deliveryState, er
 	}
 
 	var (
-		maxPayloadSize = int(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
+		maxPayloadSize = int64(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
 		sndSettleMode  = s.link.senderSettleMode
 		rcvSettleMode  = s.link.receiverSettleMode
 		senderSettled  = sndSettleMode != nil && *sndSettleMode == ModeSettled
