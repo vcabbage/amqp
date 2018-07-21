@@ -1549,6 +1549,17 @@ func (r *Receiver) Receive(ctx context.Context) (*Message, error) {
 		}
 	}
 
+	// non-blocking receive to ensure buffered messages are
+	// delivered regardless of whether the link has been closed.
+	select {
+	case msg := <-r.link.messages:
+		msg.receiver = r
+		return &msg, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
 	// wait for the next message
 	select {
 	case msg := <-r.link.messages:

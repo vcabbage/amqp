@@ -206,6 +206,109 @@ func TestIntegrationRoundTrip(t *testing.T) {
 	}
 }
 
+func TestIntegrationRoundTrip_Buffered(t *testing.T) {
+	queueName, queuesClient, cleanup := newTestQueue(t, "receive")
+	defer cleanup()
+
+	tests := []struct {
+		label string
+		data  []string
+	}{
+		{
+			label: "10 buffer, small payload",
+			data: []string{
+				"2Hey there!",
+				"2Hi there!",
+				"2Ho there!",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.label, func(t *testing.T) {
+			checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+
+			// Create client
+			client := newSBClient(t, tt.label)
+			defer client.Close()
+
+			// Open a session
+			session, err := client.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Create a sender
+			sender, err := session.NewSender(
+				amqp.LinkTargetAddress(queueName),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			for i, data := range tt.data {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				err = sender.Send(ctx, amqp.NewMessage([]byte(data)))
+				cancel()
+				if err != nil {
+					t.Fatalf("Error after %d sends: %+v", i, err)
+				}
+			}
+			testClose(t, sender.Close)
+
+			// Create a receiver
+			receiver, err := session.NewReceiver(
+				amqp.LinkSourceAddress(queueName),
+				amqp.LinkCredit(uint32(len(tt.data))),   // enough credit to buffer all messages
+				amqp.LinkSenderSettle(amqp.ModeSettled), // don't require acknowledgment
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// wait for server to send messages
+			time.Sleep(1 * time.Second)
+
+			// close link
+			testClose(t, receiver.Close)
+
+			// read buffered messages
+			for i, data := range tt.data {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				msg, err := receiver.Receive(ctx)
+				cancel()
+				if err != nil {
+					t.Fatalf("Error after %d receives: %+v", i, err)
+				}
+
+				if !bytes.Equal([]byte(data), msg.GetData()) {
+					t.Errorf("Expected received message %d to be %v, but it was %v", i+1, string(data), string(msg.GetData()))
+				}
+			}
+
+			client.Close() // close before leak check
+
+			checkLeaks() // this is done here because queuesClient starts additional goroutines
+
+			// Wait for Azure to update stats
+			time.Sleep(1 * time.Second)
+
+			q, err := queuesClient.Get(context.Background(), resourceGroup, namespace, queueName)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if amc := *q.CountDetails.ActiveMessageCount; amc != 0 {
+				t.Fatalf("Expected ActiveMessageCount to be 0, but it was %d", amc)
+			}
+
+			if dead := *q.CountDetails.DeadLetterMessageCount; dead > 0 {
+				t.Fatalf("Expected DeadLetterMessageCount to be 0, but it was %d", dead)
+			}
+		})
+	}
+}
+
 func TestIntegrationReceiverModeSecond(t *testing.T) {
 	queueName, queuesClient, cleanup := newTestQueue(t, "receiver-mode-second")
 	defer cleanup()
