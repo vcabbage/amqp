@@ -774,7 +774,7 @@ type DetachError struct {
 	RemoteError *Error
 }
 
-func (e DetachError) Error() string {
+func (e *DetachError) Error() string {
 	return fmt.Sprintf("link detached, reason: %+v", e.RemoteError)
 }
 
@@ -1198,7 +1198,7 @@ func (l *link) muxHandleFrame(fr frameBody) error {
 		// set detach received and close link
 		l.detachReceived = true
 
-		return errorWrapf(DetachError{fr.Error}, "received detach frame")
+		return errorWrapf(&DetachError{fr.Error}, "received detach frame")
 
 	case *performDisposition:
 		debug(3, "RX: %s", fr)
