@@ -188,13 +188,22 @@ func TestMarshalUnmarshal(t *testing.T) {
 				}
 			}
 
+			// handle special case around nil type
+			if type_ == nil {
+				err = unmarshal(&buf, nil)
+				if err != nil {
+					t.Fatal(fmt.Sprintf("%+v", err))
+					return
+				}
+				return
+			}
+
 			newType := reflect.New(reflect.TypeOf(type_))
 			err = unmarshal(&buf, newType.Interface())
 			if err != nil {
 				t.Fatal(fmt.Sprintf("%+v", err))
 				return
 			}
-
 			cmpType := reflect.Indirect(newType).Interface()
 			if !testEqual(type_, cmpType) {
 				t.Errorf("Roundtrip produced different results:\n %s", testDiff(type_, cmpType))
@@ -537,6 +546,7 @@ var (
 	}
 
 	generalTypes = []interface{}{
+		nil,
 		UUID{1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16},
 		bool(true),
 		int8(math.MaxInt8),

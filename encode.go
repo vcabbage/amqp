@@ -42,6 +42,8 @@ type marshaler interface {
 
 func marshal(wr *buffer, i interface{}) error {
 	switch t := i.(type) {
+	case nil:
+		wr.writeByte(byte(typeCodeNull))
 	case bool:
 		if t {
 			wr.writeByte(byte(typeCodeBoolTrue))

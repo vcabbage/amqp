@@ -511,7 +511,7 @@ func readArrayHeader(r *buffer) (length int64, _ error) {
 		}
 		length = int64(binary.BigEndian.Uint32(buf[4:8]))
 	default:
-		return 0, errorErrorf("type code %#02x is not a recognized list type", type_)
+		return 0, errorErrorf("type code %#02x is not a recognized array type", type_)
 	}
 	return length, nil
 }
@@ -568,7 +568,7 @@ func readBinary(r *buffer) ([]byte, error) {
 		}
 		length = int64(binary.BigEndian.Uint32(buf))
 	default:
-		return nil, errorErrorf("type code %#02x is not a recognized string type", type_)
+		return nil, errorErrorf("type code %#02x is not a recognized binary type", type_)
 	}
 
 	buf, ok := r.next(length)
@@ -579,6 +579,10 @@ func readBinary(r *buffer) ([]byte, error) {
 }
 
 func readAny(r *buffer) (interface{}, error) {
+	if tryReadNull(r) {
+		return nil, nil
+	}
+
 	type_, err := r.peekType()
 	if err != nil {
 		return nil, errorNew("invalid length")
