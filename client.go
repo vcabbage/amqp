@@ -1307,13 +1307,24 @@ func (l *link) muxDetach() {
 		Closed: true,
 		Error:  detachError,
 	}
-	select {
-	case l.session.tx <- fr:
-	case <-l.session.done:
-		if l.err == nil {
-			l.err = l.session.err
+
+Loop:
+	for {
+		select {
+		case l.session.tx <- fr:
+			// after sending the detach frame, break the read loop
+			break Loop
+		case fr := <-l.rx:
+			// discard incoming frames to avoid blocking session.mux
+			if fr, ok := fr.(*performDetach); ok && fr.Closed {
+				l.detachReceived = true
+			}
+		case <-l.session.done:
+			if l.err == nil {
+				l.err = l.session.err
+			}
+			return
 		}
-		return
 	}
 
 	// don't wait for remote to detach when already
