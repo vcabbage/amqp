@@ -145,6 +145,16 @@ func ConnProperty(key, value string) ConnOption {
 	}
 }
 
+// ConnContainerID sets the container-id to use when opening the connection.
+//
+// A container ID will be randomly generated if this option is not used.
+func ConnContainerID(id string) ConnOption {
+	return func(c *conn) error {
+		c.containerID = id
+		return nil
+	}
+}
+
 // conn is an AMQP connection.
 type conn struct {
 	net            net.Conn      // underlying connection
@@ -165,6 +175,7 @@ type conn struct {
 	hostname     string                 // hostname of remote server (set explicitly or parsed from URL)
 	idleTimeout  time.Duration          // maximum period between receiving frames
 	properties   map[symbol]interface{} // additional properties sent upon connection open
+	containerID  string                 // set explicitly or randomly generated
 
 	// peer settings
 	peerIdleTimeout  time.Duration // maximum period between sending frames
@@ -206,6 +217,7 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 		peerMaxFrameSize: DefaultMaxFrameSize,
 		channelMax:       DefaultMaxSessions - 1, // -1 because channel-max starts at zero
 		idleTimeout:      DefaultIdleTimeout,
+		containerID:      randString(40),
 		done:             make(chan struct{}),
 		connErr:          make(chan error, 2), // buffered to ensure connReader/Writer won't leak
 		closeMux:         make(chan struct{}),
@@ -763,7 +775,7 @@ func (c *conn) openAMQP() stateFunc {
 	c.err = c.writeFrame(frame{
 		type_: frameTypeAMQP,
 		body: &performOpen{
-			ContainerID:  randString(40),
+			ContainerID:  c.containerID,
 			Hostname:     c.hostname,
 			MaxFrameSize: c.maxFrameSize,
 			ChannelMax:   c.channelMax,
