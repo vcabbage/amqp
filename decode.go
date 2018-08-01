@@ -579,13 +579,13 @@ func readBinary(r *buffer) ([]byte, error) {
 }
 
 func readAny(r *buffer) (interface{}, error) {
+	if tryReadNull(r) {
+		return nil, nil
+	}
+
 	type_, err := r.peekType()
 	if err != nil {
 		return nil, errorNew("invalid length")
-	}
-
-	if tryReadNull(r) {
-		return nil, nil
 	}
 
 	switch type_ {

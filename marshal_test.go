@@ -188,23 +188,25 @@ func TestMarshalUnmarshal(t *testing.T) {
 				}
 			}
 
+			// handle special case around nil type
 			if type_ == nil {
 				err = unmarshal(&buf, nil)
 				if err != nil {
 					t.Fatal(fmt.Sprintf("%+v", err))
 					return
 				}
-			} else {
-				newType := reflect.New(reflect.TypeOf(type_))
-				err = unmarshal(&buf, newType.Interface())
-				if err != nil {
-					t.Fatal(fmt.Sprintf("%+v", err))
-					return
-				}
-				cmpType := reflect.Indirect(newType).Interface()
-				if !testEqual(type_, cmpType) {
-					t.Errorf("Roundtrip produced different results:\n %s", testDiff(type_, cmpType))
-				}
+				return
+			}
+
+			newType := reflect.New(reflect.TypeOf(type_))
+			err = unmarshal(&buf, newType.Interface())
+			if err != nil {
+				t.Fatal(fmt.Sprintf("%+v", err))
+				return
+			}
+			cmpType := reflect.Indirect(newType).Interface()
+			if !testEqual(type_, cmpType) {
+				t.Errorf("Roundtrip produced different results:\n %s", testDiff(type_, cmpType))
 			}
 		})
 	}
