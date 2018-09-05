@@ -163,6 +163,16 @@ func TestIntegrationRoundTrip(t *testing.T) {
 							return
 						}
 
+						if msg.DeliveryTag == nil {
+							receiveErr = fmt.Errorf("Error after %d receives: nil deliverytag received", i, err)
+							return
+						}
+
+						if msg.DeliveryTag != nil && len(msg.DeliveryTag) != 16 {
+							receiveErr = fmt.Errorf("Error after %d receives: deliverytag should be 16 length byte array representing a UUID. Got: %v", i, err, len(msg.DeliveryTag))
+							return
+						}
+
 						// Simulate processing after receiving. (This has revealed flow control bugs.)
 						time.Sleep(10 * time.Millisecond)
 

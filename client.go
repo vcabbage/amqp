@@ -1086,6 +1086,10 @@ func (l *link) muxReceive(fr performTransfer) error {
 		if fr.MessageFormat != nil {
 			l.msg.Format = *fr.MessageFormat
 		}
+
+		if fr.DeliveryTag != nil {
+			l.msg.DeliveryTag = fr.DeliveryTag
+		}
 	}
 
 	// ensure maxMessageSize will not be exceeded

@@ -1644,6 +1644,9 @@ type Message struct {
 	// given version of a format is forwards compatible with all higher versions.
 	Format uint32
 
+	// The DeliveryTag can be up to 32 octets of binary data
+	DeliveryTag []byte
+
 	// The header section carries standard delivery details about the transfer
 	// of a message through the AMQP network.
 	Header *MessageHeader
