@@ -164,12 +164,12 @@ func TestIntegrationRoundTrip(t *testing.T) {
 						}
 
 						if msg.DeliveryTag == nil {
-							receiveErr = fmt.Errorf("Error after %d receives: nil deliverytag received", i, err)
+							receiveErr = fmt.Errorf("Error after %d receives: nil deliverytag received", i)
 							return
 						}
 
 						if msg.DeliveryTag != nil && len(msg.DeliveryTag) != 16 {
-							receiveErr = fmt.Errorf("Error after %d receives: deliverytag should be 16 length byte array representing a UUID. Got: %v", i, err, len(msg.DeliveryTag))
+							receiveErr = fmt.Errorf("Error after %d receives: deliverytag should be 16 length byte array representing a UUID. Got: %v", i, len(msg.DeliveryTag))
 							return
 						}
 
