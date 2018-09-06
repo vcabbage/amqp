@@ -1635,6 +1635,8 @@ func (c *performClose) String() string {
 	return fmt.Sprintf("*performClose{Error: %s}", c.Error)
 }
 
+const maxDeliveryTagLength = 32
+
 // Message is an AMQP message.
 type Message struct {
 	// Message format code.
