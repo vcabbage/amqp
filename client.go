@@ -381,14 +381,12 @@ func (s *Sender) send(ctx context.Context, msg *Message) (chan deliveryState, er
 		deliveryID     = atomic.AddUint32(&s.link.session.nextDeliveryID, 1)
 	)
 
-	var deliveryTag []byte
-	if msg.DeliveryTag == nil {
+	deliveryTag := msg.DeliveryTag
+	if len(deliveryTag) == 0 {
 		// use uint64 encoded as []byte as deliveryTag
 		deliveryTag = make([]byte, 8)
 		binary.BigEndian.PutUint64(deliveryTag, s.nextDeliveryTag)
 		s.nextDeliveryTag++
-	} else {
-		deliveryTag = msg.DeliveryTag
 	}
 
 	fr := performTransfer{
