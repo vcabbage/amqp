@@ -128,7 +128,7 @@ func TestIntegrationRoundTrip(t *testing.T) {
 					defer testClose(t, sender.Close)
 
 					for i, data := range tt.data {
-						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 						err = sender.Send(ctx, amqp.NewMessage([]byte(data)))
 						cancel()
 						if err != nil {
@@ -160,6 +160,16 @@ func TestIntegrationRoundTrip(t *testing.T) {
 						cancel()
 						if err != nil {
 							receiveErr = fmt.Errorf("Error after %d receives: %+v", i, err)
+							return
+						}
+
+						if msg.DeliveryTag == nil {
+							receiveErr = fmt.Errorf("Error after %d receives: nil deliverytag received", i)
+							return
+						}
+
+						if msg.DeliveryTag != nil && len(msg.DeliveryTag) != 16 {
+							receiveErr = fmt.Errorf("Error after %d receives: deliverytag should be 16 length byte array representing a UUID. Got: %v", i, len(msg.DeliveryTag))
 							return
 						}
 
@@ -449,8 +459,9 @@ func TestIntegrationSend(t *testing.T) {
 	defer cleanup()
 
 	tests := []struct {
-		label string
-		data  []string
+		label       string
+		data        []string
+		deliveryTag []byte
 	}{
 		{
 			label: "3 send, small payload",
@@ -459,6 +470,14 @@ func TestIntegrationSend(t *testing.T) {
 				"2Hi there!",
 				"2Ho there!",
 			},
+			deliveryTag: nil,
+		},
+		{
+			label: "1 send, deliverytagset",
+			data: []string{
+				"2Hey there - with tag!",
+			},
+			deliveryTag: []byte("37c4acb3"),
 		},
 	}
 
@@ -488,7 +507,11 @@ func TestIntegrationSend(t *testing.T) {
 
 			for i, data := range tt.data {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				err = sender.Send(ctx, amqp.NewMessage([]byte(data)))
+				msg := amqp.NewMessage([]byte(data))
+				if tt.deliveryTag != nil {
+					msg.DeliveryTag = tt.deliveryTag
+				}
+				err = sender.Send(ctx, msg)
 				cancel()
 				if err != nil {
 					t.Fatalf("Error after %d sends: %+v", i, err)
@@ -501,7 +524,7 @@ func TestIntegrationSend(t *testing.T) {
 			checkLeaks() // this is done here because queuesClient starts additional goroutines
 
 			// Wait for Azure to update stats
-			time.Sleep(1 * time.Second)
+			time.Sleep(5 * time.Second)
 
 			q, err := queuesClient.Get(context.Background(), resourceGroup, namespace, queueName)
 			if err != nil {

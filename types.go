@@ -1635,6 +1635,8 @@ func (c *performClose) String() string {
 	return fmt.Sprintf("*performClose{Error: %s}", c.Error)
 }
 
+const maxDeliveryTagLength = 32
+
 // Message is an AMQP message.
 type Message struct {
 	// Message format code.
@@ -1643,6 +1645,9 @@ type Message struct {
 	// format. The lowest octet indicates the version of said message format. Any
 	// given version of a format is forwards compatible with all higher versions.
 	Format uint32
+
+	// The DeliveryTag can be up to 32 octets of binary data.
+	DeliveryTag []byte
 
 	// The header section carries standard delivery details about the transfer
 	// of a message through the AMQP network.

@@ -356,6 +356,10 @@ func (s *Sender) Send(ctx context.Context, msg *Message) error {
 // send is separated from Send so that the mutex unlock can be deferred without
 // locking the transfer confirmation that happens in Send.
 func (s *Sender) send(ctx context.Context, msg *Message) (chan deliveryState, error) {
+	if len(msg.DeliveryTag) > maxDeliveryTagLength {
+		return nil, errorErrorf("delivery tag is over the allowed %v bytes, len: %v", maxDeliveryTagLength, len(msg.DeliveryTag))
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -377,10 +381,13 @@ func (s *Sender) send(ctx context.Context, msg *Message) (chan deliveryState, er
 		deliveryID     = atomic.AddUint32(&s.link.session.nextDeliveryID, 1)
 	)
 
-	// use uint64 encoded as []byte as deliveryTag
-	deliveryTag := make([]byte, 8)
-	binary.BigEndian.PutUint64(deliveryTag, s.nextDeliveryTag)
-	s.nextDeliveryTag++
+	deliveryTag := msg.DeliveryTag
+	if len(deliveryTag) == 0 {
+		// use uint64 encoded as []byte as deliveryTag
+		deliveryTag = make([]byte, 8)
+		binary.BigEndian.PutUint64(deliveryTag, s.nextDeliveryTag)
+		s.nextDeliveryTag++
+	}
 
 	fr := performTransfer{
 		Handle:        s.link.handle,
@@ -1086,6 +1093,8 @@ func (l *link) muxReceive(fr performTransfer) error {
 		if fr.MessageFormat != nil {
 			l.msg.Format = *fr.MessageFormat
 		}
+
+		l.msg.DeliveryTag = fr.DeliveryTag
 	}
 
 	// ensure maxMessageSize will not be exceeded
