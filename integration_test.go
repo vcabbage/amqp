@@ -146,7 +146,6 @@ func TestIntegrationRoundTrip(t *testing.T) {
 					receiver, err := session.NewReceiver(
 						amqp.LinkSourceAddress(queueName),
 						amqp.LinkCredit(10),
-						amqp.LinkBatching(false),
 					)
 					if err != nil {
 						receiveErr = err
@@ -392,7 +391,6 @@ func TestIntegrationReceiverModeSecond(t *testing.T) {
 					receiver, err := session.NewReceiver(
 						amqp.LinkSourceAddress(queueName),
 						amqp.LinkReceiverSettle(amqp.ModeSecond),
-						amqp.LinkBatching(false),
 					)
 					if err != nil {
 						receiveErr = err
@@ -955,7 +953,6 @@ func createEventHubReceivers(t testing.TB, hubName string, session *amqp.Session
 			amqp.LinkSourceAddress(hubName+"/ConsumerGroups/$default/Partitions/"+strconv.Itoa(i)),
 			amqp.LinkSelectorFilter("amqp.annotation.x-opt-offset > '@latest'"),
 			amqp.LinkCredit(10),
-			amqp.LinkBatching(false),
 		)
 		if err != nil {
 			t.Fatalf("Error creating receiver: %v", err)
