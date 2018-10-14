@@ -87,6 +87,7 @@ func main() {
 		receiver, err := session.NewReceiver(
 			amqp.LinkSourceAddress("/queue-name"),
 			amqp.LinkCredit(10),
+			amqp.LinkBatching(false),
 		)
 		if err != nil {
 			log.Fatal("Creating receiver link:", err)
