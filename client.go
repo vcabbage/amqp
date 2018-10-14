@@ -788,7 +788,7 @@ func (e *DetachError) Error() string {
 // Default link options
 const (
 	DefaultLinkCredit      = 1
-	DefaultLinkBatching    = true
+	DefaultLinkBatching    = false
 	DefaultLinkBatchMaxAge = 5 * time.Second
 )
 
