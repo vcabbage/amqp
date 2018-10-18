@@ -6,6 +6,8 @@ import (
 )
 
 func TestLinkOptions(t *testing.T) {
+	sessionID := "123"
+
 	tests := []struct {
 		label string
 		opts  []LinkOption
@@ -24,7 +26,7 @@ func TestLinkOptions(t *testing.T) {
 				LinkProperty("x-opt-test2", "test2"),
 				LinkProperty("x-opt-test1", "test3"),
 				LinkPropertyInt64("x-opt-test4", 1),
-				LinkSessionFilter("123"),
+				LinkSessionFilter(&sessionID),
 			},
 
 			wantSource: &source{
@@ -35,7 +37,7 @@ func TestLinkOptions(t *testing.T) {
 					},
 					"com.microsoft:session-filter" : {
 						descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x00, 0x13, 0x70, 0x00, 0x00, 0x0C}),
-						value:      "123",
+						value:      sessionID,
 					},
 				},
 			},
@@ -43,6 +45,21 @@ func TestLinkOptions(t *testing.T) {
 				"x-opt-test1": "test3",
 				"x-opt-test2": "test2",
 				"x-opt-test4": int64(1),
+			},
+		},
+		{
+			label: "more-link-filters",
+			opts: []LinkOption{
+				LinkSessionFilter(nil),
+			},
+
+			wantSource: &source{
+				Filter: map[symbol]*describedType{
+					"com.microsoft:session-filter" : {
+						descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x00, 0x13, 0x70, 0x00, 0x00, 0x0C}),
+						value: nil,
+					},
+				},
 			},
 		},
 	}
