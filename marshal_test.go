@@ -270,8 +270,8 @@ var (
 			ReceiverSettleMode: rcvSettle(ModeSecond),
 			Source: &source{
 				Address:      "fooAddr",
-				Durable:      2,
-				ExpiryPolicy: "link-detach",
+				Durable:      DurabilityUnsettledState,
+				ExpiryPolicy: ExpiryLinkDetach,
 				Timeout:      635,
 				Dynamic:      true,
 				DynamicNodeProperties: map[symbol]interface{}{
@@ -289,8 +289,8 @@ var (
 			},
 			Target: &target{
 				Address:      "fooAddr",
-				Durable:      2,
-				ExpiryPolicy: "link-detach",
+				Durable:      DurabilityUnsettledState,
+				ExpiryPolicy: ExpiryLinkDetach,
 				Timeout:      635,
 				Dynamic:      true,
 				DynamicNodeProperties: map[symbol]interface{}{
@@ -316,8 +316,8 @@ var (
 		},
 		&source{
 			Address:      "fooAddr",
-			Durable:      2,
-			ExpiryPolicy: "link-detach",
+			Durable:      DurabilityUnsettledState,
+			ExpiryPolicy: ExpiryLinkDetach,
 			Timeout:      635,
 			Dynamic:      true,
 			DynamicNodeProperties: map[symbol]interface{}{
@@ -335,8 +335,8 @@ var (
 		},
 		&target{
 			Address:      "fooAddr",
-			Durable:      2,
-			ExpiryPolicy: "link-detach",
+			Durable:      DurabilityUnsettledState,
+			ExpiryPolicy: ExpiryLinkDetach,
 			Timeout:      635,
 			Dynamic:      true,
 			DynamicNodeProperties: map[symbol]interface{}{
