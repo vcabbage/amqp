@@ -1556,6 +1556,43 @@ func LinkMaxMessageSize(size uint64) LinkOption {
 	}
 }
 
+// LinkSourceDurability sets the source durability policy.
+//
+// Default: DurabilityNone.
+func LinkSourceDurability(d Durability) LinkOption {
+	return func(l *link) error {
+		if d > DurabilityUnsettledState {
+			return errorErrorf("invalid Durability %d", d)
+		}
+
+		if l.source == nil {
+			l.source = new(source)
+		}
+		l.source.Durable = d
+
+		return nil
+	}
+}
+
+// LinkSourceExpiryPolicy sets the link expiration policy.
+//
+// Default: ExpirySessionEnd.
+func LinkSourceExpiryPolicy(p ExpiryPolicy) LinkOption {
+	return func(l *link) error {
+		err := p.validate()
+		if err != nil {
+			return err
+		}
+
+		if l.source == nil {
+			l.source = new(source)
+		}
+		l.source.ExpiryPolicy = p
+
+		return nil
+	}
+}
+
 // Receiver receives messages on a single AMQP link.
 type Receiver struct {
 	link         *link                   // underlying link

@@ -656,7 +656,7 @@ type source struct {
 	// 0: none
 	// 1: configuration
 	// 2: unsettled-state
-	Durable uint32
+	Durable Durability
 
 	// the expiry policy of the source
 	//
@@ -666,7 +666,7 @@ type source struct {
 	// connection-close: The expiry timer starts when most recently associated connection
 	//                   is closed.
 	// never: The terminus never expires.
-	ExpiryPolicy symbol
+	ExpiryPolicy ExpiryPolicy
 
 	// duration that an expiring source will be retained
 	//
@@ -754,8 +754,8 @@ type source struct {
 func (s *source) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeSource, []marshalField{
 		{value: &s.Address, omit: s.Address == ""},
-		{value: &s.Durable, omit: s.Durable == 0},
-		{value: &s.ExpiryPolicy, omit: s.ExpiryPolicy == ""},
+		{value: &s.Durable, omit: s.Durable == DurabilityNone},
+		{value: &s.ExpiryPolicy, omit: s.ExpiryPolicy == "" || s.ExpiryPolicy == ExpirySessionEnd},
 		{value: &s.Timeout, omit: s.Timeout == 0},
 		{value: &s.Dynamic, omit: !s.Dynamic},
 		{value: s.DynamicNodeProperties, omit: len(s.DynamicNodeProperties) == 0},
@@ -771,7 +771,7 @@ func (s *source) unmarshal(r *buffer) error {
 	return unmarshalComposite(r, typeCodeSource, []unmarshalField{
 		{field: &s.Address},
 		{field: &s.Durable},
-		{field: &s.ExpiryPolicy, handleNull: func() error { s.ExpiryPolicy = "session-end"; return nil }},
+		{field: &s.ExpiryPolicy, handleNull: func() error { s.ExpiryPolicy = ExpirySessionEnd; return nil }},
 		{field: &s.Timeout},
 		{field: &s.Dynamic},
 		{field: &s.DynamicNodeProperties},
@@ -836,7 +836,7 @@ type target struct {
 	// 0: none
 	// 1: configuration
 	// 2: unsettled-state
-	Durable uint32
+	Durable Durability
 
 	// the expiry policy of the target
 	//
@@ -846,7 +846,7 @@ type target struct {
 	// connection-close: The expiry timer starts when most recently associated connection
 	//                   is closed.
 	// never: The terminus never expires.
-	ExpiryPolicy symbol
+	ExpiryPolicy ExpiryPolicy
 
 	// duration that an expiring target will be retained
 	//
@@ -901,8 +901,8 @@ type target struct {
 func (t *target) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeTarget, []marshalField{
 		{value: &t.Address, omit: t.Address == ""},
-		{value: &t.Durable, omit: t.Durable == 0},
-		{value: &t.ExpiryPolicy, omit: t.ExpiryPolicy == ""},
+		{value: &t.Durable, omit: t.Durable == DurabilityNone},
+		{value: &t.ExpiryPolicy, omit: t.ExpiryPolicy == "" || t.ExpiryPolicy == ExpirySessionEnd},
 		{value: &t.Timeout, omit: t.Timeout == 0},
 		{value: &t.Dynamic, omit: !t.Dynamic},
 		{value: t.DynamicNodeProperties, omit: len(t.DynamicNodeProperties) == 0},
@@ -914,7 +914,7 @@ func (t *target) unmarshal(r *buffer) error {
 	return unmarshalComposite(r, typeCodeTarget, []unmarshalField{
 		{field: &t.Address},
 		{field: &t.Durable},
-		{field: &t.ExpiryPolicy, handleNull: func() error { t.ExpiryPolicy = "session-end"; return nil }},
+		{field: &t.ExpiryPolicy, handleNull: func() error { t.ExpiryPolicy = ExpirySessionEnd; return nil }},
 		{field: &t.Timeout},
 		{field: &t.Dynamic},
 		{field: &t.DynamicNodeProperties},
@@ -2735,6 +2735,106 @@ func (m *ReceiverSettleMode) unmarshal(r *buffer) error {
 	n, err := readUbyte(r)
 	*m = ReceiverSettleMode(n)
 	return err
+}
+
+// Durability Policies
+const (
+	// No terminus state is retained durably.
+	DurabilityNone Durability = 0
+
+	// Only the existence and configuration of the terminus is
+	// retained durably.
+	DurabilityConfiguration Durability = 1
+
+	// In addition to the existence and configuration of the
+	// terminus, the unsettled state for durable messages is
+	// retained durably.
+	DurabilityUnsettledState Durability = 2
+)
+
+// Durability specifies the durability of a link.
+type Durability uint32
+
+func (d *Durability) String() string {
+	if d == nil {
+		return "<nil>"
+	}
+
+	switch *d {
+	case DurabilityNone:
+		return "none"
+	case DurabilityConfiguration:
+		return "configuration"
+	case DurabilityUnsettledState:
+		return "unsettled-state"
+	default:
+		return fmt.Sprintf("unknown durability %d", *d)
+	}
+}
+
+func (d Durability) marshal(wr *buffer) error {
+	return marshal(wr, uint32(d))
+}
+
+func (d *Durability) unmarshal(r *buffer) error {
+	return unmarshal(r, (*uint32)(d))
+}
+
+// Expiry Policies
+const (
+	// The expiry timer starts when terminus is detached.
+	ExpiryLinkDetach ExpiryPolicy = "link-detach"
+
+	// The expiry timer starts when the most recently
+	// associated session is ended.
+	ExpirySessionEnd ExpiryPolicy = "session-end"
+
+	// The expiry timer starts when most recently associated
+	// connection is closed.
+	ExpiryConnectionClose ExpiryPolicy = "connection-close"
+
+	// The terminus never expires.
+	ExpiryNever ExpiryPolicy = "never"
+)
+
+// ExpiryPolicy specifies when the expiry timer of a terminus
+// starts counting down from the timeout value.
+//
+// If the link is subsequently re-attached before the terminus is expired,
+// then the count down is aborted. If the conditions for the
+// terminus-expiry-policy are subsequently re-met, the expiry timer restarts
+// from its originally configured timeout value.
+type ExpiryPolicy symbol
+
+func (e ExpiryPolicy) validate() error {
+	switch e {
+	case ExpiryLinkDetach,
+		ExpirySessionEnd,
+		ExpiryConnectionClose,
+		ExpiryNever:
+		return nil
+	default:
+		return errorErrorf("unknown expiry-policy %q", e)
+	}
+}
+
+func (e ExpiryPolicy) marshal(wr *buffer) error {
+	return symbol(e).marshal(wr)
+}
+
+func (e *ExpiryPolicy) unmarshal(r *buffer) error {
+	err := unmarshal(r, (*symbol)(e))
+	if err != nil {
+		return err
+	}
+	return e.validate()
+}
+
+func (e *ExpiryPolicy) String() string {
+	if e == nil {
+		return "<nil>"
+	}
+	return string(*e)
 }
 
 type describedType struct {
