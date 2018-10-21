@@ -62,6 +62,15 @@ func TestLinkOptions(t *testing.T) {
 				},
 			},
 		},
+		{
+			label: "link-source-capabilities",
+			opts: []LinkOption{
+				LinkSourceCapabilities("cap1", "cap2", "cap3"),
+			},
+			wantSource: &source{
+				Capabilities: []symbol{"cap1", "cap2", "cap3"},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -79,5 +88,21 @@ func TestLinkOptions(t *testing.T) {
 				t.Errorf("Link properties don't match expected:\n %s", testDiff(got.properties, tt.wantProperties))
 			}
 		})
+	}
+}
+
+func TestSourceName(t *testing.T) {
+	expectedSourceName := "source-name"
+	opts := []LinkOption{
+		LinkName(expectedSourceName),
+	}
+
+	got, err := newLink(nil, nil, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got.name != expectedSourceName {
+		t.Errorf("Link Source Name does not match expected: %v got: %v", expectedSourceName, got.name)
 	}
 }
