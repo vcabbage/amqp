@@ -518,6 +518,13 @@ func (s *Session) mux(remoteBegin *performBegin) {
 
 		// handle allocation request
 		case l := <-s.allocateHandle:
+			// Check if link name already exists, if so then an error should be returned
+			if linksByName[l.name] != nil {
+				l.err = errorErrorf("link with name '%v' already exists", l.name)
+				l.rx <- nil
+				continue
+			}
+
 			next, ok := handles.next()
 			if !ok {
 				l.err = errorErrorf("reached session handle max (%d)", s.handleMax)
@@ -533,6 +540,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		case l := <-s.deallocateHandle:
 			delete(links, l.remoteHandle)
 			delete(deliveryIDByHandle, l.handle)
+			delete(linksByName, l.name)
 			handles.remove(l.handle)
 			close(l.rx) // close channel to indicate deallocation
 
@@ -646,7 +654,6 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				if !linkOk {
 					break
 				}
-				delete(linksByName, body.Name) // name no longer needed
 
 				link.remoteHandle = body.Handle
 				links[link.remoteHandle] = link
@@ -1404,6 +1411,36 @@ func linkProperty(key string, value interface{}) LinkOption {
 			l.properties = make(map[symbol]interface{})
 		}
 		l.properties[symbol(key)] = value
+		return nil
+	}
+}
+
+// LinkName sets the name of the link.
+//
+// The link names must be unique per-connection.
+//
+// Default: randomly generated.
+func LinkName(name string) LinkOption {
+	return func(l *link) error {
+		l.name = name
+		return nil
+	}
+}
+
+// LinkSourceCapabilities sets the source capabilities.
+func LinkSourceCapabilities(capabilities ...string) LinkOption {
+	return func(l *link) error {
+		if l.source == nil {
+			l.source = new(source)
+		}
+
+		// Convert string to symbol
+		symbolCapabilities := make([]symbol, len(capabilities))
+		for i, v := range capabilities {
+			symbolCapabilities[i] = symbol(v)
+		}
+
+		l.source.Capabilities = append(l.source.Capabilities, symbolCapabilities...)
 		return nil
 	}
 }
