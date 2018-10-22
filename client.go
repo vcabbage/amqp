@@ -1541,22 +1541,37 @@ func LinkReceiverSettle(mode ReceiverSettleMode) LinkOption {
 	}
 }
 
-// LinkSessionFilter sets a session filter (com.microsoft:session-filter) on the link source.
-// This is used in Azure Service Bus to filter messages by session ID on a receiving link.
-func LinkSessionFilter(sessionID *string) LinkOption {
-	// <descriptor name="com.microsoft:session-filter" code="00000013:7000000C"/>
-	return linkSourceFilter("com.microsoft:session-filter", uint64(0x00000137000000C), sessionID)
-}
-
 // LinkSelectorFilter sets a selector filter (apache.org:selector-filter:string) on the link source.
 func LinkSelectorFilter(filter string) LinkOption {
 	// <descriptor name="apache.org:selector-filter:string" code="0x0000468C:0x00000004"/>
-	return linkSourceFilter("apache.org:selector-filter:string", uint64(0x0000468C00000004), &filter)
+	return LinkSourceFilter("apache.org:selector-filter:string", 0x0000468C00000004, filter)
 }
 
-// linkSourceFilter sets a filter on the link source.
-func linkSourceFilter(name string, code uint64, value *string) LinkOption {
-	nameSym := symbol(name)
+// LinkSourceFilter is an advanced API for setting non-standard source filters.
+// Please file an issue or open a PR if a standard filter is missing from this
+// library.
+//
+// The name is the key for the filter map. It will be encoded as an AMQP symbol type.
+//
+// The code is the descriptor of the described type value. The domain-id and descriptor-id
+// should be concatenated together. If 0 is passed as the code, the name will be used as
+// the descriptor.
+//
+// The value is the value of the descriped types. Acceptable types for value are specific
+// to the filter.
+//
+// Example:
+//
+// The standard selector-filter is defined as:
+//  <descriptor name="apache.org:selector-filter:string" code="0x0000468C:0x00000004"/>
+// In this case the name is "apache.org:selector-filter:string" and the code is
+// 0x0000468C00000004.
+//  LinkSourceFilter("apache.org:selector-filter:string", 0x0000468C00000004, exampleValue)
+//
+// References:
+//  http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-messaging-v1.0-os.html#type-filter-set
+//  http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-types-v1.0-os.html#section-descriptor-values
+func LinkSourceFilter(name string, code uint64, value interface{}) LinkOption {
 	return func(l *link) error {
 		if l.source == nil {
 			l.source = new(source)
@@ -1565,17 +1580,17 @@ func linkSourceFilter(name string, code uint64, value *string) LinkOption {
 			l.source.Filter = make(map[symbol]*describedType)
 		}
 
-		describedValue := &describedType{
-			descriptor: code,
-		}
-
-		if value == nil {
-			describedValue.value = nil
+		var descriptor interface{}
+		if code != 0 {
+			descriptor = code
 		} else {
-			describedValue.value = *value
+			descriptor = symbol(name)
 		}
 
-		l.source.Filter[nameSym] = describedValue
+		l.source.Filter[symbol(name)] = &describedType{
+			descriptor: descriptor,
+			value:      value,
+		}
 		return nil
 	}
 }

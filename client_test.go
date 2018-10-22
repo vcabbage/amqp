@@ -6,8 +6,6 @@ import (
 )
 
 func TestLinkOptions(t *testing.T) {
-	sessionID := "123"
-
 	tests := []struct {
 		label string
 		opts  []LinkOption
@@ -26,7 +24,7 @@ func TestLinkOptions(t *testing.T) {
 				LinkProperty("x-opt-test2", "test2"),
 				LinkProperty("x-opt-test1", "test3"),
 				LinkPropertyInt64("x-opt-test4", 1),
-				LinkSessionFilter(&sessionID),
+				LinkSourceFilter("com.microsoft:session-filter", 0x00000137000000C, "123"),
 			},
 
 			wantSource: &source{
@@ -35,9 +33,9 @@ func TestLinkOptions(t *testing.T) {
 						descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x46, 0x8C, 0x00, 0x00, 0x00, 0x04}),
 						value:      "amqp.annotation.x-opt-offset > '100'",
 					},
-					"com.microsoft:session-filter" : {
+					"com.microsoft:session-filter": {
 						descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x00, 0x13, 0x70, 0x00, 0x00, 0x0C}),
-						value:      sessionID,
+						value:      "123",
 					},
 				},
 			},
@@ -50,14 +48,14 @@ func TestLinkOptions(t *testing.T) {
 		{
 			label: "more-link-filters",
 			opts: []LinkOption{
-				LinkSessionFilter(nil),
+				LinkSourceFilter("com.microsoft:session-filter", 0x00000137000000C, nil),
 			},
 
 			wantSource: &source{
 				Filter: map[symbol]*describedType{
-					"com.microsoft:session-filter" : {
+					"com.microsoft:session-filter": {
 						descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x00, 0x13, 0x70, 0x00, 0x00, 0x0C}),
-						value: nil,
+						value:      nil,
 					},
 				},
 			},
