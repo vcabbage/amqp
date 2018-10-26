@@ -1802,7 +1802,7 @@ func (m *Message) Modify(deliveryFailed, undeliverableHere bool, messageAnnotati
 	})
 }
 
-// MarshalBinary encodes the message into binary form
+// MarshalBinary encodes the message into binary form.
 func (m *Message) MarshalBinary() ([]byte, error) {
 	buf := new(buffer)
 	err := m.marshal(buf)
@@ -1877,6 +1877,14 @@ func (m *Message) marshal(wr *buffer) error {
 	}
 
 	return nil
+}
+
+// UnmarshalBinary decodes the message from binary form.
+func (m *Message) UnmarshalBinary(data []byte) error {
+	buf := &buffer{
+		b: data,
+	}
+	return m.unmarshal(buf)
 }
 
 func (m *Message) unmarshal(r *buffer) error {
