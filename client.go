@@ -274,14 +274,28 @@ func (s *Session) txFrame(p frameBody, done chan deliveryState) error {
 	})
 }
 
-// randBytes returns a base64 encoded string of n bytes.
-//
-// A new random source is created to avoid any issues with seeding
+// lockedRand provides a rand source that is safe for concurrent use.
+type lockedRand struct {
+	mu  sync.Mutex
+	src *rand.Rand
+}
+
+func (r *lockedRand) Read(p []byte) (int, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.src.Read(p)
+}
+
+// package scoped rand source to avoid any issues with seeding
 // of the global source.
+var pkgRand = &lockedRand{
+	src: rand.New(rand.NewSource(time.Now().UnixNano())),
+}
+
+// randBytes returns a base64 encoded string of n bytes.
 func randString(n int) string {
-	localRand := rand.New(rand.NewSource(time.Now().UnixNano()))
 	b := make([]byte, n)
-	localRand.Read(b)
+	pkgRand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
 }
 
