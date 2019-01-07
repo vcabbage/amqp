@@ -13,9 +13,7 @@ pack.ag/amqp is an AMQP 1.0 client implementation for Go.
 the most common AMQP protocols in use today. A list of AMQP 1.0 brokers and other
 AMQP 1.0 resources can be found at [github.com/xinchen10/awesome-amqp](https://github.com/xinchen10/awesome-amqp).
 
-This project is currently alpha status, though it is currently being used by my employer in a production capacity.
-
-API is subject to change until 1.0.0. If you choose to use this library, please vendor it.
+This library aims to be stable and worthy of production usage, but the API is still subject to change. To conform with SemVer, the major version will remain 0 until the API is deemed stable. During this period breaking changes will be indicated by bumping the minor version. Non-breaking changes will bump the patch version.
 
 ## Install
 
@@ -25,7 +23,7 @@ go get -u pack.ag/amqp
 
 ## Contributing
 
-I'm happy to accept contributions. A proper `CONTRIBUTING.md` is in the works. In the interim **please open an issue before beginning work** so we can discuss it. I want to ensure there is no duplication of effort and that any new functionality fits with the goals of the project.
+Contributions are welcome! Please see [CONTRIBUTING.md].
 
 ## Example Usage
 
