@@ -9,12 +9,15 @@ go:
 #  - tip
 go_import_path: pack.ag/amqp
 matrix:
+ include:
+  - go: 1.x
+    env: COVERAGE=1
  allow_failures:
   - go: tip
 before_install:
-  - go get -v github.com/mattn/goveralls
-  - go get -v golang.org/x/tools/cmd/cover
+  - if [ -z "$COVERAGE" ]; then go get -v github.com/mattn/goveralls  ; fi
+  - if [ -z "$COVERAGE" ]; then go get -v golang.org/x/tools/cmd/cover; fi
   - go get -t -v -d -tags "integration gofuzz" ./...
 script:
   - make ci
-  - goveralls -coverprofile=cover.out -service=travis-ci
+  - if [ -z "$COVERAGE" ]; then goveralls -coverprofile=cover.out -service=travis-ci; fi
