@@ -805,13 +805,13 @@ func TestIntegrationClose(t *testing.T) {
 
 		// Create a sender
 		receiver, err := session.NewReceiver(
-			amqp.LinkTargetAddress(queueName),
+			amqp.LinkSourceAddress(queueName),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		go testClose(t, receiver.Close)
+		testClose(t, receiver.Close)
 
 		_, err = receiver.Receive(context.Background())
 		if err != amqp.ErrLinkClosed {
@@ -843,13 +843,13 @@ func TestIntegrationClose(t *testing.T) {
 
 		// Create a sender
 		receiver, err := session.NewReceiver(
-			amqp.LinkTargetAddress(queueName),
+			amqp.LinkSourceAddress(queueName),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		go testClose(t, session.Close)
+		testClose(t, session.Close)
 
 		_, err = receiver.Receive(context.Background())
 		if err != amqp.ErrSessionClosed {
@@ -881,18 +881,16 @@ func TestIntegrationClose(t *testing.T) {
 
 		// Create a sender
 		receiver, err := session.NewReceiver(
-			amqp.LinkTargetAddress(queueName),
+			amqp.LinkSourceAddress(queueName),
 		)
 		if err != nil {
 			t.Fatal(err)
 		}
 
-		go func() {
-			err := client.Close()
-			if err != nil {
-				t.Fatalf("Expected nil error from client.Close(), got: %+v", err)
-			}
-		}()
+		err = client.Close()
+		if err != nil {
+			t.Fatalf("Expected nil error from client.Close(), got: %+v", err)
+		}
 
 		_, err = receiver.Receive(context.Background())
 		if err != amqp.ErrConnClosed {
@@ -1026,6 +1024,7 @@ func createEventHubReceivers(t testing.TB, hubName string, session *amqp.Session
 		)
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
 		// receive from each partition concurrently
 		for rxIdx, receiver := range receivers {
