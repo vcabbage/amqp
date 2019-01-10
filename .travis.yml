@@ -18,6 +18,7 @@ matrix:
 before_install:
   - if [ -n "$COVERAGE" ]; then go get -v github.com/mattn/goveralls  ; fi
   - if [ -n "$COVERAGE" ]; then go get -v golang.org/x/tools/cmd/cover; fi
+  - if [[ "$TRAVIS_OS_NAME" == "windows" ]]; then choco install make; fi
   - go get -t -v -d -tags "integration gofuzz" ./...
 script:
   - make ci
