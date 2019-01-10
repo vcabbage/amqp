@@ -1,7 +1,10 @@
 language: go
 sudo: false
+os:
+ - linux
+ - windows
 go:
- - 1.9.x
+ - 1.10.x
  - 1.x
  - tip
 go_import_path: pack.ag/amqp
