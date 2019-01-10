@@ -23,7 +23,7 @@ go get -u pack.ag/amqp
 
 ## Contributing
 
-Contributions are welcome! Please see [CONTRIBUTING.md].
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Example Usage
 
