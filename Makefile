@@ -23,7 +23,7 @@ integration:
 	go test -tags "integration pkgerrors" -count=1 -v -race .
 
 test386:
-	TEST_CORPUS=1 go test -tags "gofuzz" -count=1 -v .
+	TEST_CORPUS=1 GOARCH=386 go test -tags "gofuzz" -count=1 -v .
 
 ci: test386 coverage
 

@@ -12,11 +12,13 @@ matrix:
  allow_failures:
   - go: tip
 before_install:
-  - echo $TRAVIS_GO_VERSION
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then go get -v github.com/mattn/goveralls  ; fi
   - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then go get -v golang.org/x/tools/cmd/cover; fi
-  - if [[ "$TRAVIS_OS_NAME" == "windows" ]]; then choco install make; fi
+  # - if [[ "$TRAVIS_OS_NAME" == "windows" ]]; then choco install make; fi # https://travis-ci.community/t/choco-install-hangs-forever/307/4
   - go get -t -v -d -tags "integration gofuzz" ./...
 script:
-  - make ci
-  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then goveralls -coverprofile=cover.out -service=travis-ci; fi
+  - if [[ "$TRAVIS_OS_NAME" == "windows" ]]; TEST_CORPUS=1 go test -tags gofuzz -race -run=Corpus; fi
+  - if [[ "$TRAVIS_OS_NAME" == "windows" ]]; TEST_CORPUS=1 GOARCH=386 go test -tags "gofuzz" -count=1 -v .; fi
+  - if [[ "$TRAVIS_OS_NAME" == "windows" ]]; go test -tags gofuzz -v -race ./...; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" ]]; then make ci; fi
+  - if [[ "$TRAVIS_OS_NAME" == "linux" && "$TRAVIS_GO_VERSION" == "1.x" ]]; then goveralls -coverprofile=cover.out -service=travis-ci; fi
