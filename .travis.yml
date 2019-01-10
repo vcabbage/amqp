@@ -1,19 +1,19 @@
 language: go
 sudo: false
 os:
- - linux
+#  - linux
  - windows
 go:
- - 1.10.x
+#  - 1.10.x
  - 1.x
- - tip
+#  - tip
 go_import_path: pack.ag/amqp
 matrix:
  allow_failures:
   - go: tip
 before_install:
-  - go get github.com/mattn/goveralls
-  - go get golang.org/x/tools/cmd/cover
+  - go get -v github.com/mattn/goveralls
+  - go get -v golang.org/x/tools/cmd/cover
   - go get -t -v -d -tags "integration gofuzz" ./...
 script:
   - make ci
