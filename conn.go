@@ -23,7 +23,8 @@ var (
 	ErrTimeout = errors.New("amqp: timeout waiting for response")
 
 	// ErrConnClosed is propagated to Session and Senders/Receivers
-	// when Client.Close() is called.
+	// when Client.Close() is called or the server closes the connection
+	// without specifying an error.
 	ErrConnClosed = errors.New("amqp: connection closed")
 )
 
@@ -358,6 +359,15 @@ func (c *conn) mux() {
 			)
 
 			switch body := fr.body.(type) {
+			// Server initiated close.
+			case *performClose:
+				if body.Error != nil {
+					c.err = body.Error
+				} else {
+					c.err = ErrConnClosed
+				}
+				return
+
 			// RemoteChannel should be used when frame is Begin
 			case *performBegin:
 				session, ok = sessionsByChannel[body.RemoteChannel]
