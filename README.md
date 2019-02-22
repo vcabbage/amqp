@@ -111,6 +111,19 @@ func main() {
 }
 ```
 
+## Related Projects
+
+| Project | Description |
+|---------|-------------|
+| [github.com/Azure/azure-event-hubs-go](https://github.com/Azure/azure-event-hubs-go) * | Library for interacting with Microsoft Azure Event Hubs. |
+| [github.com/Azure/azure-service-bus-go](https://github.com/Azure/azure-service-bus-go) * | Library for interacting with Microsoft Azure Service Bus. |
+| [gocloud.dev/pubsub](https://gocloud.dev/pubsub) * | Library for portably interacting with Pub/Sub systems. |
+| [qpid-proton](https://github.com/apache/qpid-proton/tree/go1) | AMQP 1.0 library using the Qpid Proton C bindings. |
+
+`*` indicates that the project uses this library.
+
+Feel free to send PRs adding additional projects. Listed projects are not limited to those that use this library as long as they are potentially useful to people who are looking at an AMQP library.
+
 ### Other Notes
 
 By default, this package depends only on the standard library. Building with the
