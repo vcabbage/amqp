@@ -1773,7 +1773,7 @@ func (m *Message) Reject(e *Error) error {
 // Release releases the message back to the server. The message
 // may be redelivered to this or another consumer.
 func (m *Message) Release() error {
-	if m.shouldSendDisposition() {
+	if !m.shouldSendDisposition() {
 		return nil
 	}
 	return m.receiver.messageDisposition(m.deliveryID, &stateReleased{})
