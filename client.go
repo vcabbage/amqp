@@ -948,23 +948,49 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		l.deliveryCount = resp.InitialDeliveryCount
 		// buffer receiver so that link.mux doesn't block
 		l.messages = make(chan Message, l.receiver.maxCredit)
-		if resp.SenderSettleMode != nil {
-			l.senderSettleMode = resp.SenderSettleMode
-		}
 	} else {
 		// if dynamic address requested, copy assigned name to address
 		if l.dynamicAddr && resp.Target != nil {
 			l.target.Address = resp.Target.Address
 		}
 		l.transfers = make(chan performTransfer)
-		if resp.ReceiverSettleMode != nil {
-			l.receiverSettleMode = resp.ReceiverSettleMode
-		}
+	}
+
+	err = l.setSettleModes(resp)
+	if err != nil {
+		l.muxDetach()
+		return nil, err
 	}
 
 	go l.mux()
 
 	return l, nil
+}
+
+// setSettleModes sets the settlement modes based on the resp performAttach.
+//
+// If a settlement mode has been explicitly set locally and it was not honored by the
+// server an error is returned.
+func (l *link) setSettleModes(resp *performAttach) error {
+	var (
+		localRecvSettle = l.receiverSettleMode.value()
+		respRecvSettle  = resp.ReceiverSettleMode.value()
+	)
+	if l.receiverSettleMode != nil && localRecvSettle != respRecvSettle {
+		return fmt.Errorf("amqp: receiver settlement mode %q requested, received %q from server", l.receiverSettleMode, &respRecvSettle)
+	}
+	l.receiverSettleMode = &respRecvSettle
+
+	var (
+		localSendSettle = l.senderSettleMode.value()
+		respSendSettle  = resp.SenderSettleMode.value()
+	)
+	if l.senderSettleMode != nil && localSendSettle != respSendSettle {
+		return fmt.Errorf("amqp: sender settlement mode %q requested, received %q from server", l.senderSettleMode, &respSendSettle)
+	}
+	l.senderSettleMode = &respSendSettle
+
+	return nil
 }
 
 func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
@@ -1523,12 +1549,12 @@ func LinkBatchMaxAge(d time.Duration) LinkOption {
 	}
 }
 
-// LinkSenderSettle sets the sender settlement mode.
+// LinkSenderSettle sets the requested sender settlement mode.
 //
-// When the Link is the Receiver, this is a request to the remote
-// server.
+// If a settlement mode is explicitly set and the server does not
+// honor it an error will be returned during link attachment.
 //
-// When the Link is the Sender, this is the actual settlement mode.
+// Default: Accept the settlement mode set by the server, commonly ModeMixed.
 func LinkSenderSettle(mode SenderSettleMode) LinkOption {
 	return func(l *link) error {
 		if mode > ModeMixed {
@@ -1539,12 +1565,12 @@ func LinkSenderSettle(mode SenderSettleMode) LinkOption {
 	}
 }
 
-// LinkReceiverSettle sets the receiver settlement mode.
+// LinkReceiverSettle sets the requested receiver settlement mode.
 //
-// When the Link is the Sender, this is a request to the remote
-// server.
+// If a settlement mode is explicitly set and the server does not
+// honor it an error will be returned during link attachment.
 //
-// When the Link is the Receiver, this is the actual settlement mode.
+// Default: Accept the settlement mode set by the server, commonly ModeFirst.
 func LinkReceiverSettle(mode ReceiverSettleMode) LinkOption {
 	return func(l *link) error {
 		if mode > ModeSecond {
