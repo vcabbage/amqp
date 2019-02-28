@@ -2704,6 +2704,13 @@ func (m *SenderSettleMode) unmarshal(r *buffer) error {
 	return err
 }
 
+func (m *SenderSettleMode) value() SenderSettleMode {
+	if m == nil {
+		return ModeMixed
+	}
+	return *m
+}
+
 // Receiver Settlement Modes
 const (
 	// Receiver will spontaneously settle all incoming transfers.
@@ -2743,6 +2750,13 @@ func (m *ReceiverSettleMode) unmarshal(r *buffer) error {
 	n, err := readUbyte(r)
 	*m = ReceiverSettleMode(n)
 	return err
+}
+
+func (m *ReceiverSettleMode) value() ReceiverSettleMode {
+	if m == nil {
+		return ModeFirst
+	}
+	return *m
 }
 
 // Durability Policies
