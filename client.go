@@ -935,6 +935,42 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		return nil, errorErrorf("unexpected attach response: %#v", fr)
 	}
 
+	// If the remote encounters an error during the attach it returns an Attach
+	// with no Source or Target. The remote then sends a Detach with an error.
+	//
+	//   Note that if the application chooses not to create a terminus, the session
+	//   endpoint will still create a link endpoint and issue an attach indicating
+	//   that the link endpoint has no associated local terminus. In this case, the
+	//   session endpoint MUST immediately detach the newly created link endpoint.
+	//
+	// http://docs.oasis-open.org/amqp/core/v1.0/csprd01/amqp-core-transport-v1.0-csprd01.html#doc-idp386144
+	if resp.Source == nil && resp.Target == nil {
+		// wait for detach
+		select {
+		case <-s.done:
+			return nil, s.err
+		case fr = <-l.rx:
+		}
+
+		detach, ok := fr.(*performDetach)
+		if !ok {
+			return nil, errorErrorf("unexpected frame while waiting for detach: %#v", fr)
+		}
+
+		// send return detach
+		fr = &performDetach{
+			Handle: l.handle,
+			Closed: true,
+		}
+		debug(1, "TX: %s", fr)
+		s.txFrame(fr, nil)
+
+		if detach.Error == nil {
+			return nil, errorErrorf("received detach with no error specified")
+		}
+		return nil, detach.Error
+	}
+
 	if l.maxMessageSize == 0 || resp.MaxMessageSize < l.maxMessageSize {
 		l.maxMessageSize = resp.MaxMessageSize
 	}
