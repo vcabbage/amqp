@@ -586,7 +586,6 @@ func TestIntegrationSend_Concurrent(t *testing.T) {
 			// Create a sender
 			sender, err := session.NewSender(
 				amqp.LinkTargetAddress(queueName),
-				amqp.LinkReceiverSettle(amqp.ModeSecond),
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -633,6 +632,7 @@ func TestIntegrationSend_Concurrent(t *testing.T) {
 		})
 	}
 }
+
 func TestIntegrationSessionHandleMax(t *testing.T) {
 	queueName, _, cleanup := newTestQueue(t, "sessionwrap")
 	defer cleanup()
@@ -771,6 +771,54 @@ func TestIntegrationLinkName(t *testing.T) {
 			)
 			if err == nil {
 				testClose(t, sender.Close)
+			}
+
+			switch {
+			case err == nil && tt.error == "":
+				// success
+			case err == nil:
+				t.Fatalf("expected error to contain %q, but it was nil", tt.error)
+			case !strings.Contains(err.Error(), tt.error):
+				t.Errorf("expected error to contain %q, but it was %q", tt.error, err)
+			}
+		})
+	}
+}
+
+func TestIntegrationAttachError(t *testing.T) {
+	queueName, _, cleanup := newTestQueue(t, "linkName")
+	defer cleanup()
+
+	tests := []struct {
+		name  string
+		error string
+	}{
+		{
+			name:  "invalid-session-filter",
+			error: "A sessionful message receiver cannot be created on an entity that does not require sessions.",
+		},
+	}
+
+	for _, tt := range tests {
+		label := fmt.Sprintf("name %v", tt.name)
+		t.Run(label, func(t *testing.T) {
+			// Create client
+			client := newSBClient(t, label)
+			defer client.Close()
+
+			// Open a session
+			session, err := client.NewSession()
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Creating link to a queue with a session filter should fail
+			r, err := session.NewReceiver(
+				amqp.LinkSourceAddress(queueName),
+				amqp.LinkSourceFilter("com.microsoft:session-filter", 0x00000137000000C, "invalid"),
+			)
+			if err == nil {
+				testClose(t, r.Close)
 			}
 
 			switch {
@@ -1118,47 +1166,48 @@ func TestIssue48_ReceiverModeSecond(t *testing.T) {
 		checkLeaks()
 	})
 
-	label = "issue48-receiver-mode-second"
-	t.Run(label, func(t *testing.T) {
-		checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
+	// TODO: Re-enable with broker that supports rcv-mode-second
+	// label = "issue48-receiver-mode-second"
+	// t.Run(label, func(t *testing.T) {
+	// 	checkLeaks := leaktest.CheckTimeout(t, 60*time.Second)
 
-		// Create client
-		client := newEHClient(t, "issue48")
-		defer client.Close()
+	// 	// Create client
+	// 	client := newEHClient(t, "issue48")
+	// 	defer client.Close()
 
-		// Open a session
-		session, err := client.NewSession()
-		if err != nil {
-			t.Fatal(err)
-		}
+	// 	// Open a session
+	// 	session, err := client.NewSession()
+	// 	if err != nil {
+	// 		t.Fatal(err)
+	// 	}
 
-		// Create a sender
-		sender, err := session.NewSender(
-			amqp.LinkTargetAddress(hubName),
-			amqp.LinkReceiverSettle(amqp.ModeSecond),
-		)
-		if err != nil {
-			t.Fatalf("%+v\n", err)
-		}
+	// 	// Create a sender
+	// 	sender, err := session.NewSender(
+	// 		amqp.LinkTargetAddress(hubName),
+	// 		amqp.LinkReceiverSettle(amqp.ModeSecond),
+	// 	)
+	// 	if err != nil {
+	// 		t.Fatalf("%+v\n", err)
+	// 	}
 
-		err = sender.Send(context.Background(), &amqp.Message{
-			Format: 0x80013700,
-			Data: [][]byte{
-				[]byte("hello"),
-				[]byte("there"),
-			},
-		})
-		if err == nil {
-			t.Fatal("Expected error, got nil")
-		}
-		if err, ok := err.(*amqp.Error); !ok || !azDescription.MatchString(err.Description) {
-			t.Fatalf("Unexpected error response: %+v", err)
-		}
+	// 	err = sender.Send(context.Background(), &amqp.Message{
+	// 		Format: 0x80013700,
+	// 		Data: [][]byte{
+	// 			[]byte("hello"),
+	// 			[]byte("there"),
+	// 		},
+	// 	})
+	// 	if err == nil {
+	// 		t.Fatal("Expected error, got nil")
+	// 	}
+	// 	if err, ok := err.(*amqp.Error); !ok || !azDescription.MatchString(err.Description) {
+	// 		t.Fatalf("Unexpected error response: %+v", err)
+	// 	}
 
-		client.Close() // close before leak check
+	// 	client.Close() // close before leak check
 
-		checkLeaks()
-	})
+	// 	checkLeaks()
+	// })
 }
 
 func dump(i interface{}) {
