@@ -1272,11 +1272,11 @@ func (t *performTransfer) frameBody() {}
 
 func (t performTransfer) String() string {
 	deliveryTag := "<nil>"
-	if t.DeliveryID != nil {
-		deliveryTag = string(t.DeliveryTag)
+	if t.DeliveryTag != nil {
+		deliveryTag = fmt.Sprintf("%q", t.DeliveryTag)
 	}
 
-	return fmt.Sprintf("Transfer{Handle: %d, DeliveryID: %s, DeliveryTag: %q, MessageFormat: %s, "+
+	return fmt.Sprintf("Transfer{Handle: %d, DeliveryID: %s, DeliveryTag: %s, MessageFormat: %s, "+
 		"Settled: %t, More: %t, ReceiverSettleMode: %s, State: %v, Resume: %t, Aborted: %t, "+
 		"Batchable: %t, Payload [size]: %d}",
 		t.Handle,

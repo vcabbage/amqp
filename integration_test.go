@@ -1020,6 +1020,7 @@ func TestIntegration_EventHubs_RoundTrip(t *testing.T) {
 						t.Errorf("Partition %d got error: %+v", i, err)
 					}
 				}
+				return
 			}
 
 			// check that data matches
