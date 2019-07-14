@@ -1166,18 +1166,90 @@ func (l *link) muxFlow() error {
 }
 
 func (l *link) muxReceive(fr performTransfer) error {
-	// record the delivery ID and message format if this is
-	// the first frame of the message
 	if !l.more {
+		// this is the first transfer of a message,
+		// record the delivery ID, message format,
+		// and delivery Tag
 		if fr.DeliveryID != nil {
 			l.msg.deliveryID = *fr.DeliveryID
 		}
-
 		if fr.MessageFormat != nil {
 			l.msg.Format = *fr.MessageFormat
 		}
-
 		l.msg.DeliveryTag = fr.DeliveryTag
+
+		// these fields are required on first transfer of a message
+		if fr.DeliveryID == nil {
+			msg := "received message without a delivery-id"
+			l.closeWithError(&Error{
+				Condition:   ErrorNotAllowed,
+				Description: msg,
+			})
+			return errorNew(msg)
+		}
+		if fr.MessageFormat == nil {
+			msg := "received message without a message-format"
+			l.closeWithError(&Error{
+				Condition:   ErrorNotAllowed,
+				Description: msg,
+			})
+			return errorNew(msg)
+		}
+		if fr.DeliveryTag == nil {
+			msg := "received message without a delivery-tag"
+			l.closeWithError(&Error{
+				Condition:   ErrorNotAllowed,
+				Description: msg,
+			})
+			return errorNew(msg)
+		}
+	} else {
+		// this is a continuation of a multipart message
+		// some fields may be omitted on continuation transfers,
+		// but if they are included they must be consistent
+		// with the first.
+
+		if fr.DeliveryID != nil && *fr.DeliveryID != l.msg.deliveryID {
+			msg := fmt.Sprintf(
+				"received continuation transfer with inconsistent delivery-id: %d != %d",
+				*fr.DeliveryID, l.msg.deliveryID,
+			)
+			l.closeWithError(&Error{
+				Condition:   ErrorNotAllowed,
+				Description: msg,
+			})
+			return errorNew(msg)
+		}
+		if fr.MessageFormat != nil && *fr.MessageFormat != l.msg.Format {
+			msg := fmt.Sprintf(
+				"received continuation transfer with inconsistent message-format: %d != %d",
+				*fr.MessageFormat, l.msg.Format,
+			)
+			l.closeWithError(&Error{
+				Condition:   ErrorNotAllowed,
+				Description: msg,
+			})
+			return errorNew(msg)
+		}
+		if fr.DeliveryTag != nil && !bytes.Equal(fr.DeliveryTag, l.msg.DeliveryTag) {
+			msg := fmt.Sprintf(
+				"received continuation transfer with inconsistent delivery-tag: %q != %q",
+				fr.DeliveryTag, l.msg.DeliveryTag,
+			)
+			l.closeWithError(&Error{
+				Condition:   ErrorNotAllowed,
+				Description: msg,
+			})
+			return errorNew(msg)
+		}
+	}
+
+	// discard message if it's been aborted
+	if fr.Aborted {
+		l.buf.reset()
+		l.msg = Message{}
+		l.more = false
+		return nil
 	}
 
 	// ensure maxMessageSize will not be exceeded
