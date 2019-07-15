@@ -571,6 +571,12 @@ func readBinary(r *buffer) ([]byte, error) {
 		return nil, errorErrorf("type code %#02x is not a recognized binary type", type_)
 	}
 
+	if length == 0 {
+		// An empty value and a nil value are distinct,
+		// ensure that the returned value is not nil in this case.
+		return make([]byte, 0), nil
+	}
+
 	buf, ok := r.next(length)
 	if !ok {
 		return nil, errorNew("invalid length")
