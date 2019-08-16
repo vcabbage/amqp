@@ -7,23 +7,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
 
-    - name: Set up Go 1.12
-      uses: actions/setup-go@v1
-      with:
-        go-version: 1.12
-      id: go
+    - name: Dump GitHub context
+      env:
+        GITHUB_CONTEXT: ${{ toJson(github) }}
+      run: echo "$GITHUB_CONTEXT"
+    - name: Dump strategy context
+      env:
+        STRATEGY_CONTEXT: ${{ toJson(strategy) }}
+      run: echo "$STRATEGY_CONTEXT"
+    - name: Dump matrix context
+      env:
+        MATRIX_CONTEXT: ${{ toJson(matrix) }}
+      run: echo "$MATRIX_CONTEXT"
+    - name: Dump job context
+      env:
+        JOB_CONTEXT: ${{ toJson(job) }}
+      run: echo "$JOB_CONTEXT"
+    - name: Dump runner context
+      env:
+        RUNNER_CONTEXT: ${{ toJson(runner) }}
+      run: echo "$RUNNER_CONTEXT"
 
-    - name: Check out code into the Go module directory
-      uses: actions/checkout@v1
+    # - name: Set up Go 1.12
+    #   uses: actions/setup-go@v1
+    #   with:
+    #     go-version: 1.12
+    #   id: go
+
+    # - name: Setup environment
+    #   run: |
+    #     mkdir -p 
+
+    # - name: Check out code into the Go module directory
+    #   uses: actions/checkout@v1
+    #   with:
+    #     path: 
       
-    - name: Get coverage tools
-      run: |
-        go get -v github.com/mattn/goveralls
-        go get -v golang.org/x/tools/cmd/cover
+    # - name: Get coverage tools
+    #   run: |
+    #     go get -v github.com/mattn/goveralls
+    #     go get -v golang.org/x/tools/cmd/cover
 
-    - name: Get dependencies
-      run: |
-        go get -t -v -d -tags "integration gofuzz" .
+    # - name: Get dependencies
+    #   run: |
+    #     go get -t -v -d -tags "integration gofuzz" .
 
-    - name: Build
-      run: go build -v .
+    # - name: Build
+    #   run: go build -v .
