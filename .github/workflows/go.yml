@@ -51,8 +51,19 @@ jobs:
       run: |
         go get -t -v -d -tags "integration gofuzz" .
 
-    - name: Build
+    - name: Test
       working-directory: ${{ runner.workspace }}/go/src/pack.ag/amqp
       env:
         GOPATH: ${{ runner.workspace }}/go
-      run: go build -v .
+        AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+        AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        SERVICEBUS_NAMESPACE: ${{ secrets.SERVICEBUS_NAMESPACE }}
+        SERVICEBUS_ACCESS_KEY_NAME: ${{ secrets.SERVICEBUS_ACCESS_KEY_NAME }}
+        SERVICEBUS_ACCESS_KEY: ${{ secrets.SERVICEBUS_ACCESS_KEY }}
+        EVENTHUB_NAMESPACE: ${{ secrets.EVENTHUB_NAMESPACE }}
+        EVENTHUB_ACCESS_KEY_NAME: ${{ secrets.EVENTHUB_ACCESS_KEY_NAME }}
+        EVENTHUB_ACCESS_KEY: ${{ secrets.EVENTHUB_ACCESS_KEY }}
+      run: make ci
