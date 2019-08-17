@@ -6,9 +6,10 @@ jobs:
     strategy:
       matrix:
         go: ['1.11.13', '1.12.9']
+        os: [windows-latest, ubuntu-latest]
 
-    name: Test Go ${{ matrix.go }}
-    runs-on: ubuntu-latest
+    name: Test w/ ${{ matrix.os }} go${{ matrix.go }}
+    runs-on: ${{ matrix.os }}
     steps:
 
     - name: Set up Go
@@ -50,3 +51,4 @@ jobs:
         EVENTHUB_ACCESS_KEY_NAME: ${{ secrets.EVENTHUB_ACCESS_KEY_NAME }}
         EVENTHUB_ACCESS_KEY: ${{ secrets.EVENTHUB_ACCESS_KEY }}
       run: make ci
+      shell: bash
