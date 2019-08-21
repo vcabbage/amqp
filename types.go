@@ -1262,10 +1262,10 @@ type performTransfer struct {
 	Payload []byte
 
 	// optional channel to indicate to sender that transfer has completed
+	//
+	// Settled=true: closed when the transferred on network.
+	// Settled=false: closed when the receiver has confirmed settlement.
 	done chan deliveryState
-	// complete when receiver has responded with disposition (ReceiverSettleMode = second)
-	// instead of when this message has been sent on network
-	confirmSettlement bool
 }
 
 func (t *performTransfer) frameBody() {}
@@ -1726,6 +1726,11 @@ type Message struct {
 	// encryption details).
 	Footer Annotations
 
+	// Mark the message as settled when LinkSenderSettle is ModeMixed.
+	//
+	// This field is ignored when LinkSenderSettle is not ModeMixed.
+	SendSettled bool
+
 	receiver   *Receiver // Receiver the message was received from
 	deliveryID uint32    // used when sending disposition
 	settled    bool      // whether transfer was settled by sender
@@ -1810,7 +1815,7 @@ func (m *Message) MarshalBinary() ([]byte, error) {
 }
 
 func (m *Message) shouldSendDisposition() bool {
-	return !m.settled || (m.receiver.link.receiverSettleMode != nil && *m.receiver.link.receiverSettleMode == ModeSecond)
+	return !m.settled
 }
 
 func (m *Message) marshal(wr *buffer) error {

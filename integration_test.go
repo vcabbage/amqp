@@ -1131,6 +1131,8 @@ func TestIssue48_ReceiverModeSecond(t *testing.T) {
 		// Create a sender
 		sender, err := session.NewSender(
 			amqp.LinkTargetAddress(hubName),
+			amqp.LinkSenderSettle(amqp.ModeUnsettled),
+			amqp.LinkReceiverSettle(amqp.ModeFirst),
 		)
 		if err != nil {
 			t.Fatalf("%+v\n", err)
@@ -1142,17 +1144,6 @@ func TestIssue48_ReceiverModeSecond(t *testing.T) {
 			Data: [][]byte{
 				[]byte("hello"),
 				[]byte("there"),
-			},
-		})
-		time.Sleep(1 * time.Second) // Have to wait long enough for disposition to come through.
-		if err != nil {
-			t.Fatalf("Unexpected error response: %+v", err)
-		}
-
-		// Second send should get async error
-		err = sender.Send(context.Background(), &amqp.Message{
-			Data: [][]byte{
-				[]byte("hello"),
 			},
 		})
 		if err == nil {
