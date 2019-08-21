@@ -390,8 +390,7 @@ func (s *Sender) send(ctx context.Context, msg *Message) (chan deliveryState, er
 	var (
 		maxPayloadSize = int64(s.link.session.conn.peerMaxFrameSize) - maxTransferFrameHeader
 		sndSettleMode  = s.link.senderSettleMode
-		rcvSettleMode  = s.link.receiverSettleMode
-		senderSettled  = sndSettleMode != nil && *sndSettleMode == ModeSettled
+		senderSettled  = sndSettleMode != nil && (*sndSettleMode == ModeSettled || (*sndSettleMode == ModeMixed && msg.SendSettled))
 		deliveryID     = atomic.AddUint32(&s.link.session.nextDeliveryID, 1)
 	)
 
@@ -416,16 +415,16 @@ func (s *Sender) send(ctx context.Context, msg *Message) (chan deliveryState, er
 		fr.Payload = append([]byte(nil), buf...)
 		fr.More = s.buf.len() > 0
 		if !fr.More {
+			// SSM=settled: overrides RSM; no acks.
+			// SSM=unsettled: sender should wait for receiver to ack
+			// RSM=first: receiver considers it settled immediately, but must still send ack (SSM=unsettled only)
+			// RSM=second: receiver sends ack and waits for return ack from sender (SSM=unsettled only)
+
 			// mark final transfer as settled when sender mode is settled
 			fr.Settled = senderSettled
 
-			// set done on last frame to be closed after network transmission
-			//
-			// If confirmSettlement is true (ReceiverSettleMode == "second"),
-			// Session.mux will intercept the done channel and close it when the
-			// receiver has confirmed settlement instead of on net transmit.
+			// set done on last frame
 			fr.done = make(chan deliveryState, 1)
-			fr.confirmSettlement = rcvSettleMode != nil && *rcvSettleMode == ModeSecond
 		}
 
 		select {
@@ -750,9 +749,9 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				delete(handlesByDeliveryID, deliveryID)
 			}
 
-			// if confirmSettlement requested, add done chan to map
+			// if not settled, add done chan to map
 			// and clear from frame so conn doesn't close it.
-			if fr.confirmSettlement && fr.done != nil {
+			if !fr.Settled && fr.done != nil {
 				settlementByDeliveryID[deliveryID] = fr.done
 				fr.done = nil
 			}
