@@ -6,7 +6,7 @@ jobs:
     strategy:
       matrix:
         # go: ['1.11.13', '1.12.9']
-        go: ['tip']
+        go: ['1.11.13', 'tip']
         os: [windows-latest, ubuntu-latest]
 
     name: Test w/ ${{ matrix.os }} go${{ matrix.go }}
