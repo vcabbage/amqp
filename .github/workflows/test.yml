@@ -1,4 +1,4 @@
-name: Go
+name: Test
 on: [push]
 jobs:
 
@@ -15,7 +15,7 @@ jobs:
         - os: windows-latest
           go: tip
 
-    name: Test w/ ${{ matrix.os }} go${{ matrix.go }}
+    name: ${{ matrix.os }} go${{ matrix.go }}
     runs-on: ${{ matrix.os }}
     steps:
 
