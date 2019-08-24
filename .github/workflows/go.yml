@@ -5,15 +5,21 @@ jobs:
   test:
     strategy:
       matrix:
-        # go: ['1.11.13', '1.12.9']
-        go: ['1.11.13', 'tip']
-        os: [windows-latest, ubuntu-latest]
+        go: ['1.11.x', '1.12.x', 'tip']
+        os: [ubuntu-latest, windows-latest]
+        include:
+        - os: ubuntu-latest
+          go: 1.12.x
+          upload_coverage: true
+        exclude:
+        - os: windows-latest
+          go: tip
 
     name: Test w/ ${{ matrix.os }} go${{ matrix.go }}
     runs-on: ${{ matrix.os }}
     steps:
 
-    - name: Install base Go
+    - name: Install Go
       uses: vcabbage/setup-go@master
       with:
         go-version: ${{ matrix.go }}
@@ -27,11 +33,6 @@ jobs:
       run: |
         go get -v github.com/mattn/goveralls
 
-    - name: Verify
-      run: |
-        go version
-        goveralls -h || true
-
     - name: Get dependencies
       working-directory: ${{ runner.workspace }}/go/src/pack.ag/amqp
       env:
@@ -39,20 +40,31 @@ jobs:
       run: |
         go get -t -v -d -tags "integration gofuzz" .
 
-    # - name: Test
-    #   working-directory: ${{ runner.workspace }}/go/src/pack.ag/amqp
-    #   env:
-    #     GOPATH: ${{ runner.workspace }}/go
-    #     AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-    #     AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
-    #     AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-    #     AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-    #     AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-    #     SERVICEBUS_NAMESPACE: ${{ secrets.SERVICEBUS_NAMESPACE }}
-    #     SERVICEBUS_ACCESS_KEY_NAME: ${{ secrets.SERVICEBUS_ACCESS_KEY_NAME }}
-    #     SERVICEBUS_ACCESS_KEY: ${{ secrets.SERVICEBUS_ACCESS_KEY }}
-    #     EVENTHUB_NAMESPACE: ${{ secrets.EVENTHUB_NAMESPACE }}
-    #     EVENTHUB_ACCESS_KEY_NAME: ${{ secrets.EVENTHUB_ACCESS_KEY_NAME }}
-    #     EVENTHUB_ACCESS_KEY: ${{ secrets.EVENTHUB_ACCESS_KEY }}
-    #   run: make ci
-    #   shell: bash
+    - name: Test
+      working-directory: ${{ runner.workspace }}/go/src/pack.ag/amqp
+      env:
+        GOPATH: ${{ runner.workspace }}/go
+        AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+        AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+        AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+        AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        SERVICEBUS_NAMESPACE: ${{ secrets.SERVICEBUS_NAMESPACE }}
+        SERVICEBUS_ACCESS_KEY_NAME: ${{ secrets.SERVICEBUS_ACCESS_KEY_NAME }}
+        SERVICEBUS_ACCESS_KEY: ${{ secrets.SERVICEBUS_ACCESS_KEY }}
+        EVENTHUB_NAMESPACE: ${{ secrets.EVENTHUB_NAMESPACE }}
+        EVENTHUB_ACCESS_KEY_NAME: ${{ secrets.EVENTHUB_ACCESS_KEY_NAME }}
+        EVENTHUB_ACCESS_KEY: ${{ secrets.EVENTHUB_ACCESS_KEY }}
+      run: |
+        go version
+        make ci
+      shell: bash
+
+    - name: Upload coverage profile
+      working-directory: ${{ runner.workspace }}/go/src/pack.ag/amqp
+      env:
+        GOPATH: ${{ runner.workspace }}/go
+        COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
+      run: |
+        goveralls -coverprofile=cover.out -service=travis-ci
+      if: matrix.upload_coverage
