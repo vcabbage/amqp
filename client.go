@@ -70,13 +70,15 @@ func Dial(addr string, opts ...ConnOption) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	dialer := &net.Dialer{Timeout: c.connectTimeout}
 	switch u.Scheme {
 	case "amqp", "":
-		c.net, err = net.Dial("tcp", host+":"+port)
+		c.net, err = dialer.Dial("tcp", host+":"+port)
 	case "amqps":
 		c.initTLSConfig()
 		c.tlsNegotiation = false
-		c.net, err = tls.Dial("tcp", host+":"+port, c.tlsConfig)
+		c.net, err = tls.DialWithDialer(dialer, "tcp", host+":"+port, c.tlsConfig)
 	default:
 		return nil, errorErrorf("unsupported scheme %q", u.Scheme)
 	}
