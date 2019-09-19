@@ -212,6 +212,24 @@ func TestMarshalUnmarshal(t *testing.T) {
 	}
 }
 
+// Regression test for time calculation bug.
+// https://github.com/vcabbage/amqp/issues/173
+func TestIssue173(t *testing.T) {
+	var buf buffer
+	// NOTE: Dates after the Unix Epoch don't trigger the bug, only
+	// dates that negative Unix time show the problem.
+	want := time.Date(1969, 03, 21, 0, 0, 0, 0, time.UTC)
+	err := marshal(&buf, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got time.Time
+	err = unmarshal(&buf, &got)
+	if d := testDiff(want, got); d != "" {
+		t.Fatal(d)
+	}
+}
+
 func TestReadAny(t *testing.T) {
 	for _, type_ := range generalTypes {
 		t.Run(fmt.Sprintf("%T", type_), func(t *testing.T) {

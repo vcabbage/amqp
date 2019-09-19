@@ -946,8 +946,8 @@ func readTimestamp(r *buffer) (time.Time, error) {
 	}
 
 	n, err := r.readUint64()
-	rem := n % 1000
-	return time.Unix(int64(n)/1000, int64(rem)*1000000).UTC(), err
+	ms := int64(n)
+	return time.Unix(ms/1000, (ms%1000)*1000000).UTC(), err
 }
 
 func readInt(r *buffer) (int, error) {
