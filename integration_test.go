@@ -1208,17 +1208,17 @@ func dump(i interface{}) {
 	enc.Encode(i)
 }
 
-func newEHClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Client {
+func newEHClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Conn {
 	t.Helper()
 	return newClient(t, label, ehNamespace, ehAccessKeyName, ehAccessKey, opts...)
 }
 
-func newSBClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Client {
+func newSBClient(t testing.TB, label string, opts ...amqp.ConnOption) *amqp.Conn {
 	t.Helper()
 	return newClient(t, label, namespace, accessKeyName, accessKey, opts...)
 }
 
-func newClient(t testing.TB, label, ns, username, password string, opts ...amqp.ConnOption) *amqp.Client {
+func newClient(t testing.TB, label, ns, username, password string, opts ...amqp.ConnOption) *amqp.Conn {
 	t.Helper()
 
 	opts = append(opts,

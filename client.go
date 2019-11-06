@@ -27,10 +27,13 @@ var (
 	ErrLinkClosed = errors.New("amqp: link closed")
 )
 
-// Client is an AMQP client connection.
-type Client struct {
+// Conn is an AMQP client connection.
+type Conn struct {
 	conn *conn
 }
+
+// Client is a backwards-compatible alias for Conn
+type Client Conn
 
 // Dial connects to an AMQP server.
 //
@@ -39,7 +42,7 @@ type Client struct {
 //
 // If username and password information is not empty it's used as SASL PLAIN
 // credentials, equal to passing ConnSASLPlain option.
-func Dial(addr string, opts ...ConnOption) (*Client, error) {
+func Dial(addr string, opts ...ConnOption) (*Conn, error) {
 	u, err := url.Parse(addr)
 	if err != nil {
 		return nil, err
@@ -85,27 +88,27 @@ func Dial(addr string, opts ...ConnOption) (*Client, error) {
 		return nil, err
 	}
 	err = c.start()
-	return &Client{conn: c}, err
+	return &Conn{conn: c}, err
 }
 
 // New establishes an AMQP client connection over conn.
-func New(conn net.Conn, opts ...ConnOption) (*Client, error) {
+func New(conn net.Conn, opts ...ConnOption) (*Conn, error) {
 	c, err := newConn(conn, opts...)
 	if err != nil {
 		return nil, err
 	}
 	err = c.start()
-	return &Client{conn: c}, err
+	return &Conn{conn: c}, err
 }
 
 // Close disconnects the connection.
-func (c *Client) Close() error {
+func (c *Conn) Close() error {
 	return c.conn.Close()
 }
 
 // NewSession opens a new AMQP session to the server.
-func (c *Client) NewSession(opts ...SessionOption) (*Session, error) {
-	// get a session allocated by Client.mux
+func (c *Conn) NewSession(opts ...SessionOption) (*Session, error) {
+	// get a session allocated by Conn.mux
 	var sResp newSessionResp
 	select {
 	case <-c.conn.done:
@@ -251,7 +254,7 @@ func newSession(c *conn, channel uint16) *Session {
 // Close gracefully closes the session.
 //
 // If ctx expires while waiting for servers response, ctx.Err() will be returned.
-// The session will continue to wait for the response until the Client is closed.
+// The session will continue to wait for the response until the Conn is closed.
 func (s *Session) Close(ctx context.Context) error {
 	s.closeOnce.Do(func() { close(s.close) })
 	select {
@@ -1436,7 +1439,7 @@ func (l *link) muxHandleFrame(fr frameBody) error {
 // No operations on link are valid after close.
 //
 // If ctx expires while waiting for servers response, ctx.Err() will be returned.
-// The session will continue to wait for the response until the Session or Client
+// The session will continue to wait for the response until the Session or Conn
 // is closed.
 func (l *link) Close(ctx context.Context) error {
 	l.closeOnce.Do(func() { close(l.close) })
@@ -1881,7 +1884,7 @@ func (r *Receiver) Address() string {
 // Close closes the Receiver and AMQP link.
 //
 // If ctx expires while waiting for servers response, ctx.Err() will be returned.
-// The session will continue to wait for the response until the Session or Client
+// The session will continue to wait for the response until the Session or Conn
 // is closed.
 func (r *Receiver) Close(ctx context.Context) error {
 	return r.link.Close(ctx)
