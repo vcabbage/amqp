@@ -23,7 +23,7 @@ var (
 	ErrTimeout = errors.New("amqp: timeout waiting for response")
 
 	// ErrConnClosed is propagated to Session and Senders/Receivers
-	// when Client.Close() is called or the server closes the connection
+	// when Conn.Close() is called or the server closes the connection
 	// without specifying an error.
 	ErrConnClosed = errors.New("amqp: connection closed")
 )
@@ -164,7 +164,7 @@ type conn struct {
 	// TLS
 	tlsNegotiation bool        // negotiate TLS
 	tlsComplete    bool        // TLS negotiation complete
-	tlsConfig      *tls.Config // TLS config, default used if nil (ServerName set to Client.hostname)
+	tlsConfig      *tls.Config // TLS config, default used if nil (ServerName set to Conn.hostname)
 
 	// SASL
 	saslHandlers map[symbol]stateFunc // map of supported handlers keyed by SASL mechanism, SASL not negotiated if nil
@@ -756,7 +756,7 @@ func (c *conn) readProtoHeader() (protoHeader, error) {
 	}
 }
 
-// startTLS wraps the conn with TLS and returns to Client.negotiateProto
+// startTLS wraps the conn with TLS and returns to Conn.negotiateProto
 func (c *conn) startTLS() stateFunc {
 	c.initTLSConfig()
 
@@ -871,7 +871,7 @@ func (c *conn) negotiateSASL() stateFunc {
 	return nil
 }
 
-// saslOutcome processes the SASL outcome frame and return Client.negotiateProto
+// saslOutcome processes the SASL outcome frame and return Conn.negotiateProto
 // on success.
 //
 // SASL handlers return this stateFunc when the mechanism specific negotiation
