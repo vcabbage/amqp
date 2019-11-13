@@ -44,10 +44,9 @@ func Dial(addr string, opts ...ConnOption) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	host, port, err := net.SplitHostPort(u.Host)
-	if err != nil {
-		host = u.Host
-		port = "5672" // use default port values if parse fails
+	host, port := u.Hostname(), u.Port()
+	if port == "" {
+		port = "5672"
 		if u.Scheme == "amqps" {
 			port = "5671"
 		}
@@ -74,11 +73,11 @@ func Dial(addr string, opts ...ConnOption) (*Client, error) {
 	dialer := &net.Dialer{Timeout: c.connectTimeout}
 	switch u.Scheme {
 	case "amqp", "":
-		c.net, err = dialer.Dial("tcp", host+":"+port)
+		c.net, err = dialer.Dial("tcp", net.JoinHostPort(host, port))
 	case "amqps":
 		c.initTLSConfig()
 		c.tlsNegotiation = false
-		c.net, err = tls.DialWithDialer(dialer, "tcp", host+":"+port, c.tlsConfig)
+		c.net, err = tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), c.tlsConfig)
 	default:
 		return nil, errorErrorf("unsupported scheme %q", u.Scheme)
 	}
