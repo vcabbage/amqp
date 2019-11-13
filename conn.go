@@ -615,11 +615,11 @@ func (c *conn) connWriter() {
 		// connection complete
 		case <-c.done:
 			// send close
-			close := &performClose{}
-			debug(1, "TX: %s", close)
+			cls := &performClose{}
+			debug(1, "TX: %s", cls)
 			_ = c.writeFrame(frame{
 				type_: frameTypeAMQP,
-				body:  close,
+				body:  cls,
 			})
 			return
 		}
