@@ -64,7 +64,7 @@ jobs:
       working-directory: ${{ runner.workspace }}/go/src/pack.ag/amqp
       env:
         GOPATH: ${{ runner.workspace }}/go
-        COVERALLS_TOKEN: ${{ secrets.COVERALLS_TOKEN }}
+        COVERALLS_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
-        goveralls -coverprofile=cover.out -service=travis-ci
+        goveralls -coverprofile=cover.out -service=github
       if: matrix.upload_coverage
