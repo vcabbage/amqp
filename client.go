@@ -1756,6 +1756,43 @@ func LinkMaxMessageSize(size uint64) LinkOption {
 	}
 }
 
+// LinkTargetDurability sets the target durability policy.
+//
+// Default: DurabilityNone.
+func LinkTargetDurability(d Durability) LinkOption {
+	return func(l *link) error {
+		if d > DurabilityUnsettledState {
+			return errorErrorf("invalid Durability %d", d)
+		}
+
+		if l.target == nil {
+			l.target = new(target)
+		}
+		l.target.Durable = d
+
+		return nil
+	}
+}
+
+// LinkTargetExpiryPolicy sets the link expiration policy.
+//
+// Default: ExpirySessionEnd.
+func LinkTargetExpiryPolicy(p ExpiryPolicy) LinkOption {
+	return func(l *link) error {
+		err := p.validate()
+		if err != nil {
+			return err
+		}
+
+		if l.target == nil {
+			l.target = new(target)
+		}
+		l.target.ExpiryPolicy = p
+
+		return nil
+	}
+}
+
 // LinkSourceDurability sets the source durability policy.
 //
 // Default: DurabilityNone.
