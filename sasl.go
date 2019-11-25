@@ -99,12 +99,6 @@ func ConnSASLAnonymous() ConnOption {
 	}
 }
 
-type xoauth2Error string
-
-func (x xoauth2Error) Error() string {
-	return fmt.Sprintf("the server sent a challenge containing error message : %s", string(x))
-}
-
 // ConnSASLXOAUTH2 enables SASL XOAUTH2 authentication for the connection.
 func ConnSASLXOAUTH2(username, bearer string, saslMaxFrameSizeOverride uint32) ConnOption {
 	return func(c *conn) error {
@@ -136,7 +130,7 @@ func ConnSASLXOAUTH2(username, bearer string, saslMaxFrameSizeOverride uint32) C
 				return nil
 			}
 
-			// go to c.saslOutcome to handle the server response
+			// go to c.saslXOAUTH2Step to handle the server response
 			return c.saslXOAUTH2Step
 		}
 		return nil
@@ -163,22 +157,15 @@ func (c *conn) saslXOAUTH2Step() stateFunc {
 	if so, ok := fr.body.(*saslOutcome); ok {
 		// check if auth succeeded
 		if so.Code != codeSASLOK {
-			if xoerr, ok := c.err.(xoauth2Error); ok {
-				c.err = errorErrorf("SASL XOAUTH2 auth failed with code %#00x: %s", so.Code, so.AdditionalData)
-			} else {
-				c.err = errorErrorf("SASL XOAUTH2 auth failed with code %#00x: %s %s", so.Code, so.AdditionalData, xoerr)
-			}
+			c.err = errorErrorf("SASL XOAUTH2 auth failed with code %#00x: %s", so.Code, so.AdditionalData)
 			return nil
 		}
 
 		// return to c.negotiateProto
 		c.saslComplete = true
 		return c.negotiateProto
-
 	} else if sc, ok := fr.body.(*saslChallenge); ok {
-		if c.err == nil {
-			c.err = xoauth2Error(sc.Challenge)
-		}
+		debug(1, "SASL XOAUTH2 - the server sent a challenge containing error message :%s", string(sc.Challenge))
 
 		// The SASL protocol requires clients to send an empty response to this challenge.
 		c.err = c.writeFrame(frame{
