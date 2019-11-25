@@ -2471,6 +2471,56 @@ func (sm *saslMechanisms) String() string {
 }
 
 /*
+<type class="composite" name="sasl-challenge" source="list" provides="sasl-frame" label="security mechanism challenge">
+    <descriptor name="amqp:sasl-challenge:list" code="0x00000000:0x00000042"/>
+    <field name="challenge" type="binary" label="security challenge data" mandatory="true"/>
+</type>
+*/
+
+type saslChallenge struct {
+	Challenge []byte
+}
+
+func (sc *saslChallenge) frameBody() {}
+
+func (sc *saslChallenge) marshal(wr *buffer) error {
+	return marshalComposite(wr, typeCodeSASLChallenge, []marshalField{
+		{value: &sc.Challenge, omit: false},
+	})
+}
+
+func (sc *saslChallenge) unmarshal(r *buffer) error {
+	return unmarshalComposite(r, typeCodeSASLChallenge, []unmarshalField{
+		{field: &sc.Challenge, handleNull: func() error { return errorNew("saslChallenge.Challenge is required") }},
+	}...)
+}
+
+/*
+<type class="composite" name="sasl-response" source="list" provides="sasl-frame" label="security mechanism response">
+    <descriptor name="amqp:sasl-response:list" code="0x00000000:0x00000043"/>
+    <field name="response" type="binary" label="security response data" mandatory="true"/>
+</type>
+*/
+
+type saslResponse struct {
+	Response []byte
+}
+
+func (sr *saslResponse) frameBody() {}
+
+func (sr *saslResponse) marshal(wr *buffer) error {
+	return marshalComposite(wr, typeCodeSASLResponse, []marshalField{
+		{value: &sr.Response, omit: false},
+	})
+}
+
+func (sr *saslResponse) unmarshal(r *buffer) error {
+	return unmarshalComposite(r, typeCodeSASLResponse, []unmarshalField{
+		{field: &sr.Response, handleNull: func() error { return errorNew("saslResponse.Response is required") }},
+	}...)
+}
+
+/*
 <type name="sasl-outcome" class="composite" source="list" provides="sasl-frame">
     <descriptor name="amqp:sasl-outcome:list" code="0x00000000:0x00000044"/>
     <field name="code" type="sasl-code" mandatory="true"/>

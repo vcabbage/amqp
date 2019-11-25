@@ -641,8 +641,9 @@ func (c *conn) writeFrame(fr frame) error {
 	}
 
 	// validate the frame isn't exceeding peer's max frame size
-	if uint64(c.txBuf.len()) > uint64(c.peerMaxFrameSize) {
-		return errorErrorf("frame larger than peer's max frame size")
+	requiredFrameSize := c.txBuf.len()
+	if uint64(requiredFrameSize) > uint64(c.peerMaxFrameSize) {
+		return errorErrorf("%T frame size %d larger than peer's max frame size", fr, requiredFrameSize, c.peerMaxFrameSize)
 	}
 
 	// write to network
