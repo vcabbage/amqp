@@ -2481,6 +2481,10 @@ type saslChallenge struct {
 	Challenge []byte
 }
 
+func (sc *saslChallenge) String() string {
+	return fmt.Sprint("Challenge{Challenge: ********}")
+}
+
 func (sc *saslChallenge) frameBody() {}
 
 func (sc *saslChallenge) marshal(wr *buffer) error {
@@ -2504,6 +2508,10 @@ func (sc *saslChallenge) unmarshal(r *buffer) error {
 
 type saslResponse struct {
 	Response []byte
+}
+
+func (sr *saslResponse) String() string {
+	return fmt.Sprint("Response{Response: ********}")
 }
 
 func (sr *saslResponse) frameBody() {}
