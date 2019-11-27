@@ -2432,9 +2432,9 @@ func (si *saslInit) unmarshal(r *buffer) error {
 }
 
 func (si *saslInit) String() string {
-	return fmt.Sprintf("SaslInit{Mechanism : %s, InitialResponse: %v, Hostname: %s}",
+	// Elide the InitialResponse as it may contain a plain text secret.
+	return fmt.Sprintf("SaslInit{Mechanism : %s, InitialResponse: ********, Hostname: %s}",
 		si.Mechanism,
-		si.InitialResponse,
 		si.Hostname,
 	)
 }
