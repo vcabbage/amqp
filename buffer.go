@@ -32,6 +32,15 @@ func (b *buffer) reset() {
 	b.i = 0
 }
 
+// reclaim shifts used buffer space to the beginning of the
+// underlying slice.
+func (b *buffer) reclaim() {
+	l := b.len()
+	copy(b.b[:l], b.b[b.i:])
+	b.b = b.b[:l]
+	b.i = 0
+}
+
 func (b *buffer) readCheck(n int64) bool {
 	return int64(b.i)+n > int64(len(b.b))
 }
@@ -94,7 +103,11 @@ func (b *buffer) readFromOnce(r io.Reader) error {
 
 	l := len(b.b)
 	if cap(b.b)-l < minRead {
-		new := make([]byte, l, l+minRead)
+		total := l * 2
+		if total == 0 {
+			total = minRead
+		}
+		new := make([]byte, l, total)
 		copy(new, b.b)
 		b.b = new
 	}
