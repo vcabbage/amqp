@@ -446,8 +446,14 @@ func (c *conn) connReader() {
 	)
 
 	for {
-		if buf.len() == 0 {
+		switch {
+		// Cheaply reuse free buffer space when fully read.
+		case buf.len() == 0:
 			buf.reset()
+
+		// Prevent excessive/unbounded growth by shifting data to beginning of buffer.
+		case int64(buf.i) > int64(c.maxFrameSize):
+			buf.reclaim()
 		}
 
 		// need to read more if buf doesn't contain the complete frame
