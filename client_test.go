@@ -100,7 +100,7 @@ func TestSourceName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got.name != expectedSourceName {
-		t.Errorf("Link Source Name does not match expected: %v got: %v", expectedSourceName, got.name)
+	if got.key.name != expectedSourceName {
+		t.Errorf("Link Source Name does not match expected: %v got: %v", expectedSourceName, got.key.name)
 	}
 }
