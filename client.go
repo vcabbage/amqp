@@ -469,7 +469,19 @@ func (s *Session) NewSender(opts ...LinkOption) (*Sender, error) {
 }
 
 func (s *Session) mux(remoteBegin *performBegin) {
-	defer close(s.done)
+	defer func() {
+		// clean up session record in conn.mux()
+		select {
+		case s.conn.delSession <- s:
+		case <-s.conn.done:
+			s.err = s.conn.getErr()
+		}
+		if s.err == nil {
+			s.err = ErrSessionClosed
+		}
+		// Signal goroutines waiting on the session.
+		close(s.done)
+	}()
 
 	var (
 		links      = make(map[uint32]*link)    // mapping of remote handles to links
@@ -519,14 +531,6 @@ func (s *Session) mux(remoteBegin *performBegin) {
 					s.err = s.conn.getErr()
 					return
 				}
-			}
-
-			// release session
-			select {
-			case s.conn.delSession <- s:
-				s.err = ErrSessionClosed
-			case <-s.conn.done:
-				s.err = s.conn.getErr()
 			}
 			return
 
