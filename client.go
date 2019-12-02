@@ -874,6 +874,20 @@ type link struct {
 	msg           Message       // current message being decoded
 }
 
+func (l *link) getSource() *source {
+	if l.source == nil {
+		l.source = new(source)
+	}
+	return l.source
+}
+
+func (l *link) getTarget() *target {
+	if l.target == nil {
+		l.target = new(target)
+	}
+	return l.target
+}
+
 // attachLink is used by Receiver and Sender to create new links
 func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	l, err := newLink(s, r, opts)
@@ -995,7 +1009,7 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	if isReceiver {
 		// if dynamic address requested, copy assigned name to address
 		if l.dynamicAddr && resp.Source != nil {
-			l.source.Address = resp.Source.Address
+			l.getSource().Address = resp.Source.Address
 		}
 		// deliveryCount is a sequence number, must initialize to sender's initial sequence number
 		l.deliveryCount = resp.InitialDeliveryCount
@@ -1004,7 +1018,7 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	} else {
 		// if dynamic address requested, copy assigned name to address
 		if l.dynamicAddr && resp.Target != nil {
-			l.target.Address = resp.Target.Address
+			l.getTarget().Address = resp.Target.Address
 		}
 		l.transfers = make(chan performTransfer)
 	}
@@ -1595,17 +1609,10 @@ func LinkName(name string) LinkOption {
 // LinkSourceCapabilities sets the source capabilities.
 func LinkSourceCapabilities(capabilities ...string) LinkOption {
 	return func(l *link) error {
-		if l.source == nil {
-			l.source = new(source)
+		source := l.getSource()
+		for _, v := range capabilities {
+			source.Capabilities = append(source.Capabilities, symbol(v))
 		}
-
-		// Convert string to symbol
-		symbolCapabilities := make([]symbol, len(capabilities))
-		for i, v := range capabilities {
-			symbolCapabilities[i] = symbol(v)
-		}
-
-		l.source.Capabilities = append(l.source.Capabilities, symbolCapabilities...)
 		return nil
 	}
 }
@@ -1613,10 +1620,7 @@ func LinkSourceCapabilities(capabilities ...string) LinkOption {
 // LinkSourceAddress sets the source address.
 func LinkSourceAddress(addr string) LinkOption {
 	return func(l *link) error {
-		if l.source == nil {
-			l.source = new(source)
-		}
-		l.source.Address = addr
+		l.getSource().Address = addr
 		return nil
 	}
 }
@@ -1624,10 +1628,7 @@ func LinkSourceAddress(addr string) LinkOption {
 // LinkTargetAddress sets the target address.
 func LinkTargetAddress(addr string) LinkOption {
 	return func(l *link) error {
-		if l.target == nil {
-			l.target = new(target)
-		}
-		l.target.Address = addr
+		l.getTarget().Address = addr
 		return nil
 	}
 }
@@ -1738,11 +1739,9 @@ func LinkSelectorFilter(filter string) LinkOption {
 //  http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-types-v1.0-os.html#section-descriptor-values
 func LinkSourceFilter(name string, code uint64, value interface{}) LinkOption {
 	return func(l *link) error {
-		if l.source == nil {
-			l.source = new(source)
-		}
-		if l.source.Filter == nil {
-			l.source.Filter = make(map[symbol]*describedType)
+		source := l.getSource()
+		if source.Filter == nil {
+			source.Filter = make(map[symbol]*describedType)
 		}
 
 		var descriptor interface{}
@@ -1752,7 +1751,7 @@ func LinkSourceFilter(name string, code uint64, value interface{}) LinkOption {
 			descriptor = symbol(name)
 		}
 
-		l.source.Filter[symbol(name)] = &describedType{
+		source.Filter[symbol(name)] = &describedType{
 			descriptor: descriptor,
 			value:      value,
 		}
@@ -1781,12 +1780,7 @@ func LinkTargetDurability(d Durability) LinkOption {
 		if d > DurabilityUnsettledState {
 			return errorErrorf("invalid Durability %d", d)
 		}
-
-		if l.target == nil {
-			l.target = new(target)
-		}
-		l.target.Durable = d
-
+		l.getTarget().Durable = d
 		return nil
 	}
 }
@@ -1800,12 +1794,7 @@ func LinkTargetExpiryPolicy(p ExpiryPolicy) LinkOption {
 		if err != nil {
 			return err
 		}
-
-		if l.target == nil {
-			l.target = new(target)
-		}
-		l.target.ExpiryPolicy = p
-
+		l.getTarget().ExpiryPolicy = p
 		return nil
 	}
 }
@@ -1818,12 +1807,7 @@ func LinkSourceDurability(d Durability) LinkOption {
 		if d > DurabilityUnsettledState {
 			return errorErrorf("invalid Durability %d", d)
 		}
-
-		if l.source == nil {
-			l.source = new(source)
-		}
-		l.source.Durable = d
-
+		l.getSource().Durable = d
 		return nil
 	}
 }
@@ -1837,12 +1821,7 @@ func LinkSourceExpiryPolicy(p ExpiryPolicy) LinkOption {
 		if err != nil {
 			return err
 		}
-
-		if l.source == nil {
-			l.source = new(source)
-		}
-		l.source.ExpiryPolicy = p
-
+		l.getSource().ExpiryPolicy = p
 		return nil
 	}
 }
