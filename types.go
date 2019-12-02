@@ -228,6 +228,25 @@ func (o *performOpen) unmarshal(r *buffer) error {
 	}...)
 }
 
+func (o *performOpen) String() string {
+	return fmt.Sprintf("Open{ContainerID : %s, Hostname: %s, MaxFrameSize: %d, "+
+		"ChannelMax: %d, IdleTimeout: %v, "+
+		"OutgoingLocales: %v, IncomingLocales: %v, "+
+		"OfferedCapabilities: %v, DesiredCapabilities: %v, "+
+		"Properties: %v}",
+		o.ContainerID,
+		o.Hostname,
+		o.MaxFrameSize,
+		o.ChannelMax,
+		o.IdleTimeout,
+		o.OutgoingLocales,
+		o.IncomingLocales,
+		o.OfferedCapabilities,
+		o.DesiredCapabilities,
+		o.Properties,
+	)
+}
+
 /*
 <type name="begin" class="composite" source="list" provides="frame">
     <descriptor name="amqp:begin:list" code="0x00000000:0x00000011"/>
@@ -1632,7 +1651,7 @@ func (c *performClose) unmarshal(r *buffer) error {
 }
 
 func (c *performClose) String() string {
-	return fmt.Sprintf("*performClose{Error: %s}", c.Error)
+	return fmt.Sprintf("Close{Error: %s}", c.Error)
 }
 
 const maxDeliveryTagLength = 32
@@ -2412,6 +2431,14 @@ func (si *saslInit) unmarshal(r *buffer) error {
 	}...)
 }
 
+func (si *saslInit) String() string {
+	// Elide the InitialResponse as it may contain a plain text secret.
+	return fmt.Sprintf("SaslInit{Mechanism : %s, InitialResponse: ********, Hostname: %s}",
+		si.Mechanism,
+		si.Hostname,
+	)
+}
+
 /*
 <type name="sasl-mechanisms" class="composite" source="list" provides="sasl-frame">
     <descriptor name="amqp:sasl-mechanisms:list" code="0x00000000:0x00000040"/>
@@ -2434,6 +2461,12 @@ func (sm *saslMechanisms) marshal(wr *buffer) error {
 func (sm *saslMechanisms) unmarshal(r *buffer) error {
 	return unmarshalComposite(r, typeCodeSASLMechanism,
 		unmarshalField{field: &sm.Mechanisms, handleNull: func() error { return errorNew("saslMechanisms.Mechanisms is required") }},
+	)
+}
+
+func (sm *saslMechanisms) String() string {
+	return fmt.Sprintf("SaslMechanisms{Mechanisms : %v}",
+		sm.Mechanisms,
 	)
 }
 
@@ -2464,6 +2497,13 @@ func (so *saslOutcome) unmarshal(r *buffer) error {
 		{field: &so.Code, handleNull: func() error { return errorNew("saslOutcome.AdditionalData is required") }},
 		{field: &so.AdditionalData},
 	}...)
+}
+
+func (so *saslOutcome) String() string {
+	return fmt.Sprintf("SaslOutcome{Code : %v, AdditionalData: %v}",
+		so.Code,
+		so.AdditionalData,
+	)
 }
 
 // symbol is an AMQP symbolic string.

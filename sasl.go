@@ -42,13 +42,15 @@ func ConnSASLPlain(username, password string) ConnOption {
 		// add the handler the the map
 		c.saslHandlers[saslMechanismPLAIN] = func() stateFunc {
 			// send saslInit with PLAIN payload
+			init := &saslInit{
+				Mechanism:       "PLAIN",
+				InitialResponse: []byte("\x00" + username + "\x00" + password),
+				Hostname:        "",
+			}
+			debug(1, "TX: %s", init)
 			c.err = c.writeFrame(frame{
 				type_: frameTypeSASL,
-				body: &saslInit{
-					Mechanism:       "PLAIN",
-					InitialResponse: []byte("\x00" + username + "\x00" + password),
-					Hostname:        "",
-				},
+				body:  init,
 			})
 			if c.err != nil {
 				return nil
@@ -71,12 +73,14 @@ func ConnSASLAnonymous() ConnOption {
 
 		// add the handler the the map
 		c.saslHandlers[saslMechanismANONYMOUS] = func() stateFunc {
+			init := &saslInit{
+				Mechanism:       saslMechanismANONYMOUS,
+				InitialResponse: []byte("anonymous"),
+			}
+			debug(1, "TX: %s", init)
 			c.err = c.writeFrame(frame{
 				type_: frameTypeSASL,
-				body: &saslInit{
-					Mechanism:       saslMechanismANONYMOUS,
-					InitialResponse: []byte("anonymous"),
-				},
+				body:  init,
 			})
 			if c.err != nil {
 				return nil
