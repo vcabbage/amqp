@@ -2,7 +2,6 @@ package amqp
 
 import (
 	"fmt"
-	"regexp"
 )
 
 // SASL Codes
@@ -100,6 +99,15 @@ func ConnSASLAnonymous() ConnOption {
 }
 
 // ConnSASLXOAUTH2 enables SASL XOAUTH2 authentication for the connection.
+//
+// The saslMaxFrameSizeOverride parameter allows the limit that governs the maximum frame size this client will allow
+// itself to generate to be raised for the sasl-init frame only.  Set this when the size of the size of the SASL XOAUTH2
+// initial client response (which contains the username and bearer token) would otherwise breach the 512 byte min-max-frame-size
+// (http://docs.oasis-open.org/amqp/core/v1.0/os/amqp-core-transport-v1.0-os.html#definition-MIN-MAX-FRAME-SIZE). Pass -1
+// to keep the default.
+//
+// SASL XOAUTH2 transmits the bearer in plain text and should only be used
+// on TLS/SSL enabled connection.
 func ConnSASLXOAUTH2(username, bearer string, saslMaxFrameSizeOverride uint32) ConnOption {
 	return func(c *conn) error {
 		// make handlers map if no other mechanism has
@@ -138,11 +146,19 @@ func ConnSASLXOAUTH2(username, bearer string, saslMaxFrameSizeOverride uint32) C
 }
 
 func saslXOAUTH2InitialResponse(username string, bearer string) ([]byte, error) {
-	re := regexp.MustCompile("^[\x20-\x7E]+$")
-	if !re.MatchString(bearer) {
+	if len(bearer) == 0 {
 		return []byte{}, fmt.Errorf("unacceptable bearer token")
 	}
-
+	for _, char := range bearer {
+		if char < '\x20' || char > '\x7E' {
+			return []byte{}, fmt.Errorf("unacceptable bearer token")
+		}
+	}
+	for _, char := range username {
+		if char == '\x01' {
+			return []byte{}, fmt.Errorf("unacceptable username")
+		}
+	}
 	return []byte("user=" + username + "\x01auth=Bearer " + bearer + "\x01\x01"), nil
 }
 
