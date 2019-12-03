@@ -122,25 +122,75 @@ func ConnSASLXOAUTH2(username, bearer string, saslMaxFrameSizeOverride uint32) C
 
 		// add the handler the the map
 		c.saslHandlers[saslMechanismXOAUTH2] = func() stateFunc {
-			originalPeerMaxFrameSize := c.peerMaxFrameSize
-			if saslMaxFrameSizeOverride > c.peerMaxFrameSize {
-				c.peerMaxFrameSize = saslMaxFrameSizeOverride
+			handler := saslXOAUTH2Handler{
+				conn:                 c,
+				maxFrameSizeOverride: saslMaxFrameSizeOverride,
+				response:             response,
 			}
-			c.err = c.writeFrame(frame{
-				type_: frameTypeSASL,
-				body: &saslInit{
-					Mechanism:       saslMechanismXOAUTH2,
-					InitialResponse: response,
-				},
-			})
-			c.peerMaxFrameSize = originalPeerMaxFrameSize
-			if c.err != nil {
-				return nil
-			}
-
-			// go to c.saslXOAUTH2Step to handle the server response
-			return c.saslXOAUTH2Step
+			return handler.init()
 		}
+		return nil
+	}
+}
+
+type saslXOAUTH2Handler struct {
+	conn                 *conn
+	maxFrameSizeOverride uint32
+	response             []byte
+}
+
+func (s saslXOAUTH2Handler) init() stateFunc {
+	originalPeerMaxFrameSize := s.conn.peerMaxFrameSize
+	if s.maxFrameSizeOverride > s.conn.peerMaxFrameSize {
+		s.conn.peerMaxFrameSize = s.maxFrameSizeOverride
+	}
+	s.conn.err = s.conn.writeFrame(frame{
+		type_: frameTypeSASL,
+		body: &saslInit{
+			Mechanism:       saslMechanismXOAUTH2,
+			InitialResponse: s.response,
+		},
+	})
+	s.conn.peerMaxFrameSize = originalPeerMaxFrameSize
+	if s.conn.err != nil {
+		return nil
+	}
+
+	return s.saslXOAUTH2Step
+}
+
+func (s saslXOAUTH2Handler) saslXOAUTH2Step() stateFunc {
+	// read challenge or outcome frame
+	fr, err := s.conn.readFrame()
+	if err != nil {
+		s.conn.err = err
+		return nil
+	}
+
+	switch v := fr.body.(type) {
+	case *saslOutcome:
+		// check if auth succeeded
+		if v.Code != codeSASLOK {
+			s.conn.err = errorErrorf("SASL XOAUTH2 auth failed with code %#00x: %s", v.Code, v.AdditionalData)
+			return nil
+		}
+
+		// return to c.negotiateProto
+		s.conn.saslComplete = true
+		return s.conn.negotiateProto
+	case *saslChallenge:
+		debug(1, "SASL XOAUTH2 - the server sent a challenge containing error message :%s", string(v.Challenge))
+
+		// The SASL protocol requires clients to send an empty response to this challenge.
+		s.conn.err = s.conn.writeFrame(frame{
+			type_: frameTypeSASL,
+			body: &saslResponse{
+				Response: []byte{},
+			},
+		})
+		return s.saslXOAUTH2Step
+	default:
+		s.conn.err = errorErrorf("unexpected frame type %T", fr.body)
 		return nil
 	}
 }
@@ -160,39 +210,4 @@ func saslXOAUTH2InitialResponse(username string, bearer string) ([]byte, error) 
 		}
 	}
 	return []byte("user=" + username + "\x01auth=Bearer " + bearer + "\x01\x01"), nil
-}
-
-func (c *conn) saslXOAUTH2Step() stateFunc {
-	// read challenge or outcome frame
-	fr, err := c.readFrame()
-	if err != nil {
-		c.err = err
-		return nil
-	}
-
-	if so, ok := fr.body.(*saslOutcome); ok {
-		// check if auth succeeded
-		if so.Code != codeSASLOK {
-			c.err = errorErrorf("SASL XOAUTH2 auth failed with code %#00x: %s", so.Code, so.AdditionalData)
-			return nil
-		}
-
-		// return to c.negotiateProto
-		c.saslComplete = true
-		return c.negotiateProto
-	} else if sc, ok := fr.body.(*saslChallenge); ok {
-		debug(1, "SASL XOAUTH2 - the server sent a challenge containing error message :%s", string(sc.Challenge))
-
-		// The SASL protocol requires clients to send an empty response to this challenge.
-		c.err = c.writeFrame(frame{
-			type_: frameTypeSASL,
-			body: &saslResponse{
-				Response: []byte{},
-			},
-		})
-		return c.saslXOAUTH2Step
-	} else {
-		c.err = errorErrorf("unexpected frame type %T", fr.body)
-		return nil
-	}
 }
