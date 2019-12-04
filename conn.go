@@ -278,6 +278,10 @@ func (c *conn) start() error {
 
 func (c *conn) Close() error {
 	c.closeMuxOnce.Do(func() { close(c.closeMux) })
+	// Wait for all goroutines to finish.
+	<-c.done
+	<-c.txDone
+	<-c.rxDone
 	err := c.getErr()
 	if err == ErrConnClosed {
 		return nil
