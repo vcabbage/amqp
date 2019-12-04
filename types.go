@@ -1,9 +1,11 @@
 package amqp
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"math"
 	"reflect"
 	"strconv"
@@ -228,23 +230,70 @@ func (o *performOpen) unmarshal(r *buffer) error {
 	}...)
 }
 
+type namedField struct {
+	name  string
+	value interface{}
+}
+
+// Print a named field only if it has a non-null/non-empty value.
+// Include leading comma if comma is true.
+// Return true if next print needs a leading comma.
+func (nf namedField) print(w io.Writer, comma bool) bool {
+	// Skip null/empty values
+	if nf.value == nil {
+		return comma
+	}
+	value := nf.value
+	rv := reflect.ValueOf(value)
+	switch rv.Kind() {
+	case reflect.Ptr:
+		if rv.IsNil() {
+			return comma
+		}
+		value = rv.Elem().Interface() // Print pointed-at value
+	case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
+		if rv.Len() == 0 {
+			return comma
+		}
+	case reflect.Bool:
+		// Skip false values for plain bool, but not for bool types like role.
+		if rv.Type() == reflect.TypeOf(true) && rv.IsZero() {
+			return comma
+		}
+	}
+	if comma {
+		io.WriteString(w, ", ")
+	}
+	fmt.Fprintf(w, "%s: %v", nf.name, value)
+	return true
+}
+
+// compositeString generates a readable string for a composite value.
+func compositeString(name string, fields []namedField) string {
+	// Performance is not a big deal, use bytes.Buffer rather than newer strings.Builder.
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "%s{", name)
+	var comma bool
+	for _, nf := range fields {
+		comma = nf.print(&buf, comma)
+	}
+	buf.WriteString("}")
+	return buf.String()
+}
+
 func (o *performOpen) String() string {
-	return fmt.Sprintf("Open{ContainerID : %s, Hostname: %s, MaxFrameSize: %d, "+
-		"ChannelMax: %d, IdleTimeout: %v, "+
-		"OutgoingLocales: %v, IncomingLocales: %v, "+
-		"OfferedCapabilities: %v, DesiredCapabilities: %v, "+
-		"Properties: %v}",
-		o.ContainerID,
-		o.Hostname,
-		o.MaxFrameSize,
-		o.ChannelMax,
-		o.IdleTimeout,
-		o.OutgoingLocales,
-		o.IncomingLocales,
-		o.OfferedCapabilities,
-		o.DesiredCapabilities,
-		o.Properties,
-	)
+	return compositeString("Open", []namedField{
+		{"ContainerID", o.ContainerID},
+		{"Hostname", o.Hostname},
+		{"MaxFrameSize", o.MaxFrameSize},
+		{"ChannelMax", o.ChannelMax},
+		{"IdleTimeout", o.IdleTimeout},
+		{"OutgoingLocales", o.OutgoingLocales},
+		{"IncomingLocales", o.IncomingLocales},
+		{"OfferedCapabilities", o.OfferedCapabilities},
+		{"DesiredCapabilities", o.DesiredCapabilities},
+		{"Properties", o.Properties},
+	})
 }
 
 /*
@@ -301,18 +350,16 @@ type performBegin struct {
 func (b *performBegin) frameBody() {}
 
 func (b *performBegin) String() string {
-	return fmt.Sprintf("Begin{RemoteChannel: %v, NextOutgoingID: %d, IncomingWindow: %d, "+
-		"OutgoingWindow: %d, HandleMax: %d, OfferedCapabilities: %v, DesiredCapabilities: %v, "+
-		"Properties: %v}",
-		formatUint16Ptr(b.RemoteChannel),
-		b.NextOutgoingID,
-		b.IncomingWindow,
-		b.OutgoingWindow,
-		b.HandleMax,
-		b.OfferedCapabilities,
-		b.DesiredCapabilities,
-		b.Properties,
-	)
+	return compositeString("Begin", []namedField{
+		{"RemoteChannel", b.RemoteChannel},
+		{"NextOutgoingID", b.NextOutgoingID},
+		{"IncomingWindow", b.IncomingWindow},
+		{"OutgoingWindow", b.OutgoingWindow},
+		{"HandleMax", b.HandleMax},
+		{"OfferedCapabilities", b.OfferedCapabilities},
+		{"DesiredCapabilities", b.DesiredCapabilities},
+		{"Properties", b.Properties},
+	})
 }
 
 func formatUint16Ptr(p *uint16) string {
@@ -501,24 +548,22 @@ type performAttach struct {
 func (a *performAttach) frameBody() {}
 
 func (a performAttach) String() string {
-	return fmt.Sprintf("Attach{Name: %s, Handle: %d, Role: %s, SenderSettleMode: %s, ReceiverSettleMode: %s, "+
-		"Source: %v, Target: %v, Unsettled: %v, IncompleteUnsettled: %t, InitialDeliveryCount: %d, MaxMessageSize: %d, "+
-		"OfferedCapabilities: %v, DesiredCapabilities: %v, Properties: %v}",
-		a.Name,
-		a.Handle,
-		a.Role,
-		a.SenderSettleMode,
-		a.ReceiverSettleMode,
-		a.Source,
-		a.Target,
-		a.Unsettled,
-		a.IncompleteUnsettled,
-		a.InitialDeliveryCount,
-		a.MaxMessageSize,
-		a.OfferedCapabilities,
-		a.DesiredCapabilities,
-		a.Properties,
-	)
+	return compositeString("Attach", []namedField{
+		{"Name", a.Name},
+		{"Handle", a.Handle},
+		{"Role", a.Role},
+		{"SenderSettleMode", a.SenderSettleMode},
+		{"ReceiverSettleMode", a.ReceiverSettleMode},
+		{"Source", a.Source},
+		{"Target", a.Target},
+		{"Unsettled", a.Unsettled},
+		{"IncompleteUnsettled", a.IncompleteUnsettled},
+		{"InitialDeliveryCount", a.InitialDeliveryCount},
+		{"MaxMessageSize", a.MaxMessageSize},
+		{"OfferedCapabilities", a.OfferedCapabilities},
+		{"DesiredCapabilities", a.DesiredCapabilities},
+		{"Properties", a.Properties},
+	})
 }
 
 func (a *performAttach) marshal(wr *buffer) error {
@@ -810,21 +855,19 @@ func (s *source) unmarshal(r *buffer) error {
 }
 
 func (s source) String() string {
-	return fmt.Sprintf("source{Address: %s, Durable: %d, ExpiryPolicy: %s, Timeout: %d, "+
-		"Dynamic: %t, DynamicNodeProperties: %v, DistributionMode: %s, Filter: %v, DefaultOutcome: %v"+
-		"Outcomes: %v, Capabilities: %v}",
-		s.Address,
-		s.Durable,
-		s.ExpiryPolicy,
-		s.Timeout,
-		s.Dynamic,
-		s.DynamicNodeProperties,
-		s.DistributionMode,
-		s.Filter,
-		s.DefaultOutcome,
-		s.Outcomes,
-		s.Capabilities,
-	)
+	return compositeString("Source", []namedField{
+		{"Address", s.Address},
+		{"Durable", s.Durable},
+		{"ExpiryPolicy", s.ExpiryPolicy},
+		{"Timeout", s.Timeout},
+		{"Dynamic", s.Dynamic},
+		{"DynamicNodeProperties", s.DynamicNodeProperties},
+		{"DistributionMode", s.DistributionMode},
+		{"Filter", s.Filter},
+		{"DefaultOutcome", s.DefaultOutcome},
+		{"Outcomes", s.Outcomes},
+		{"Capabilities", s.Capabilities},
+	})
 }
 
 /*
@@ -949,16 +992,15 @@ func (t *target) unmarshal(r *buffer) error {
 }
 
 func (t target) String() string {
-	return fmt.Sprintf("source{Address: %s, Durable: %d, ExpiryPolicy: %s, Timeout: %d, "+
-		"Dynamic: %t, DynamicNodeProperties: %v, Capabilities: %v}",
-		t.Address,
-		t.Durable,
-		t.ExpiryPolicy,
-		t.Timeout,
-		t.Dynamic,
-		t.DynamicNodeProperties,
-		t.Capabilities,
-	)
+	return compositeString("Target", []namedField{
+		{"Address", t.Address},
+		{"Durable", t.Durable},
+		{"ExpiryPolicy", t.ExpiryPolicy},
+		{"Timeout", t.Timeout},
+		{"Dynamic", t.Dynamic},
+		{"DynamicNodeProperties", t.DynamicNodeProperties},
+		{"Capabilities", t.Capabilities},
+	})
 }
 
 /*
@@ -1079,20 +1121,19 @@ type performFlow struct {
 func (f *performFlow) frameBody() {}
 
 func (f *performFlow) String() string {
-	return fmt.Sprintf("Flow{NextIncomingID: %s, IncomingWindow: %d, NextOutgoingID: %d, OutgoingWindow: %d, "+
-		"Handle: %s, DeliveryCount: %s, LinkCredit: %s, Available: %s, Drain: %t, Echo: %t, Properties: %+v}",
-		formatUint32Ptr(f.NextIncomingID),
-		f.IncomingWindow,
-		f.NextOutgoingID,
-		f.OutgoingWindow,
-		formatUint32Ptr(f.Handle),
-		formatUint32Ptr(f.DeliveryCount),
-		formatUint32Ptr(f.LinkCredit),
-		formatUint32Ptr(f.Available),
-		f.Drain,
-		f.Echo,
-		f.Properties,
-	)
+	return compositeString("Flow", []namedField{
+		{"NextIncomingID", f.NextIncomingID},
+		{"IncomingWindow", f.IncomingWindow},
+		{"NextOutgoingID", f.NextOutgoingID},
+		{"OutgoingWindow", f.OutgoingWindow},
+		{"Handle", f.Handle},
+		{"DeliveryCount", f.DeliveryCount},
+		{"LinkCredit", f.LinkCredit},
+		{"Available", f.Available},
+		{"Drain", f.Drain},
+		{"Echo", f.Echo},
+		{"Properties", f.Properties},
+	})
 }
 
 func formatUint32Ptr(p *uint32) string {
@@ -1297,27 +1338,23 @@ type performTransfer struct {
 func (t *performTransfer) frameBody() {}
 
 func (t performTransfer) String() string {
-	deliveryTag := "<nil>"
+	deliveryTag := ""
 	if t.DeliveryTag != nil {
 		deliveryTag = fmt.Sprintf("%q", t.DeliveryTag)
 	}
-
-	return fmt.Sprintf("Transfer{Handle: %d, DeliveryID: %s, DeliveryTag: %s, MessageFormat: %s, "+
-		"Settled: %t, More: %t, ReceiverSettleMode: %s, State: %v, Resume: %t, Aborted: %t, "+
-		"Batchable: %t, Payload [size]: %d}",
-		t.Handle,
-		formatUint32Ptr(t.DeliveryID),
-		deliveryTag,
-		formatUint32Ptr(t.MessageFormat),
-		t.Settled,
-		t.More,
-		t.ReceiverSettleMode,
-		t.State,
-		t.Resume,
-		t.Aborted,
-		t.Batchable,
-		len(t.Payload),
-	)
+	return compositeString("Transfer", []namedField{
+		{"Handle", t.Handle},
+		{"DeliveryID", t.DeliveryID},
+		{"DeliveryTag", deliveryTag},
+		{"Settled", t.Settled},
+		{"More", t.More},
+		{"ReceiverSettleMode", t.ReceiverSettleMode},
+		{"State", t.State},
+		{"Resume", t.Resume},
+		{"Aborted", t.Aborted},
+		{"Batchable", t.Batchable},
+		{"PayloadSize", len(t.Payload)},
+	})
 }
 
 func (t *performTransfer) marshal(wr *buffer) error {
@@ -1417,14 +1454,14 @@ type performDisposition struct {
 func (d *performDisposition) frameBody() {}
 
 func (d performDisposition) String() string {
-	return fmt.Sprintf("Disposition{Role: %s, First: %d, Last: %s, Settled: %t, State: %s, Batchable: %t}",
-		d.Role,
-		d.First,
-		formatUint32Ptr(d.Last),
-		d.Settled,
-		d.State,
-		d.Batchable,
-	)
+	return compositeString("Disposition", []namedField{
+		{"Role", d.Role},
+		{"First", d.First},
+		{"Last", d.Last},
+		{"Settled", d.Settled},
+		{"State", d.State},
+		{"Batchable", d.Batchable},
+	})
 }
 
 func (d *performDisposition) marshal(wr *buffer) error {
@@ -1474,11 +1511,11 @@ type performDetach struct {
 func (d *performDetach) frameBody() {}
 
 func (d performDetach) String() string {
-	return fmt.Sprintf("Detach{Handle: %d, Closed: %t, Error: %v}",
-		d.Handle,
-		d.Closed,
-		d.Error,
-	)
+	return compositeString("Detach", []namedField{
+		{"Handle", d.Handle},
+		{"Closed", d.Closed},
+		{"Error", d.Error},
+	})
 }
 
 func (d *performDetach) marshal(wr *buffer) error {
@@ -1586,15 +1623,12 @@ func (e *Error) unmarshal(r *buffer) error {
 	}...)
 }
 
-func (e *Error) String() string {
-	if e == nil {
-		return "*Error(nil)"
-	}
-	return fmt.Sprintf("*Error{Condition: %s, Description: %s, Info: %v}",
-		e.Condition,
-		e.Description,
-		e.Info,
-	)
+func (e Error) String() string {
+	return compositeString("Error", []namedField{
+		{"Condition", e.Condition},
+		{"Description", e.Description},
+		{"Info", e.Info},
+	})
 }
 
 func (e *Error) Error() string {
@@ -1658,7 +1692,7 @@ func (c *performClose) unmarshal(r *buffer) error {
 }
 
 func (c *performClose) String() string {
-	return fmt.Sprintf("Close{Error: %s}", c.Error)
+	return compositeString("Close", []namedField{{"Error", c.Error}})
 }
 
 const maxDeliveryTagLength = 32
@@ -2330,7 +2364,7 @@ func (sr *stateRejected) unmarshal(r *buffer) error {
 }
 
 func (sr *stateRejected) String() string {
-	return fmt.Sprintf("Rejected{Error: %v}", sr.Error)
+	return compositeString("Rejected", []namedField{{"Error", sr.Error}})
 }
 
 /*
@@ -2402,7 +2436,11 @@ func (sm *stateModified) unmarshal(r *buffer) error {
 }
 
 func (sm *stateModified) String() string {
-	return fmt.Sprintf("Modified{DeliveryFailed: %t, UndeliverableHere: %t, MessageAnnotations: %v}", sm.DeliveryFailed, sm.UndeliverableHere, sm.MessageAnnotations)
+	return compositeString("Modified", []namedField{
+		{"DeliveryFailed", sm.DeliveryFailed},
+		{"UndeliverableHere", sm.UndeliverableHere},
+		{"MessageAnnotations", sm.MessageAnnotations},
+	})
 }
 
 /*
@@ -2438,12 +2476,12 @@ func (si *saslInit) unmarshal(r *buffer) error {
 	}...)
 }
 
-func (si *saslInit) String() string {
-	// Elide the InitialResponse as it may contain a plain text secret.
-	return fmt.Sprintf("SaslInit{Mechanism : %s, InitialResponse: ********, Hostname: %s}",
-		si.Mechanism,
-		si.Hostname,
-	)
+func (si saslInit) String() string {
+	// Skip the InitialResponse as it may contain a plain text secret.
+	return compositeString("SaslInit", []namedField{
+		{"Mechanism", si.Mechanism},
+		{"Hostname", si.Hostname},
+	})
 }
 
 /*
@@ -2471,10 +2509,10 @@ func (sm *saslMechanisms) unmarshal(r *buffer) error {
 	)
 }
 
-func (sm *saslMechanisms) String() string {
-	return fmt.Sprintf("SaslMechanisms{Mechanisms : %v}",
-		sm.Mechanisms,
-	)
+func (sm saslMechanisms) String() string {
+	return compositeString("SaslMechanisms", []namedField{
+		{"Mechanisms", sm.Mechanisms},
+	})
 }
 
 /*
@@ -2506,11 +2544,11 @@ func (so *saslOutcome) unmarshal(r *buffer) error {
 	}...)
 }
 
-func (so *saslOutcome) String() string {
-	return fmt.Sprintf("SaslOutcome{Code : %v, AdditionalData: %v}",
-		so.Code,
-		so.AdditionalData,
-	)
+func (so saslOutcome) String() string {
+	return compositeString("SaslOutcome", []namedField{
+		{"Code", so.Code},
+		{"AdditionalData", so.AdditionalData},
+	})
 }
 
 // symbol is an AMQP symbolic string.
@@ -2726,12 +2764,8 @@ const (
 // SenderSettleMode specifies how the sender will settle messages.
 type SenderSettleMode uint8
 
-func (m *SenderSettleMode) String() string {
-	if m == nil {
-		return "<nil>"
-	}
-
-	switch *m {
+func (m SenderSettleMode) String() string {
+	switch m {
 	case ModeUnsettled:
 		return "unsettled"
 
@@ -2742,7 +2776,7 @@ func (m *SenderSettleMode) String() string {
 		return "mixed"
 
 	default:
-		return fmt.Sprintf("unknown sender mode %d", uint8(*m))
+		return fmt.Sprintf("unknown sender mode %d", uint8(m))
 	}
 }
 
@@ -2777,12 +2811,8 @@ const (
 // ReceiverSettleMode specifies how the receiver will settle messages.
 type ReceiverSettleMode uint8
 
-func (m *ReceiverSettleMode) String() string {
-	if m == nil {
-		return "<nil>"
-	}
-
-	switch *m {
+func (m ReceiverSettleMode) String() string {
+	switch m {
 	case ModeFirst:
 		return "first"
 
@@ -2790,7 +2820,7 @@ func (m *ReceiverSettleMode) String() string {
 		return "second"
 
 	default:
-		return fmt.Sprintf("unknown receiver mode %d", uint8(*m))
+		return fmt.Sprintf("unknown receiver mode %d", uint8(m))
 	}
 }
 
@@ -2829,12 +2859,8 @@ const (
 // Durability specifies the durability of a link.
 type Durability uint32
 
-func (d *Durability) String() string {
-	if d == nil {
-		return "<nil>"
-	}
-
-	switch *d {
+func (d Durability) String() string {
+	switch d {
 	case DurabilityNone:
 		return "none"
 	case DurabilityConfiguration:
@@ -2842,7 +2868,7 @@ func (d *Durability) String() string {
 	case DurabilityUnsettledState:
 		return "unsettled-state"
 	default:
-		return fmt.Sprintf("unknown durability %d", *d)
+		return fmt.Sprintf("unknown durability %d", d)
 	}
 }
 
@@ -2902,13 +2928,6 @@ func (e *ExpiryPolicy) unmarshal(r *buffer) error {
 		return err
 	}
 	return e.validate()
-}
-
-func (e *ExpiryPolicy) String() string {
-	if e == nil {
-		return "<nil>"
-	}
-	return string(*e)
 }
 
 type describedType struct {
