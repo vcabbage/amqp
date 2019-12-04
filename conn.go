@@ -353,6 +353,7 @@ func (c *conn) mux() {
 
 		// new frame from connReader
 		case fr := <-c.rxFrame:
+			debugFrame(c, "RX", &fr)
 			var (
 				session *Session
 				ok      bool
@@ -619,7 +620,6 @@ func (c *conn) connWriter() {
 		case <-c.done:
 			// send close
 			cls := &performClose{}
-			debug(1, "TX: %s", cls)
 			_ = c.writeFrame(frame{
 				type_: frameTypeAMQP,
 				body:  cls,
@@ -632,6 +632,7 @@ func (c *conn) connWriter() {
 // writeFrame writes a frame to the network, may only be used
 // by connWriter after initial negotiation.
 func (c *conn) writeFrame(fr frame) error {
+	debugFrame(c, "TX", &fr)
 	if c.connectTimeout != 0 {
 		_ = c.net.SetWriteDeadline(time.Now().Add(c.connectTimeout))
 	}
@@ -807,7 +808,6 @@ func (c *conn) openAMQP() stateFunc {
 		IdleTimeout:  c.idleTimeout,
 		Properties:   c.properties,
 	}
-	debug(1, "TX: %s", open)
 	c.err = c.writeFrame(frame{
 		type_:   frameTypeAMQP,
 		body:    open,
@@ -828,7 +828,6 @@ func (c *conn) openAMQP() stateFunc {
 		c.err = errorErrorf("unexpected frame type %T", fr.body)
 		return nil
 	}
-	debug(1, "RX: %s", o)
 
 	// update peer settings
 	if o.MaxFrameSize > 0 {
@@ -860,7 +859,6 @@ func (c *conn) negotiateSASL() stateFunc {
 		c.err = errorErrorf("unexpected frame type %T", fr.body)
 		return nil
 	}
-	debug(1, "RX: %s", sm)
 
 	// return first match in c.saslHandlers based on order received
 	for _, mech := range sm.Mechanisms {
@@ -891,7 +889,6 @@ func (c *conn) saslOutcome() stateFunc {
 		c.err = errorErrorf("unexpected frame type %T", fr.body)
 		return nil
 	}
-	debug(1, "RX: %s", so)
 
 	// check if auth succeeded
 	if so.Code != codeSASLOK {
@@ -916,6 +913,7 @@ func (c *conn) readFrame() (frame, error) {
 	var fr frame
 	select {
 	case fr = <-c.rxFrame:
+		debugFrame(c, "RX", &fr)
 		return fr, nil
 	case err := <-c.connErr:
 		return fr, err
