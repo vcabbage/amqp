@@ -183,9 +183,8 @@ type conn struct {
 	peerMaxFrameSize uint32        // maximum frame size peer will accept
 
 	// conn state
-	errMu sync.Mutex    // mux holds errMu from start until shutdown completes; operations are sequential before mux is started
-	err   error         // error to be returned to client
-	done  chan struct{} // indicates the connection is done
+	err  error         // error to return, only valid after done closes.
+	done chan struct{} // indicates the connection is done
 
 	// mux
 	newSession   chan newSessionResp // new Sessions are requested from mux by reading off this channel
@@ -201,9 +200,10 @@ type conn struct {
 	connReaderRun chan func() // functions to be run by conn reader (set deadline on conn to run)
 
 	// connWriter
-	txFrame chan frame // AMQP frames to be sent by connWriter
-	txBuf   buffer     // buffer for marshaling frames before transmitting
-	txDone  chan struct{}
+	txFrame chan frame    // AMQP frames to be sent by connWriter
+	txBuf   buffer        // buffer for marshaling frames before transmitting
+	txStop  chan *Error   // Tell writer to write final close
+	txDone  chan struct{} // Closed when writer is done
 }
 
 type newSessionResp struct {
@@ -229,6 +229,7 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 		newSession:       make(chan newSessionResp),
 		delSession:       make(chan *Session),
 		txFrame:          make(chan frame),
+		txStop:           make(chan *Error),
 		txDone:           make(chan struct{}),
 	}
 
@@ -265,7 +266,7 @@ func (c *conn) start() error {
 	// check if err occurred
 	if c.err != nil {
 		close(c.txDone) // close here since connWriter hasn't been started yet
-		_ = c.Close()
+		c.close()       // OK to call here since mux hasn't been started yet
 		return c.err
 	}
 
@@ -278,20 +279,22 @@ func (c *conn) start() error {
 
 func (c *conn) Close() error {
 	c.closeMuxOnce.Do(func() { close(c.closeMux) })
-	err := c.getErr()
-	if err == ErrConnClosed {
+	<-c.done
+	<-c.txDone
+	<-c.rxDone
+	if c.err == ErrConnClosed {
 		return nil
 	}
-	return err
+	return c.err
 }
 
 // close should only be called by conn.mux.
 func (c *conn) close() {
-	close(c.done) // notify goroutines and blocked functions to exit
-
 	// wait for writing to stop, allows it to send the final close frame
+	close(c.txStop)
 	<-c.txDone
 
+	// Set c.err first, before closing c.done
 	err := c.net.Close()
 	switch {
 	// conn.err already set
@@ -305,19 +308,11 @@ func (c *conn) close() {
 	default:
 		c.err = ErrConnClosed
 	}
+	close(c.done) // notify goroutines and blocked functions to exit
 
 	// check rxDone after closing net, otherwise may block
 	// for up to c.idleTimeout
 	<-c.rxDone
-}
-
-// getErr returns conn.err.
-//
-// Must only be called after conn.done is closed.
-func (c *conn) getErr() error {
-	c.errMu.Lock()
-	defer c.errMu.Unlock()
-	return c.err
 }
 
 // mux is started in it's own goroutine after initial connection establishment.
@@ -336,10 +331,7 @@ func (c *conn) mux() {
 		sessionsByRemoteChannel = make(map[uint16]*Session)
 	)
 
-	// hold the errMu lock until error or done
-	c.errMu.Lock()
-	defer c.errMu.Unlock()
-	defer c.close() // defer order is important. c.errMu unlock indicates that connection is finally complete
+	defer c.close()
 
 	for {
 		// check if last loop returned an error
@@ -616,9 +608,9 @@ func (c *conn) connWriter() {
 			// possibly drained, then reset.)
 
 		// connection complete
-		case <-c.done:
+		case err := <-c.txStop:
 			// send close
-			cls := &performClose{}
+			cls := &performClose{err}
 			debug(1, "TX: %s", cls)
 			_ = c.writeFrame(frame{
 				type_: frameTypeAMQP,
@@ -674,7 +666,7 @@ func (c *conn) wantWriteFrame(fr frame) error {
 	case c.txFrame <- fr:
 		return nil
 	case <-c.done:
-		return c.getErr()
+		return c.err
 	}
 }
 

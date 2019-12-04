@@ -109,7 +109,7 @@ func (c *Client) NewSession(opts ...SessionOption) (*Session, error) {
 	var sResp newSessionResp
 	select {
 	case <-c.conn.done:
-		return nil, c.conn.getErr()
+		return nil, c.conn.err
 	case sResp = <-c.conn.newSession:
 	}
 
@@ -140,7 +140,7 @@ func (c *Client) NewSession(opts ...SessionOption) (*Session, error) {
 	var fr frame
 	select {
 	case <-c.conn.done:
-		return nil, c.conn.getErr()
+		return nil, c.conn.err
 	case fr = <-s.rx:
 	}
 	debug(1, "RX: %s", fr.body)
@@ -474,7 +474,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		select {
 		case s.conn.delSession <- s:
 		case <-s.conn.done:
-			s.err = s.conn.getErr()
+			s.err = s.conn.err
 		}
 		if s.err == nil {
 			s.err = ErrSessionClosed
@@ -511,7 +511,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		select {
 		// conn has completed, exit
 		case <-s.conn.done:
-			s.err = s.conn.getErr()
+			s.err = s.conn.err
 			return
 
 		// session is being closed by user
@@ -528,7 +528,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 						break EndLoop
 					}
 				case <-s.conn.done:
-					s.err = s.conn.getErr()
+					s.err = s.conn.err
 					return
 				}
 			}
