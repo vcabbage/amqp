@@ -839,9 +839,9 @@ type link struct {
 	detachError   *Error               // error to send to remote on detach, set by closeWithError
 	session       *Session             // parent session
 	receiver      *Receiver            // allows link options to modify Receiver
-	source        *source
-	target        *target
-	properties    map[symbol]interface{} // additional properties sent upon link attach
+	source        *Source
+	target        *Target
+	properties    map[Symbol]interface{} // additional properties sent upon link attach
 
 	// "The delivery-count is initialized by the sender when a link endpoint is created,
 	// and is incremented whenever a message is sent. Only the sender MAY independently
@@ -866,16 +866,16 @@ type link struct {
 	msg           Message       // current message being decoded
 }
 
-func (l *link) getSource() *source {
+func (l *link) getSource() *Source {
 	if l.source == nil {
-		l.source = new(source)
+		l.source = new(Source)
 	}
 	return l.source
 }
 
-func (l *link) getTarget() *target {
+func (l *link) getTarget() *Target {
 	if l.target == nil {
-		l.target = new(target)
+		l.target = new(Target)
 	}
 	return l.target
 }
@@ -930,13 +930,13 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	if isReceiver {
 		attach.Role = roleReceiver
 		if attach.Source == nil {
-			attach.Source = new(source)
+			attach.Source = new(Source)
 		}
 		attach.Source.Dynamic = l.dynamicAddr
 	} else {
 		attach.Role = roleSender
 		if attach.Target == nil {
-			attach.Target = new(target)
+			attach.Target = new(Target)
 		}
 		attach.Target.Dynamic = l.dynamicAddr
 	}
@@ -1565,9 +1565,9 @@ func linkProperty(key string, value interface{}) LinkOption {
 			return errorNew("link property key must not be empty")
 		}
 		if l.properties == nil {
-			l.properties = make(map[symbol]interface{})
+			l.properties = make(map[Symbol]interface{})
 		}
-		l.properties[symbol(key)] = value
+		l.properties[Symbol(key)] = value
 		return nil
 	}
 }
@@ -1589,7 +1589,7 @@ func LinkSourceCapabilities(capabilities ...string) LinkOption {
 	return func(l *link) error {
 		source := l.getSource()
 		for _, v := range capabilities {
-			source.Capabilities = append(source.Capabilities, symbol(v))
+			source.Capabilities = append(source.Capabilities, Symbol(v))
 		}
 		return nil
 	}
@@ -1718,20 +1718,20 @@ func LinkSelectorFilter(filter string) LinkOption {
 func LinkSourceFilter(name string, code uint64, value interface{}) LinkOption {
 	return func(l *link) error {
 		source := l.getSource()
-		if source.Filter == nil {
-			source.Filter = make(map[symbol]*describedType)
+		if source.FilterSet == nil {
+			source.FilterSet = make(map[Symbol]*DescribedType)
 		}
 
 		var descriptor interface{}
 		if code != 0 {
 			descriptor = code
 		} else {
-			descriptor = symbol(name)
+			descriptor = Symbol(name)
 		}
 
-		source.Filter[symbol(name)] = &describedType{
-			descriptor: descriptor,
-			value:      value,
+		l.source.FilterSet[Symbol(name)] = &DescribedType{
+			Descriptor: descriptor,
+			Value:      value,
 		}
 		return nil
 	}

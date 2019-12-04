@@ -262,11 +262,11 @@ var (
 			Hostname:            "bar.host",
 			MaxFrameSize:        4200,
 			ChannelMax:          13,
-			OutgoingLocales:     []symbol{"fooLocale"},
-			IncomingLocales:     []symbol{"barLocale"},
-			OfferedCapabilities: []symbol{"fooCap"},
-			DesiredCapabilities: []symbol{"barCap"},
-			Properties: map[symbol]interface{}{
+			OutgoingLocales:     []Symbol{"fooLocale"},
+			IncomingLocales:     []Symbol{"barLocale"},
+			OfferedCapabilities: []Symbol{"fooCap"},
+			DesiredCapabilities: []Symbol{"barCap"},
+			Properties: map[Symbol]interface{}{
 				"fooProp": int32(45),
 			},
 		},
@@ -276,9 +276,9 @@ var (
 			IncomingWindow:      9876654,
 			OutgoingWindow:      123555,
 			HandleMax:           9757,
-			OfferedCapabilities: []symbol{"fooCap"},
-			DesiredCapabilities: []symbol{"barCap"},
-			Properties: map[symbol]interface{}{
+			OfferedCapabilities: []Symbol{"fooCap"},
+			DesiredCapabilities: []Symbol{"barCap"},
+			Properties: map[Symbol]interface{}{
 				"fooProp": int32(45),
 			},
 		},
@@ -288,35 +288,35 @@ var (
 			Role:               roleSender,
 			SenderSettleMode:   sndSettle(ModeMixed),
 			ReceiverSettleMode: rcvSettle(ModeSecond),
-			Source: &source{
+			Source: &Source{
 				Address:      "fooAddr",
 				Durable:      DurabilityUnsettledState,
 				ExpiryPolicy: ExpiryLinkDetach,
 				Timeout:      635,
 				Dynamic:      true,
-				DynamicNodeProperties: map[symbol]interface{}{
+				DynamicNodeProperties: map[Symbol]interface{}{
 					"lifetime-policy": deleteOnClose,
 				},
 				DistributionMode: "some-mode",
-				Filter: filter{
-					"foo:filter": &describedType{
-						descriptor: "foo:filter",
-						value:      "bar value",
+				FilterSet: FilterSet{
+					"foo:filter": &DescribedType{
+						Descriptor: "foo:filter",
+						Value:      "bar value",
 					},
 				},
-				Outcomes:     []symbol{"amqp:accepted:list"},
-				Capabilities: []symbol{"barCap"},
+				Outcomes:     []Symbol{"amqp:accepted:list"},
+				Capabilities: []Symbol{"barCap"},
 			},
-			Target: &target{
+			Target: &Target{
 				Address:      "fooAddr",
 				Durable:      DurabilityUnsettledState,
 				ExpiryPolicy: ExpiryLinkDetach,
 				Timeout:      635,
 				Dynamic:      true,
-				DynamicNodeProperties: map[symbol]interface{}{
+				DynamicNodeProperties: map[Symbol]interface{}{
 					"lifetime-policy": deleteOnClose,
 				},
-				Capabilities: []symbol{"barCap"},
+				Capabilities: []Symbol{"barCap"},
 			},
 			Unsettled: unsettled{
 				"fooDeliveryTag": &stateAccepted{},
@@ -324,9 +324,9 @@ var (
 			IncompleteUnsettled:  true,
 			InitialDeliveryCount: 3184,
 			MaxMessageSize:       75983,
-			OfferedCapabilities:  []symbol{"fooCap"},
-			DesiredCapabilities:  []symbol{"barCap"},
-			Properties: map[symbol]interface{}{
+			OfferedCapabilities:  []Symbol{"fooCap"},
+			DesiredCapabilities:  []Symbol{"barCap"},
+			Properties: map[Symbol]interface{}{
 				"fooProp": int32(45),
 			},
 		},
@@ -334,35 +334,35 @@ var (
 		&unsettled{
 			"fooDeliveryTag": &stateAccepted{},
 		},
-		&source{
+		&Source{
 			Address:      "fooAddr",
 			Durable:      DurabilityUnsettledState,
 			ExpiryPolicy: ExpiryLinkDetach,
 			Timeout:      635,
 			Dynamic:      true,
-			DynamicNodeProperties: map[symbol]interface{}{
+			DynamicNodeProperties: map[Symbol]interface{}{
 				"lifetime-policy": deleteOnClose,
 			},
 			DistributionMode: "some-mode",
-			Filter: filter{
-				"foo:filter": &describedType{
-					descriptor: "foo:filter",
-					value:      "bar value",
+			FilterSet: FilterSet{
+				"foo:filter": &DescribedType{
+					Descriptor: "foo:filter",
+					Value:      "bar value",
 				},
 			},
-			Outcomes:     []symbol{"amqp:accepted:list"},
-			Capabilities: []symbol{"barCap"},
+			Outcomes:     []Symbol{"amqp:accepted:list"},
+			Capabilities: []Symbol{"barCap"},
 		},
-		&target{
+		&Target{
 			Address:      "fooAddr",
 			Durable:      DurabilityUnsettledState,
 			ExpiryPolicy: ExpiryLinkDetach,
 			Timeout:      635,
 			Dynamic:      true,
-			DynamicNodeProperties: map[symbol]interface{}{
+			DynamicNodeProperties: map[Symbol]interface{}{
 				"lifetime-policy": deleteOnClose,
 			},
-			Capabilities: []symbol{"barCap"},
+			Capabilities: []Symbol{"barCap"},
 		},
 		&performFlow{
 			NextIncomingID: uint32Ptr(354),
@@ -375,7 +375,7 @@ var (
 			Available:      uint32Ptr(878321),
 			Drain:          true,
 			Echo:           true,
-			Properties: map[symbol]interface{}{
+			Properties: map[Symbol]interface{}{
 				"fooProp": int32(45),
 			},
 		},
@@ -552,15 +552,15 @@ var (
 			Hostname:        "me",
 		},
 		&saslMechanisms{
-			Mechanisms: []symbol{"FOO", "BAR", "BAZ"},
+			Mechanisms: []Symbol{"FOO", "BAR", "BAZ"},
 		},
 		&saslOutcome{
 			Code:           codeSASLSysPerm,
 			AdditionalData: []byte("here's some info for you..."),
 		},
 		milliseconds(10 * time.Second),
-		symbol("a symbol"),
-		map[symbol]interface{}{
+		Symbol("a symbol"),
+		map[Symbol]interface{}{
 			"hash": []uint8{0, 1, 2, 34, 5, 6, 7, 8, 9, 0},
 		},
 	}
@@ -589,9 +589,9 @@ var (
 		float64(-math.Pi),
 		float64(math.NaN()),
 		float64(-math.NaN()),
-		describedType{
-			descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x46, 0x8C, 0x00, 0x00, 0x00, 0x04}),
-			value:      "amqp.annotation.x-opt-offset > '312'",
+		DescribedType{
+			Descriptor: binary.BigEndian.Uint64([]byte{0x00, 0x00, 0x46, 0x8C, 0x00, 0x00, 0x00, 0x04}),
+			Value:      "amqp.annotation.x-opt-offset > '312'",
 		},
 		map[interface{}]interface{}{
 			int32(-1234): []uint8{0, 1, 2, 34, 5, 6, 7, 8, 9, 0},
@@ -617,7 +617,7 @@ var (
 		[]float64{math.Pi, -math.Pi, math.NaN(), -math.NaN()},
 		[]bool{true, false, true, false},
 		[]string{"FOO", "BAR", "BAZ"},
-		[]symbol{"FOO", "BAR", "BAZ"},
+		[]Symbol{"FOO", "BAR", "BAZ"},
 		[][]byte{[]byte("FOO"), []byte("BAR"), []byte("BAZ")},
 		[]time.Time{time.Date(2018, 01, 27, 16, 16, 59, 0, time.UTC)},
 		[]UUID{

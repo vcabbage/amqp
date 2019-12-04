@@ -11,8 +11,8 @@ const (
 
 // SASL Mechanisms
 const (
-	saslMechanismPLAIN     symbol = "PLAIN"
-	saslMechanismANONYMOUS symbol = "ANONYMOUS"
+	saslMechanismPLAIN     Symbol = "PLAIN"
+	saslMechanismANONYMOUS Symbol = "ANONYMOUS"
 )
 
 type saslCode uint8
@@ -36,7 +36,7 @@ func ConnSASLPlain(username, password string) ConnOption {
 	return func(c *conn) error {
 		// make handlers map if no other mechanism has
 		if c.saslHandlers == nil {
-			c.saslHandlers = make(map[symbol]stateFunc)
+			c.saslHandlers = make(map[Symbol]stateFunc)
 		}
 
 		// add the handler the the map
@@ -67,7 +67,7 @@ func ConnSASLAnonymous() ConnOption {
 	return func(c *conn) error {
 		// make handlers map if no other mechanism has
 		if c.saslHandlers == nil {
-			c.saslHandlers = make(map[symbol]stateFunc)
+			c.saslHandlers = make(map[Symbol]stateFunc)
 		}
 
 		// add the handler the the map

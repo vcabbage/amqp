@@ -9,7 +9,7 @@ func TestConnOptions(t *testing.T) {
 		label string
 		opts  []ConnOption
 
-		wantProperties map[symbol]interface{}
+		wantProperties map[Symbol]interface{}
 	}{
 		{
 			label: "no options",
@@ -22,7 +22,7 @@ func TestConnOptions(t *testing.T) {
 				ConnProperty("x-opt-test1", "test3"),
 			},
 
-			wantProperties: map[symbol]interface{}{
+			wantProperties: map[Symbol]interface{}{
 				"x-opt-test1": "test3",
 				"x-opt-test2": "test2",
 			},

@@ -139,9 +139,9 @@ func ConnProperty(key, value string) ConnOption {
 			return errorNew("connection property key must not be empty")
 		}
 		if c.properties == nil {
-			c.properties = make(map[symbol]interface{})
+			c.properties = make(map[Symbol]interface{})
 		}
-		c.properties[symbol(key)] = value
+		c.properties[Symbol(key)] = value
 		return nil
 	}
 }
@@ -167,7 +167,7 @@ type conn struct {
 	tlsConfig      *tls.Config // TLS config, default used if nil (ServerName set to Conn.hostname)
 
 	// SASL
-	saslHandlers map[symbol]stateFunc // map of supported handlers keyed by SASL mechanism, SASL not negotiated if nil
+	saslHandlers map[Symbol]stateFunc // map of supported handlers keyed by SASL mechanism, SASL not negotiated if nil
 	saslComplete bool                 // SASL negotiation complete
 
 	// local settings
@@ -175,7 +175,7 @@ type conn struct {
 	channelMax   uint16                 // maximum number of channels to allow
 	hostname     string                 // hostname of remote server (set explicitly or parsed from URL)
 	idleTimeout  time.Duration          // maximum period between receiving frames
-	properties   map[symbol]interface{} // additional properties sent upon connection open
+	properties   map[Symbol]interface{} // additional properties sent upon connection open
 	containerID  string                 // set explicitly or randomly generated
 
 	// peer settings

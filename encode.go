@@ -136,9 +136,9 @@ func marshal(wr *buffer, i interface{}) error {
 		return writeMap(wr, t)
 	case *map[string]interface{}:
 		return writeMap(wr, *t)
-	case map[symbol]interface{}:
+	case map[Symbol]interface{}:
 		return writeMap(wr, t)
-	case *map[symbol]interface{}:
+	case *map[Symbol]interface{}:
 		return writeMap(wr, *t)
 	case unsettled:
 		return writeMap(wr, t)
@@ -192,9 +192,9 @@ func marshal(wr *buffer, i interface{}) error {
 		return arrayString(t).marshal(wr)
 	case *[]string:
 		return arrayString(*t).marshal(wr)
-	case []symbol:
+	case []Symbol:
 		return arraySymbol(t).marshal(wr)
-	case *[]symbol:
+	case *[]Symbol:
 		return arraySymbol(*t).marshal(wr)
 	case [][]byte:
 		return arrayBinary(t).marshal(wr)
@@ -463,7 +463,7 @@ func writeMap(wr *buffer, m interface{}) error {
 				return err
 			}
 		}
-	case map[symbol]interface{}:
+	case map[Symbol]interface{}:
 		pairs = len(m) * 2
 		for key, val := range m {
 			err := key.marshal(wr)
@@ -487,7 +487,7 @@ func writeMap(wr *buffer, m interface{}) error {
 				return err
 			}
 		}
-	case filter:
+	case FilterSet:
 		pairs = len(m) * 2
 		for key, val := range m {
 			err := key.marshal(wr)
@@ -504,11 +504,11 @@ func writeMap(wr *buffer, m interface{}) error {
 		for key, val := range m {
 			switch key := key.(type) {
 			case string:
-				err := symbol(key).marshal(wr)
+				err := Symbol(key).marshal(wr)
 				if err != nil {
 					return err
 				}
-			case symbol:
+			case Symbol:
 				err := key.marshal(wr)
 				if err != nil {
 					return err

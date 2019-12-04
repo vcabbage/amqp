@@ -191,11 +191,11 @@ type performOpen struct {
 	MaxFrameSize        uint32        // default: 4294967295
 	ChannelMax          uint16        // default: 65535
 	IdleTimeout         time.Duration // from milliseconds
-	OutgoingLocales     multiSymbol
-	IncomingLocales     multiSymbol
-	OfferedCapabilities multiSymbol
-	DesiredCapabilities multiSymbol
-	Properties          map[symbol]interface{}
+	OutgoingLocales     Symbols
+	IncomingLocales     Symbols
+	OfferedCapabilities Symbols
+	DesiredCapabilities Symbols
+	Properties          map[Symbol]interface{}
 }
 
 func (o *performOpen) frameBody() {}
@@ -335,16 +335,16 @@ type performBegin struct {
 
 	// the extension capabilities the sender supports
 	// http://www.amqp.org/specification/1.0/session-capabilities
-	OfferedCapabilities multiSymbol
+	OfferedCapabilities Symbols
 
 	// the extension capabilities the sender can use if the receiver supports them
 	// The sender MUST NOT attempt to use any capability other than those it
 	// has declared in desired-capabilities field.
-	DesiredCapabilities multiSymbol
+	DesiredCapabilities Symbols
 
 	// session properties
 	// http://www.amqp.org/specification/1.0/session-properties
-	Properties map[symbol]interface{}
+	Properties map[Symbol]interface{}
 }
 
 func (b *performBegin) frameBody() {}
@@ -476,13 +476,13 @@ type performAttach struct {
 	//
 	// If no source is specified on an outgoing link, then there is no source currently
 	// attached to the link. A link with no source will never produce outgoing messages.
-	Source *source
+	Source *Source
 
 	// the target for messages
 	//
 	// If no target is specified on an incoming link, then there is no target currently
 	// attached to the link. A link with no target will never permit incoming messages.
-	Target *target
+	Target *Target
 
 	// unsettled delivery state
 	//
@@ -532,17 +532,17 @@ type performAttach struct {
 
 	// the extension capabilities the sender supports
 	// http://www.amqp.org/specification/1.0/link-capabilities
-	OfferedCapabilities multiSymbol
+	OfferedCapabilities Symbols
 
 	// the extension capabilities the sender can use if the receiver supports them
 	//
 	// The sender MUST NOT attempt to use any capability other than those it
 	// has declared in desired-capabilities field.
-	DesiredCapabilities multiSymbol
+	DesiredCapabilities Symbols
 
 	// link properties
 	// http://www.amqp.org/specification/1.0/link-properties
-	Properties map[symbol]interface{}
+	Properties map[Symbol]interface{}
 }
 
 func (a *performAttach) frameBody() {}
@@ -659,38 +659,38 @@ func (u *unsettled) unmarshal(r *buffer) error {
 	return nil
 }
 
-type filter map[symbol]*describedType
+type FilterSet map[Symbol]*DescribedType
 
-func (f filter) marshal(wr *buffer) error {
+func (f FilterSet) marshal(wr *buffer) error {
 	return writeMap(wr, f)
 }
 
-func (f *filter) unmarshal(r *buffer) error {
+func (f *FilterSet) unmarshal(r *buffer) error {
 	count, err := readMapHeader(r)
 	if err != nil {
 		return err
 	}
 
-	m := make(filter, count/2)
+	m := make(FilterSet, count/2)
 	for i := uint32(0); i < count; i += 2 {
 		key, err := readString(r)
 		if err != nil {
 			return err
 		}
-		var value describedType
+		var value DescribedType
 		err = unmarshal(r, &value)
 		if err != nil {
 			return err
 		}
-		m[symbol(key)] = &value
+		m[Symbol(key)] = &value
 	}
 	*f = m
 	return nil
 }
 
 /*
-<type name="source" class="composite" source="list" provides="source">
-    <descriptor name="amqp:source:list" code="0x00000000:0x00000028"/>
+<type name="Source" class="composite" Source="list" provides="Source">
+    <descriptor name="amqp:Source:list" code="0x00000000:0x00000028"/>
     <field name="address" type="*" requires="address"/>
     <field name="durable" type="terminus-durability" default="none"/>
     <field name="expiry-policy" type="terminus-expiry-policy" default="session-end"/>
@@ -704,7 +704,7 @@ func (f *filter) unmarshal(r *buffer) error {
     <field name="capabilities" type="symbol" multiple="true"/>
 </type>
 */
-type source struct {
+type Source struct {
 	// the address of the source
 	//
 	// The address of the source MUST NOT be set when sent on a attach frame sent by
@@ -781,14 +781,14 @@ type source struct {
 	//					distribution-modes. That is, the value MUST be of the same type as
 	//					would be valid in a field defined with the following attributes:
 	//						type="symbol" multiple="true" requires="distribution-mode"
-	DynamicNodeProperties map[symbol]interface{} // TODO: implement custom type with validation
+	DynamicNodeProperties map[Symbol]interface{} // TODO: implement custom type with validation
 
 	// the distribution mode of the link
 	//
 	// This field MUST be set by the sending end of the link if the endpoint supports more
 	// than one distribution-mode. This field MAY be set by the receiving end of the link
 	// to indicate a preference when a node supports multiple distribution modes.
-	DistributionMode symbol
+	DistributionMode Symbol
 
 	// a set of predicates to filter the messages admitted onto the link
 	//
@@ -796,7 +796,7 @@ type source struct {
 	// actually in place (including any filters defaulted at the node). The receiving
 	// endpoint MUST check that the filter in place meets its needs and take responsibility
 	// for detaching if it does not.
-	Filter filter
+	FilterSet FilterSet
 
 	// default outcome for unsettled transfers
 	//
@@ -814,15 +814,15 @@ type source struct {
 	//
 	// When present, the values MUST be a symbolic descriptor of a valid outcome,
 	// e.g., "amqp:accepted:list".
-	Outcomes multiSymbol
+	Outcomes Symbols
 
 	// the extension capabilities the sender supports/desires
 	//
 	// http://www.amqp.org/specification/1.0/source-capabilities
-	Capabilities multiSymbol
+	Capabilities Symbols
 }
 
-func (s *source) marshal(wr *buffer) error {
+func (s *Source) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeSource, []marshalField{
 		{value: &s.Address, omit: s.Address == ""},
 		{value: &s.Durable, omit: s.Durable == DurabilityNone},
@@ -831,14 +831,14 @@ func (s *source) marshal(wr *buffer) error {
 		{value: &s.Dynamic, omit: !s.Dynamic},
 		{value: s.DynamicNodeProperties, omit: len(s.DynamicNodeProperties) == 0},
 		{value: &s.DistributionMode, omit: s.DistributionMode == ""},
-		{value: s.Filter, omit: len(s.Filter) == 0},
+		{value: s.FilterSet, omit: len(s.FilterSet) == 0},
 		{value: &s.DefaultOutcome, omit: s.DefaultOutcome == nil},
 		{value: &s.Outcomes, omit: len(s.Outcomes) == 0},
 		{value: &s.Capabilities, omit: len(s.Capabilities) == 0},
 	})
 }
 
-func (s *source) unmarshal(r *buffer) error {
+func (s *Source) unmarshal(r *buffer) error {
 	return unmarshalComposite(r, typeCodeSource, []unmarshalField{
 		{field: &s.Address},
 		{field: &s.Durable},
@@ -847,14 +847,14 @@ func (s *source) unmarshal(r *buffer) error {
 		{field: &s.Dynamic},
 		{field: &s.DynamicNodeProperties},
 		{field: &s.DistributionMode},
-		{field: &s.Filter},
+		{field: &s.FilterSet},
 		{field: &s.DefaultOutcome},
 		{field: &s.Outcomes},
 		{field: &s.Capabilities},
 	}...)
 }
 
-func (s source) String() string {
+func (s Source) String() string {
 	return compositeString("Source", []namedField{
 		{"Address", s.Address},
 		{"Durable", s.Durable},
@@ -863,7 +863,7 @@ func (s source) String() string {
 		{"Dynamic", s.Dynamic},
 		{"DynamicNodeProperties", s.DynamicNodeProperties},
 		{"DistributionMode", s.DistributionMode},
-		{"Filter", s.Filter},
+		{"Filter", s.FilterSet},
 		{"DefaultOutcome", s.DefaultOutcome},
 		{"Outcomes", s.Outcomes},
 		{"Capabilities", s.Capabilities},
@@ -871,8 +871,8 @@ func (s source) String() string {
 }
 
 /*
-<type name="target" class="composite" source="list" provides="target">
-    <descriptor name="amqp:target:list" code="0x00000000:0x00000029"/>
+<type name="Target" class="composite" source="list" provides="Target">
+    <descriptor name="amqp:Target:list" code="0x00000000:0x00000029"/>
     <field name="address" type="*" requires="address"/>
     <field name="durable" type="terminus-durability" default="none"/>
     <field name="expiry-policy" type="terminus-expiry-policy" default="session-end"/>
@@ -882,7 +882,7 @@ func (s source) String() string {
     <field name="capabilities" type="symbol" multiple="true"/>
 </type>
 */
-type target struct {
+type Target struct {
 	// the address of the target
 	//
 	// The address of the target MUST NOT be set when sent on a attach frame sent by
@@ -959,15 +959,15 @@ type target struct {
 	//					distribution-modes. That is, the value MUST be of the same type as
 	//					would be valid in a field defined with the following attributes:
 	//						type="symbol" multiple="true" requires="distribution-mode"
-	DynamicNodeProperties map[symbol]interface{} // TODO: implement custom type with validation
+	DynamicNodeProperties map[Symbol]interface{} // TODO: implement custom type with validation
 
 	// the extension capabilities the sender supports/desires
 	//
 	// http://www.amqp.org/specification/1.0/target-capabilities
-	Capabilities multiSymbol
+	Capabilities Symbols
 }
 
-func (t *target) marshal(wr *buffer) error {
+func (t *Target) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeTarget, []marshalField{
 		{value: &t.Address, omit: t.Address == ""},
 		{value: &t.Durable, omit: t.Durable == DurabilityNone},
@@ -979,7 +979,7 @@ func (t *target) marshal(wr *buffer) error {
 	})
 }
 
-func (t *target) unmarshal(r *buffer) error {
+func (t *Target) unmarshal(r *buffer) error {
 	return unmarshalComposite(r, typeCodeTarget, []unmarshalField{
 		{field: &t.Address},
 		{field: &t.Durable},
@@ -991,7 +991,7 @@ func (t *target) unmarshal(r *buffer) error {
 	}...)
 }
 
-func (t target) String() string {
+func (t Target) String() string {
 	return compositeString("Target", []namedField{
 		{"Address", t.Address},
 		{"Durable", t.Durable},
@@ -1115,7 +1115,7 @@ type performFlow struct {
 
 	// link state properties
 	// http://www.amqp.org/specification/1.0/link-state-properties
-	Properties map[symbol]interface{}
+	Properties map[Symbol]interface{}
 }
 
 func (f *performFlow) frameBody() {}
@@ -1538,7 +1538,7 @@ func (d *performDetach) unmarshal(r *buffer) error {
 type ErrorCondition string
 
 func (ec ErrorCondition) marshal(wr *buffer) error {
-	return (symbol)(ec).marshal(wr)
+	return (Symbol)(ec).marshal(wr)
 }
 
 func (ec *ErrorCondition) unmarshal(r *buffer) error {
@@ -2245,8 +2245,8 @@ func (p *MessageProperties) marshal(wr *buffer) error {
 		{value: &p.Subject, omit: p.Subject == ""},
 		{value: &p.ReplyTo, omit: p.ReplyTo == ""},
 		{value: p.CorrelationID, omit: p.CorrelationID == nil},
-		{value: (*symbol)(&p.ContentType), omit: p.ContentType == ""},
-		{value: (*symbol)(&p.ContentEncoding), omit: p.ContentEncoding == ""},
+		{value: (*Symbol)(&p.ContentType), omit: p.ContentType == ""},
+		{value: (*Symbol)(&p.ContentEncoding), omit: p.ContentEncoding == ""},
 		{value: &p.AbsoluteExpiryTime, omit: p.AbsoluteExpiryTime.IsZero()},
 		{value: &p.CreationTime, omit: p.CreationTime.IsZero()},
 		{value: &p.GroupID, omit: p.GroupID == ""},
@@ -2453,7 +2453,7 @@ func (sm *stateModified) String() string {
 */
 
 type saslInit struct {
-	Mechanism       symbol
+	Mechanism       Symbol
 	InitialResponse []byte
 	Hostname        string
 }
@@ -2492,7 +2492,7 @@ func (si saslInit) String() string {
 */
 
 type saslMechanisms struct {
-	Mechanisms multiSymbol
+	Mechanisms Symbols
 }
 
 func (sm *saslMechanisms) frameBody() {}
@@ -2551,10 +2551,10 @@ func (so saslOutcome) String() string {
 	})
 }
 
-// symbol is an AMQP symbolic string.
-type symbol string
+// Symbol is an AMQP symbolic string.
+type Symbol string
 
-func (s symbol) marshal(wr *buffer) error {
+func (s Symbol) marshal(wr *buffer) error {
 	l := len(s)
 	switch {
 	// Sym8
@@ -2660,10 +2660,10 @@ func (m *mapStringAny) unmarshal(r *buffer) error {
 }
 
 // mapStringAny is used to decode AMQP maps that have Symbol keys
-type mapSymbolAny map[symbol]interface{}
+type mapSymbolAny map[Symbol]interface{}
 
 func (m mapSymbolAny) marshal(wr *buffer) error {
-	return writeMap(wr, map[symbol]interface{}(m))
+	return writeMap(wr, map[Symbol]interface{}(m))
 }
 
 func (m *mapSymbolAny) unmarshal(r *buffer) error {
@@ -2682,7 +2682,7 @@ func (m *mapSymbolAny) unmarshal(r *buffer) error {
 		if err != nil {
 			return err
 		}
-		mm[symbol(key)] = value
+		mm[Symbol(key)] = value
 	}
 	*m = mm
 	return nil
@@ -2904,7 +2904,7 @@ const (
 // then the count down is aborted. If the conditions for the
 // terminus-expiry-policy are subsequently re-met, the expiry timer restarts
 // from its originally configured timeout value.
-type ExpiryPolicy symbol
+type ExpiryPolicy Symbol
 
 func (e ExpiryPolicy) validate() error {
 	switch e {
@@ -2919,32 +2919,32 @@ func (e ExpiryPolicy) validate() error {
 }
 
 func (e ExpiryPolicy) marshal(wr *buffer) error {
-	return symbol(e).marshal(wr)
+	return Symbol(e).marshal(wr)
 }
 
 func (e *ExpiryPolicy) unmarshal(r *buffer) error {
-	err := unmarshal(r, (*symbol)(e))
+	err := unmarshal(r, (*Symbol)(e))
 	if err != nil {
 		return err
 	}
 	return e.validate()
 }
 
-type describedType struct {
-	descriptor interface{}
-	value      interface{}
+type DescribedType struct {
+	Descriptor interface{}
+	Value      interface{}
 }
 
-func (t describedType) marshal(wr *buffer) error {
+func (t DescribedType) marshal(wr *buffer) error {
 	wr.writeByte(0x0) // descriptor constructor
-	err := marshal(wr, t.descriptor)
+	err := marshal(wr, t.Descriptor)
 	if err != nil {
 		return err
 	}
-	return marshal(wr, t.value)
+	return marshal(wr, t.Value)
 }
 
-func (t *describedType) unmarshal(r *buffer) error {
+func (t *DescribedType) unmarshal(r *buffer) error {
 	b, err := r.readByte()
 	if err != nil {
 		return err
@@ -2954,17 +2954,17 @@ func (t *describedType) unmarshal(r *buffer) error {
 		return errorErrorf("invalid described type header %02x", b)
 	}
 
-	err = unmarshal(r, &t.descriptor)
+	err = unmarshal(r, &t.Descriptor)
 	if err != nil {
 		return err
 	}
-	return unmarshal(r, &t.value)
+	return unmarshal(r, &t.Value)
 }
 
-func (t describedType) String() string {
+func (t DescribedType) String() string {
 	return fmt.Sprintf("describedType{descriptor: %v, value: %v}",
-		t.descriptor,
-		t.value,
+		t.Descriptor,
+		t.Value,
 	)
 }
 
@@ -3775,7 +3775,7 @@ func (a *arrayString) unmarshal(r *buffer) error {
 	return nil
 }
 
-type arraySymbol []symbol
+type arraySymbol []Symbol
 
 func (a arraySymbol) marshal(wr *buffer) error {
 	var (
@@ -3820,7 +3820,7 @@ func (a *arraySymbol) unmarshal(r *buffer) error {
 
 	aa := (*a)[:0]
 	if int64(cap(aa)) < length {
-		aa = make([]symbol, length)
+		aa = make([]Symbol, length)
 	} else {
 		aa = aa[:length]
 	}
@@ -3841,7 +3841,7 @@ func (a *arraySymbol) unmarshal(r *buffer) error {
 			if !ok {
 				return errorNew("invalid length")
 			}
-			aa[i] = symbol(buf)
+			aa[i] = Symbol(buf)
 		}
 	case typeCodeSym32:
 		for i := range aa {
@@ -3855,7 +3855,7 @@ func (a *arraySymbol) unmarshal(r *buffer) error {
 			if !ok {
 				return errorNew("invalid length")
 			}
-			aa[i] = symbol(buf)
+			aa[i] = Symbol(buf)
 		}
 	default:
 		return errorErrorf("invalid type for []symbol %02x", type_)
@@ -4122,14 +4122,15 @@ func (l *list) unmarshal(r *buffer) error {
 	return nil
 }
 
-// multiSymbol can decode a single symbol or an array.
-type multiSymbol []symbol
+// Symbols is a list of symbols.
+// It's AMQP encoding can be a null, a single symbol or an array.
+type Symbols []Symbol
 
-func (ms multiSymbol) marshal(wr *buffer) error {
-	return marshal(wr, []symbol(ms))
+func (ms Symbols) marshal(wr *buffer) error {
+	return marshal(wr, []Symbol(ms))
 }
 
-func (ms *multiSymbol) unmarshal(r *buffer) error {
+func (ms *Symbols) unmarshal(r *buffer) error {
 	type_, err := r.peekType()
 	if err != nil {
 		return err
@@ -4141,9 +4142,9 @@ func (ms *multiSymbol) unmarshal(r *buffer) error {
 			return err
 		}
 
-		*ms = []symbol{symbol(s)}
+		*ms = []Symbol{Symbol(s)}
 		return nil
 	}
 
-	return unmarshal(r, (*[]symbol)(ms))
+	return unmarshal(r, (*[]Symbol)(ms))
 }
