@@ -254,6 +254,8 @@ func TestReadAny(t *testing.T) {
 var (
 	allTypes = append(protoTypes, generalTypes...)
 
+	remoteChannel = uint16(4321)
+
 	protoTypes = []interface{}{
 		&performOpen{
 			ContainerID:         "foo",
@@ -269,7 +271,7 @@ var (
 			},
 		},
 		&performBegin{
-			RemoteChannel:       4321,
+			RemoteChannel:       &remoteChannel,
 			NextOutgoingID:      730000,
 			IncomingWindow:      9876654,
 			OutgoingWindow:      123555,
