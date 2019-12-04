@@ -157,6 +157,9 @@ func (c *Conn) NewSession(opts ...SessionOption) (*Session, error) {
 	return s, nil
 }
 
+// NextIncoming returns the next incoming session. Requires ConnAllowIncoming.
+func (c *Conn) NextIncoming() (*IncomingSession, error) { panic("FIXME") }
+
 // Default session options
 const (
 	DefaultMaxLinks = 4294967296
@@ -1069,6 +1072,9 @@ func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 
 	return l, nil
 }
+
+// NextIncoming returns the next incoming link. Requires ConnAllowIncoming.
+func (s *Session) NextIncoming() (*IncomingLink, error) { panic("FIXME") }
 
 func (l *link) mux() {
 	defer l.muxDetach()

@@ -9,7 +9,7 @@ import (
 	"pack.ag/amqp"
 )
 
-func Example() {
+func Example_client() {
 	// Create client
 	client, err := amqp.Dial("amqps://my-namespace.servicebus.windows.net",
 		amqp.ConnSASLPlain("access-key-name", "access-key"),
