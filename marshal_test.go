@@ -330,7 +330,7 @@ var (
 				"fooProp": int32(45),
 			},
 		},
-		role(true),
+		roleReceiver,
 		&unsettled{
 			"fooDeliveryTag": &stateAccepted{},
 		},

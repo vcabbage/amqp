@@ -87,7 +87,7 @@ func Dial(addr string, opts ...ConnOption) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = c.start()
+	err = c.start(c.negotiateProto)
 	return &Conn{conn: c}, err
 }
 
@@ -97,7 +97,7 @@ func New(conn net.Conn, opts ...ConnOption) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = c.start()
+	err = c.start(c.negotiateProto)
 	return &Conn{conn: c}, err
 }
 
@@ -109,23 +109,32 @@ func (c *Conn) Close() error {
 // NewSession opens a new AMQP session to the server.
 func (c *Conn) NewSession(opts ...SessionOption) (*Session, error) {
 	// get a session allocated by Conn.mux
-	var sResp newSessionResp
+	var s *Session
 	select {
 	case <-c.conn.done:
 		return nil, c.conn.getErr()
-	case sResp = <-c.conn.newSession:
+	case s = <-c.conn.newSession:
+	}
+	err := s.sendBegin(opts, false)
+	if err != nil {
+		return nil, err
+	}
+	begin, err := s.recvBegin()
+	if err != nil {
+		return nil, err
 	}
 
-	if sResp.err != nil {
-		return nil, sResp.err
-	}
-	s := sResp.session
+	// start Session multiplexer
+	go s.mux(begin)
+	return s, nil
+}
 
+func (s *Session) sendBegin(opts []SessionOption, isResponse bool) error {
 	for _, opt := range opts {
 		err := opt(s)
 		if err != nil {
 			_ = s.Close(context.Background()) // deallocate session on error
-			return nil, err
+			return err
 		}
 	}
 
@@ -136,13 +145,19 @@ func (c *Conn) NewSession(opts ...SessionOption) (*Session, error) {
 		OutgoingWindow: s.outgoingWindow,
 		HandleMax:      s.handleMax,
 	}
+	if isResponse {
+		begin.RemoteChannel = &s.channel
+	}
 	s.txFrame(begin, nil)
+	return nil
+}
 
+func (s *Session) recvBegin() (*performBegin, error) {
 	// wait for response
 	var fr frame
 	select {
-	case <-c.conn.done:
-		return nil, c.conn.getErr()
+	case <-s.conn.done:
+		return nil, s.conn.getErr()
 	case fr = <-s.rx:
 	}
 	begin, ok := fr.body.(*performBegin)
@@ -150,15 +165,21 @@ func (c *Conn) NewSession(opts ...SessionOption) (*Session, error) {
 		_ = s.Close(context.Background()) // deallocate session on error
 		return nil, errorErrorf("unexpected begin response: %+v", fr.body)
 	}
-
-	// start Session multiplexor
-	go s.mux(begin)
-
-	return s, nil
+	return begin, nil
 }
 
 // NextIncoming returns the next incoming session. Requires ConnAllowIncoming.
-func (c *Conn) NextIncoming() (*IncomingSession, error) { panic("FIXME") }
+func (c *Conn) NextIncoming() (*IncomingSession, error) {
+	if !c.conn.incomingAllowed() {
+		return nil, errors.New("Conn.NextIncoming requires option ConnAllowIncoming")
+	}
+	select {
+	case <-c.conn.done:
+		return nil, c.conn.getErr()
+	case is := <-c.conn.incomingSession:
+		return is, nil
+	}
+}
 
 // Default session options
 const (
@@ -224,6 +245,7 @@ type Session struct {
 	handleMax        uint32
 	allocateHandle   chan *link // link handles are allocated by sending a link on this channel, nil is sent on link.rx once allocated
 	deallocateHandle chan *link // link handles are deallocated by sending a link on this channel
+	incomingLink     chan IncomingLink
 
 	nextDeliveryID uint32 // atomically accessed sequence for deliveryIDs
 
@@ -235,7 +257,7 @@ type Session struct {
 }
 
 func newSession(c *conn, channel uint16) *Session {
-	return &Session{
+	s := &Session{
 		conn:             c,
 		channel:          channel,
 		rx:               make(chan frame),
@@ -249,6 +271,10 @@ func newSession(c *conn, channel uint16) *Session {
 		close:            make(chan struct{}),
 		done:             make(chan struct{}),
 	}
+	if c.incomingSession != nil { // Incoming is allowed
+		s.incomingLink = make(chan IncomingLink)
+	}
+	return s
 }
 
 // Close gracefully closes the session.
@@ -305,32 +331,23 @@ func randString(n int) string {
 
 // NewReceiver opens a new receiver link on the session.
 func (s *Session) NewReceiver(opts ...LinkOption) (*Receiver, error) {
+	r := s.newReceiver()
+	l, err := attachLink(s, r, opts)
+	if err != nil {
+		return nil, err
+	}
+	r.link = l
+	return r, nil
+}
+
+// newReceiver returns a default receiver with no link
+func (s *Session) newReceiver() *Receiver {
 	r := &Receiver{
 		batching:    DefaultLinkBatching,
 		batchMaxAge: DefaultLinkBatchMaxAge,
 		maxCredit:   DefaultLinkCredit,
 	}
-
-	l, err := attachLink(s, r, opts)
-	if err != nil {
-		return nil, err
-	}
-
-	r.link = l
-
-	// batching is just extra overhead when maxCredits == 1
-	if r.maxCredit == 1 {
-		r.batching = false
-	}
-
-	// create dispositions channel and start dispositionBatcher if batching enabled
-	if r.batching {
-		// buffer dispositions chan to prevent disposition sends from blocking
-		r.dispositions = make(chan messageDisposition, r.maxCredit)
-		go r.dispositionBatcher()
-	}
-
-	return r, nil
+	return r
 }
 
 // Sender sends messages on a single AMQP link.
@@ -467,8 +484,22 @@ func (s *Session) NewSender(opts ...LinkOption) (*Sender, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return &Sender{link: l}, nil
+}
+
+// NextIncoming returns the next incoming link for the session. Requires ConnAllowIncoming.
+func (s *Session) NextIncoming() (IncomingLink, error) {
+	if !s.conn.incomingAllowed() {
+		return nil, errors.New("Session.NextIncoming requires option ConnAllowIncoming")
+	}
+	select {
+	case <-s.done:
+		return nil, s.err
+	case <-s.conn.done:
+		return nil, s.conn.getErr()
+	case il := <-s.incomingLink:
+		return il, nil
+	}
 }
 
 func (s *Session) mux(remoteBegin *performBegin) {
@@ -488,7 +519,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 
 	var (
 		links      = make(map[uint32]*link)    // mapping of remote handles to links
-		linksByKey = make(map[linkKey]*link)   // mapping of name+role link
+		linksByKey = make(map[linkKey]*link)   // mapping of name+role to link
 		handles    = &bitmap{max: s.handleMax} // allocated handles
 
 		handlesByDeliveryID       = make(map[uint32]uint32) // mapping of deliveryIDs to handles
@@ -540,8 +571,8 @@ func (s *Session) mux(remoteBegin *performBegin) {
 		// handle allocation request
 		case l := <-s.allocateHandle:
 			// Check if link name already exists, if so then an error should be returned
-			if linksByKey[l.key] != nil {
-				l.err = errorErrorf("link with name '%v' already exists", l.key.name)
+			if linksByKey[l.key()] != nil {
+				l.err = errorErrorf("link with name '%v' already exists", l.name)
 				l.rx <- nil
 				continue
 			}
@@ -553,15 +584,15 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				continue
 			}
 
-			l.handle = next       // allocate handle to the link
-			linksByKey[l.key] = l // add to mapping
-			l.rx <- nil           // send nil on channel to indicate allocation complete
+			l.handle = next         // allocate handle to the link
+			linksByKey[l.key()] = l // add to mapping
+			l.rx <- nil             // send nil on channel to indicate allocation complete
 
 		// handle deallocation request
 		case l := <-s.deallocateHandle:
 			delete(links, l.remoteHandle)
 			delete(deliveryIDByHandle, l.handle)
-			delete(linksByKey, l.key)
+			delete(linksByKey, l.key())
 			handles.remove(l.handle)
 			close(l.rx) // close channel to indicate deallocation
 
@@ -665,20 +696,20 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				}
 
 			case *performAttach:
-				// On Attach response link should be looked up by name, then added
-				// to the links map with the remote's handle contained in this
-				// attach frame.
-				//
-				// Note body.Role is the remote peer's role, we reverse for the local key.
-				link, linkOk := linksByKey[linkKey{name: body.Name, role: !body.Role}]
-				if !linkOk {
-					break
+				// Look up the link by name and local role (opposite of remote role)
+				link := linksByKey[linkKey{name: body.Name, role: !body.Role}]
+				var il IncomingLink
+				if link == nil { // Request for a new link.
+					il = newIncomingLink(s, body)
+					link = linkFrom(il)
 				}
-
 				link.remoteHandle = body.Handle
 				links[link.remoteHandle] = link
-
-				s.muxFrameToLink(link, fr.body)
+				if il != nil {
+					s.incomingLink <- il // Send to NextIncoming()
+				} else {
+					s.muxFrameToLink(link, fr.body) // Send performAttach to existing link
+				}
 
 			case *performTransfer:
 				// "Upon receiving a transfer, the receiving endpoint will
@@ -729,6 +760,7 @@ func (s *Session) mux(remoteBegin *performBegin) {
 				return
 
 			default:
+				// FIXME(alanconway) bad frame MUST close with ErrorFramingError
 				fmt.Printf("Unexpected frame: %s\n", body)
 			}
 
@@ -822,14 +854,14 @@ const (
 // to a boolean flag indicating the direction of the link.
 type linkKey struct {
 	name string
-	role role // Local role: sender/receiver
+	role role // Role of local endpoint.
 }
 
 // link is a unidirectional route.
 //
 // May be used for sending or receiving.
 type link struct {
-	key           linkKey              // Name and direction
+	name          string
 	handle        uint32               // our handle
 	remoteHandle  uint32               // remote's handle
 	dynamicAddr   bool                 // request a dynamic link address from the server
@@ -869,6 +901,10 @@ type link struct {
 	msg           Message       // current message being decoded
 }
 
+func (l *link) isReceiver() role { return role(l.receiver != nil) }
+
+func (l *link) key() linkKey { return linkKey{name: l.name, role: l.isReceiver()} }
+
 func (l *link) getSource() *Source {
 	if l.source == nil {
 		l.source = new(Source)
@@ -885,42 +921,46 @@ func (l *link) getTarget() *Target {
 
 // attachLink is used by Receiver and Sender to create new links
 func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
-	l, err := newLink(s, r, opts)
+	l := newLink(s, r)
+	err := l.apply(opts...)
 	if err != nil {
 		return nil, err
 	}
-
-	isReceiver := r != nil
-
-	// buffer rx to linkCredit so that conn.mux won't block
-	// attempting to send to a slow reader
-	if isReceiver {
-		l.rx = make(chan frameBody, l.linkCredit)
-	} else {
-		l.rx = make(chan frameBody, 1)
+	err = l.sendAttach()
+	if err != nil {
+		return nil, err
 	}
+	err = l.recvAttach()
+	if err != nil {
+		return nil, err
+	}
+	go l.mux()
+	return l, nil
+}
 
+func (l *link) sendAttach() error {
 	// request handle from Session.mux
 	select {
-	case <-s.done:
-		return nil, s.err
-	case s.allocateHandle <- l:
+	case <-l.session.done:
+		return l.session.err
+	case l.session.allocateHandle <- l:
 	}
 
 	// wait for handle allocation
 	select {
-	case <-s.done:
-		return nil, s.err
+	case <-l.session.done:
+		return l.session.err
 	case <-l.rx:
 	}
 
 	// check for link request error
 	if l.err != nil {
-		return nil, l.err
+		return l.err
 	}
 
 	attach := &performAttach{
-		Name:               l.key.name,
+		Name:               l.name,
+		Role:               l.isReceiver(),
 		Handle:             l.handle,
 		ReceiverSettleMode: l.receiverSettleMode,
 		SenderSettleMode:   l.senderSettleMode,
@@ -930,14 +970,12 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 		Properties:         l.properties,
 	}
 
-	if isReceiver {
-		attach.Role = roleReceiver
+	if l.isReceiver() {
 		if attach.Source == nil {
 			attach.Source = new(Source)
 		}
 		attach.Source.Dynamic = l.dynamicAddr
 	} else {
-		attach.Role = roleSender
 		if attach.Target == nil {
 			attach.Target = new(Target)
 		}
@@ -945,18 +983,21 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	}
 
 	// send Attach frame
-	s.txFrame(attach, nil)
+	l.session.txFrame(attach, nil)
+	return nil
+}
 
-	// wait for response
+// recvAttach receives an attach response
+func (l *link) recvAttach() error {
 	var fr frameBody
 	select {
-	case <-s.done:
-		return nil, s.err
+	case <-l.session.done:
+		return l.session.err
 	case fr = <-l.rx:
 	}
-	resp, ok := fr.(*performAttach)
-	if !ok {
-		return nil, errorErrorf("unexpected attach response: %#v", fr)
+	resp := fr.(*performAttach)
+	if resp == nil {
+		return errorErrorf("unexpected attach response: %#v", fr)
 	}
 
 	// If the remote encounters an error during the attach it returns an Attach
@@ -971,14 +1012,14 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 	if resp.Source == nil && resp.Target == nil {
 		// wait for detach
 		select {
-		case <-s.done:
-			return nil, s.err
+		case <-l.session.done:
+			return l.session.err
 		case fr = <-l.rx:
 		}
 
-		detach, ok := fr.(*performDetach)
-		if !ok {
-			return nil, errorErrorf("unexpected frame while waiting for detach: %#v", fr)
+		detach := fr.(*performDetach)
+		if detach == nil {
+			return errorErrorf("unexpected frame while waiting for detach: %#v", fr)
 		}
 
 		// send return detach
@@ -986,44 +1027,57 @@ func attachLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
 			Handle: l.handle,
 			Closed: true,
 		}
-		s.txFrame(fr, nil)
+		l.session.txFrame(fr, nil)
 
 		if detach.Error == nil {
-			return nil, errorErrorf("received detach with no error specified")
+			return errorErrorf("received detach with no error specified")
 		}
-		return nil, detach.Error
+		return detach.Error
 	}
+	return l.remoteAttach(resp)
+}
 
-	if l.maxMessageSize == 0 || resp.MaxMessageSize < l.maxMessageSize {
-		l.maxMessageSize = resp.MaxMessageSize
+// remoteAttach applies settings from the remote attach (request or response)
+// to a link
+func (l *link) remoteAttach(p *performAttach) error {
+	if l.maxMessageSize == 0 || p.MaxMessageSize < l.maxMessageSize {
+		l.maxMessageSize = p.MaxMessageSize
 	}
-
-	if isReceiver {
+	if l.isReceiver() {
 		// if dynamic address requested, copy assigned name to address
-		if l.dynamicAddr && resp.Source != nil {
-			l.getSource().Address = resp.Source.Address
+		if l.dynamicAddr && p.Source != nil {
+			l.getSource().Address = p.Source.Address
 		}
-		// deliveryCount is a sequence number, must initialize to sender's initial sequence number
-		l.deliveryCount = resp.InitialDeliveryCount
+		// deliveryCount is a sequence number, initialize to sender's initial sequence number
+		l.deliveryCount = p.InitialDeliveryCount
 		// buffer receiver so that link.mux doesn't block
 		l.messages = make(chan Message, l.receiver.maxCredit)
 	} else {
 		// if dynamic address requested, copy assigned name to address
-		if l.dynamicAddr && resp.Target != nil {
-			l.getTarget().Address = resp.Target.Address
+		if l.dynamicAddr && p.Target != nil {
+			l.getTarget().Address = p.Target.Address
 		}
 		l.transfers = make(chan performTransfer)
 	}
-
-	err = l.setSettleModes(resp)
+	err := l.setSettleModes(p)
 	if err != nil {
 		l.muxDetach()
-		return nil, err
+		return err
 	}
+	if l.receiver != nil { // Extra setup for receivers
+		// batching is just extra overhead when maxCredits == 1
+		if l.receiver.maxCredit == 1 {
+			l.receiver.batching = false
+		}
 
-	go l.mux()
-
-	return l, nil
+		// create dispositions channel and start dispositionBatcher if batching enabled
+		if l.receiver.batching {
+			// buffer dispositions chan to prevent disposition sends from blocking
+			l.receiver.dispositions = make(chan messageDisposition, l.receiver.maxCredit)
+			go l.receiver.dispositionBatcher()
+		}
+	}
+	return nil
 }
 
 // setSettleModes sets the settlement modes based on the resp performAttach.
@@ -1052,29 +1106,34 @@ func (l *link) setSettleModes(resp *performAttach) error {
 	return nil
 }
 
-func newLink(s *Session, r *Receiver, opts []LinkOption) (*link, error) {
+func newLink(s *Session, r *Receiver) *link {
 	l := &link{
-		key:           linkKey{randString(40), role(r != nil)},
+		name:          randString(40),
 		session:       s,
 		receiver:      r,
 		close:         make(chan struct{}),
 		done:          make(chan struct{}),
 		receiverReady: make(chan struct{}, 1),
 	}
+	// buffer rx to linkCredit so that conn.mux won't block
+	// attempting to send to a slow reader
+	if r != nil { // Receiver
+		l.rx = make(chan frameBody, l.linkCredit)
+	} else {
+		l.rx = make(chan frameBody, 1)
+	}
+	return l
+}
 
-	// configure options
+func (l *link) apply(opts ...LinkOption) error {
 	for _, o := range opts {
 		err := o(l)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
-
-	return l, nil
+	return nil
 }
-
-// NextIncoming returns the next incoming link. Requires ConnAllowIncoming.
-func (s *Session) NextIncoming() (*IncomingLink, error) { panic("FIXME") }
 
 func (l *link) mux() {
 	defer l.muxDetach()
@@ -1409,6 +1468,7 @@ func (l *link) muxHandleFrame(fr frameBody) error {
 		l.session.txFrame(resp, nil)
 
 	default:
+		// FIXME(alanconway) bad frame MUST close with ErrorFramingError
 		fmt.Printf("Unexpected frame: %s\n", fr)
 	}
 
@@ -1585,7 +1645,7 @@ func linkProperty(key string, value interface{}) LinkOption {
 // Default: randomly generated.
 func LinkName(name string) LinkOption {
 	return func(l *link) error {
-		l.key.name = name
+		l.name = name
 		return nil
 	}
 }

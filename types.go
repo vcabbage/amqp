@@ -604,12 +604,16 @@ func (a *performAttach) unmarshal(r *buffer) error {
 	}...)
 }
 
+// role of a link endpoint: sender or receiver
 type role bool
 
 const (
 	roleSender   role = false
 	roleReceiver role = true
 )
+
+// roleIfReceiver is just a cast, but the name is a reminder of what true/false mean.
+func roleIfReceiver(isReceiver bool) role { return role(isReceiver) }
 
 func (rl role) String() string {
 	if rl {

@@ -73,7 +73,8 @@ func TestLinkOptions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.label, func(t *testing.T) {
-			got, err := newLink(nil, nil, tt.opts)
+			got := newLink(nil, nil)
+			err := got.apply(tt.opts...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -91,16 +92,13 @@ func TestLinkOptions(t *testing.T) {
 
 func TestSourceName(t *testing.T) {
 	expectedSourceName := "source-name"
-	opts := []LinkOption{
-		LinkName(expectedSourceName),
-	}
-
-	got, err := newLink(nil, nil, opts)
+	got := newLink(nil, nil)
+	err := got.apply(LinkName(expectedSourceName))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if got.key.name != expectedSourceName {
-		t.Errorf("Link Source Name does not match expected: %v got: %v", expectedSourceName, got.key.name)
+	if got.name != expectedSourceName {
+		t.Errorf("Link Source Name does not match expected: %v got: %v", expectedSourceName, got.name)
 	}
 }

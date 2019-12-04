@@ -188,11 +188,13 @@ type conn struct {
 	done  chan struct{} // indicates the connection is done
 
 	// mux
-	newSession   chan newSessionResp // new Sessions are requested from mux by reading off this channel
-	delSession   chan *Session       // session completion is indicated to mux by sending the Session on this channel
-	connErr      chan error          // connReader/Writer notifications of an error
-	closeMux     chan struct{}       // indicates that the mux should stop
+	newSession   chan *Session // new Sessions are requested from mux by reading off this channel
+	delSession   chan *Session // session completion is indicated to mux by sending the Session on this channel
+	connErr      chan error    // connReader/Writer notifications of an error
+	closeMux     chan struct{} // indicates that the mux should stop
 	closeMuxOnce sync.Once
+
+	incomingSession chan *IncomingSession // Incoming sessions, nil if not enabled.
 
 	// connReader
 	rxProto       chan protoHeader // protoHeaders received by connReader
@@ -205,6 +207,8 @@ type conn struct {
 	txBuf   buffer     // buffer for marshaling frames before transmitting
 	txDone  chan struct{}
 }
+
+func (c *conn) incomingAllowed() bool { return c.incomingSession != nil }
 
 type newSessionResp struct {
 	session *Session
@@ -226,7 +230,7 @@ func newConn(netConn net.Conn, opts ...ConnOption) (*conn, error) {
 		rxFrame:          make(chan frame),
 		rxDone:           make(chan struct{}),
 		connReaderRun:    make(chan func(), 1), // buffered to allow queueing function before interrupt
-		newSession:       make(chan newSessionResp),
+		newSession:       make(chan *Session),
 		delSession:       make(chan *Session),
 		txFrame:          make(chan frame),
 		txDone:           make(chan struct{}),
@@ -253,12 +257,12 @@ func (c *conn) initTLSConfig() {
 	}
 }
 
-func (c *conn) start() error {
+func (c *conn) start(state stateFunc) error {
 	// start reader
 	go c.connReader()
 
 	// run connection establishment state machine
-	for state := c.negotiateProto; state != nil; {
+	for state != nil {
 		state = state()
 	}
 
@@ -324,21 +328,42 @@ func (c *conn) getErr() error {
 	return c.err
 }
 
+// Used only by conn.mux()
+type sessions struct {
+	conn                       *conn
+	channels                   bitmap
+	byChannel, byRemoteChannel map[uint16]*Session
+}
+
+func makeSessions(c *conn) sessions {
+	return sessions{
+		conn:            c,
+		channels:        bitmap{max: uint32(c.channelMax)},
+		byChannel:       make(map[uint16]*Session),
+		byRemoteChannel: make(map[uint16]*Session),
+	}
+}
+
+func (ss *sessions) next() (*Session, error) {
+	ch, ok := ss.channels.next()
+	if !ok {
+		return nil, &Error{Condition: ErrorFramingError, Description: "channel-max exceeded"}
+	}
+	s := newSession(ss.conn, uint16(ch))
+	ss.byChannel[s.channel] = s
+	return s, nil
+}
+
+func (ss *sessions) remove(s *Session) {
+	ss.channels.remove(uint32(s.channel))
+	delete(ss.byChannel, s.channel)
+}
+
 // mux is started in it's own goroutine after initial connection establishment.
 // It handles muxing of sessions, keepalives, and connection errors.
 func (c *conn) mux() {
-	var (
-		// allocated channels
-		channels = &bitmap{max: uint32(c.channelMax)}
-
-		// create the next session to allocate
-		nextChannel, _ = channels.next()
-		nextSession    = newSessionResp{session: newSession(c, uint16(nextChannel))}
-
-		// map channels to sessions
-		sessionsByChannel       = make(map[uint16]*Session)
-		sessionsByRemoteChannel = make(map[uint16]*Session)
-	)
+	sessions := makeSessions(c)
+	nextSession, _ := sessions.next()
 
 	// hold the errMu lock until error or done
 	c.errMu.Lock()
@@ -346,6 +371,10 @@ func (c *conn) mux() {
 	defer c.close() // defer order is important. c.errMu unlock indicates that connection is finally complete
 
 	for {
+		// Check if we exceeded the session limit
+		if nextSession == nil {
+			c.err = &Error{Condition: ErrorFramingError, Description: "channel-max exceeded"}
+		}
 		// check if last loop returned an error
 		if c.err != nil {
 			return
@@ -358,13 +387,11 @@ func (c *conn) mux() {
 		// new frame from connReader
 		case fr := <-c.rxFrame:
 			debugFrame(c, "RX", &fr)
-			var (
-				session *Session
-				ok      bool
-			)
+			var session *Session
 
 			switch body := fr.body.(type) {
-			// Server initiated close.
+
+			// Peer initiated close.
 			case *performClose:
 				if body.Error != nil {
 					c.err = body.Error
@@ -373,26 +400,39 @@ func (c *conn) mux() {
 				}
 				return
 
-			// RemoteChannel should be used when frame is Begin
+			// Session begin from peer
 			case *performBegin:
-				if body.RemoteChannel == nil {
-					break
+				if body.RemoteChannel != nil {
+					// Incoming response to our request
+					session = sessions.byChannel[*body.RemoteChannel]
+					if session == nil {
+						break
+					}
+					session.remoteChannel = fr.channel
+					sessions.byRemoteChannel[fr.channel] = session
+				} else {
+					// Incoming request for a new session.
+					session = nextSession
+					nextSession, c.err = sessions.next()
+					if c.err != nil {
+						return
+					}
+					session.remoteChannel = fr.channel
+					sessions.byRemoteChannel[fr.channel] = session
+					if c.incomingSession == nil {
+						panic("FIXME end the session with ErrorNotImplemented 'incoming sessions not enabled'")
+					}
+					c.incomingSession <- newIncomingSession(session, body)
+					continue
 				}
-				session, ok = sessionsByChannel[*body.RemoteChannel]
-				if !ok {
-					break
-				}
-
-				session.remoteChannel = fr.channel
-				sessionsByRemoteChannel[fr.channel] = session
 
 			default:
-				session, ok = sessionsByRemoteChannel[fr.channel]
+				session = sessions.byRemoteChannel[fr.channel]
 			}
 
-			if !ok {
-				c.err = errorErrorf("unexpected frame: %#v", fr.body)
-				continue
+			if session == nil {
+				c.err = &Error{Condition: ErrorFramingError, Description: "invalid channel number"}
+				return
 			}
 
 			select {
@@ -409,29 +449,12 @@ func (c *conn) mux() {
 		// sessions are far less frequent than frames being sent to sessions,
 		// this avoids the lock/unlock for session lookup.
 		case c.newSession <- nextSession:
-			if nextSession.err != nil {
-				continue
-			}
-
-			// save session into map
-			ch := nextSession.session.channel
-			sessionsByChannel[ch] = nextSession.session
-
-			// get next available channel
-			next, ok := channels.next()
-			if !ok {
-				nextSession = newSessionResp{err: errorErrorf("reached connection channel max (%d)", c.channelMax)}
-				continue
-			}
-
-			// create the next session to send
-			nextSession = newSessionResp{session: newSession(c, uint16(next))}
+			nextSession, c.err = sessions.next()
 
 		// session deletion
 		case s := <-c.delSession:
-			delete(sessionsByChannel, s.channel)
-			delete(sessionsByRemoteChannel, s.remoteChannel)
-			channels.remove(uint32(s.channel))
+			sessions.remove(s)
+			delete(sessions.byRemoteChannel, s.remoteChannel)
 
 		// connection is complete
 		case <-c.closeMux:
@@ -623,7 +646,8 @@ func (c *conn) connWriter() {
 		// connection complete
 		case <-c.done:
 			// send close
-			cls := &performClose{}
+			amqpErr, _ := c.err.(*Error)
+			cls := &performClose{Error: amqpErr}
 			_ = c.writeFrame(frame{
 				type_: frameTypeAMQP,
 				body:  cls,
@@ -803,7 +827,14 @@ func (c *conn) startTLS() stateFunc {
 
 // openAMQP round trips the AMQP open performative
 func (c *conn) openAMQP() stateFunc {
-	// send open frame
+	c.err = c.sendOpen()
+	if c.err == nil {
+		_, c.err = c.recvOpen()
+	}
+	return nil // Open is complete
+}
+
+func (c *conn) sendOpen() error {
 	open := &performOpen{
 		ContainerID:  c.containerID,
 		Hostname:     c.hostname,
@@ -812,25 +843,17 @@ func (c *conn) openAMQP() stateFunc {
 		IdleTimeout:  c.idleTimeout,
 		Properties:   c.properties,
 	}
-	c.err = c.writeFrame(frame{
-		type_:   frameTypeAMQP,
-		body:    open,
-		channel: 0,
-	})
-	if c.err != nil {
-		return nil
-	}
+	return c.writeFrame(frame{type_: frameTypeAMQP, body: open, channel: 0})
+}
 
-	// get the response
+func (c *conn) recvOpen() (*performOpen, error) {
 	fr, err := c.readFrame()
 	if err != nil {
-		c.err = err
-		return nil
+		return nil, err
 	}
 	o, ok := fr.body.(*performOpen)
 	if !ok {
-		c.err = errorErrorf("unexpected frame type %T", fr.body)
-		return nil
+		return nil, errorErrorf("expected OPEN frame, received %T", fr.body)
 	}
 
 	// update peer settings
@@ -844,9 +867,7 @@ func (c *conn) openAMQP() stateFunc {
 	if o.ChannelMax < c.channelMax {
 		c.channelMax = o.ChannelMax
 	}
-
-	// connection established, exit state machine
-	return nil
+	return o, nil
 }
 
 // negotiateSASL returns the SASL handler for the first matched
