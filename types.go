@@ -265,7 +265,7 @@ type performBegin struct {
 	// If a session is locally initiated, the remote-channel MUST NOT be set.
 	// When an endpoint responds to a remotely initiated session, the remote-channel
 	// MUST be set to the channel on which the remote session sent the begin.
-	RemoteChannel uint16
+	RemoteChannel *uint16
 
 	// the transfer-id of the first transfer id the sender will send
 	NextOutgoingID uint32 // required, sequence number http://www.ietf.org/rfc/rfc1982.txt
@@ -301,10 +301,10 @@ type performBegin struct {
 func (b *performBegin) frameBody() {}
 
 func (b *performBegin) String() string {
-	return fmt.Sprintf("Begin{RemoteChannel: %d, NextOutgoingID: %d, IncomingWindow: %d, "+
+	return fmt.Sprintf("Begin{RemoteChannel: %v, NextOutgoingID: %d, IncomingWindow: %d, "+
 		"OutgoingWindow: %d, HandleMax: %d, OfferedCapabilities: %v, DesiredCapabilities: %v, "+
 		"Properties: %v}",
-		b.RemoteChannel,
+		formatUint16Ptr(b.RemoteChannel),
 		b.NextOutgoingID,
 		b.IncomingWindow,
 		b.OutgoingWindow,
@@ -315,9 +315,16 @@ func (b *performBegin) String() string {
 	)
 }
 
+func formatUint16Ptr(p *uint16) string {
+	if p == nil {
+		return "<nil>"
+	}
+	return strconv.FormatUint(uint64(*p), 10)
+}
+
 func (b *performBegin) marshal(wr *buffer) error {
 	return marshalComposite(wr, typeCodeBegin, []marshalField{
-		{value: &b.RemoteChannel, omit: b.RemoteChannel == 0},
+		{value: b.RemoteChannel, omit: b.RemoteChannel == nil},
 		{value: &b.NextOutgoingID, omit: false},
 		{value: &b.IncomingWindow, omit: false},
 		{value: &b.OutgoingWindow, omit: false},

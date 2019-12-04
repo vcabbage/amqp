@@ -370,7 +370,10 @@ func (c *conn) mux() {
 
 			// RemoteChannel should be used when frame is Begin
 			case *performBegin:
-				session, ok = sessionsByChannel[body.RemoteChannel]
+				if body.RemoteChannel == nil {
+					break
+				}
+				session, ok = sessionsByChannel[*body.RemoteChannel]
 				if !ok {
 					break
 				}
