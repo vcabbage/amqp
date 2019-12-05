@@ -131,7 +131,7 @@ func TestConnSASLXOAUTH2AuthFail(t *testing.T) {
 	client, err := New(c,
 		ConnSASLXOAUTH2("someuser@example.com", "ya29.vF9dft4qmTc2Nvb3RlckBhdHRhdmlzdGEuY29tCg", 512),
 		ConnIdleTimeout(10*time.Minute))
-	if client != nil {
+	if err != nil {
 		defer client.Close()
 	}
 	switch {
@@ -153,7 +153,7 @@ func TestConnSASLXOAUTH2AuthFailWithErrorResponse(t *testing.T) {
 		frame{
 			type_:   frameTypeSASL,
 			channel: 0,
-			body:    &saslChallenge{Challenge: []byte(" { \"status\":\"401\", \"schemes\":\"bearer\", \"scope\":\"https://mail.google.com/\" }")},
+			body:    &saslChallenge{Challenge: []byte("{ \"status\":\"401\", \"schemes\":\"bearer\", \"scope\":\"https://mail.google.com/\" }")},
 		},
 		frame{
 			type_:   frameTypeSASL,
@@ -170,13 +170,52 @@ func TestConnSASLXOAUTH2AuthFailWithErrorResponse(t *testing.T) {
 	client, err := New(c,
 		ConnSASLXOAUTH2("someuser@example.com", "ya29.vF9dft4qmTc2Nvb3RlckBhdHRhdmlzdGEuY29tCg", 512),
 		ConnIdleTimeout(10*time.Minute))
-	if client != nil {
+	if err != nil {
 		defer client.Close()
 	}
 	switch {
 	case err == nil:
 		t.Errorf("authentication is expected to fail ")
 	case !strings.Contains(err.Error(), fmt.Sprintf("code %#00x", codeSASLAuth)):
+		t.Errorf("unexpected connection failure : %s", err)
+	}
+}
+
+func TestConnSASLXOAUTH2AuthFailsAdditionalErrorResponse(t *testing.T) {
+	buf, err := peerResponse(
+		[]byte("AMQP\x03\x01\x00\x00"),
+		frame{
+			type_:   frameTypeSASL,
+			channel: 0,
+			body:    &saslMechanisms{Mechanisms: []symbol{saslMechanismXOAUTH2}},
+		},
+		frame{
+			type_:   frameTypeSASL,
+			channel: 0,
+			body:    &saslChallenge{Challenge: []byte("fail1")},
+		},
+		frame{
+			type_:   frameTypeSASL,
+			channel: 0,
+			body:    &saslChallenge{Challenge: []byte("fail2")},
+		},
+	)
+
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c := testconn.New(buf)
+	client, err := New(c,
+		ConnSASLXOAUTH2("someuser@example.com", "ya29.vF9dft4qmTc2Nvb3RlckBhdHRhdmlzdGEuY29tCg", 512),
+		ConnIdleTimeout(10*time.Minute))
+	if err != nil {
+		defer client.Close()
+	}
+	switch {
+	case err == nil:
+		t.Errorf("authentication is expected to fail ")
+	case !strings.Contains(err.Error(), "Initial error response: fail1, additional response: fail2"):
 		t.Errorf("unexpected connection failure : %s", err)
 	}
 }

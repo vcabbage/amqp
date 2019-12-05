@@ -120,15 +120,13 @@ func ConnSASLXOAUTH2(username, bearer string, saslMaxFrameSizeOverride uint32) C
 			return err
 		}
 
-		// add the handler the the map
-		c.saslHandlers[saslMechanismXOAUTH2] = func() stateFunc {
-			handler := saslXOAUTH2Handler{
-				conn:                 c,
-				maxFrameSizeOverride: saslMaxFrameSizeOverride,
-				response:             response,
-			}
-			return handler.init()
+		handler := saslXOAUTH2Handler{
+			conn:                 c,
+			maxFrameSizeOverride: saslMaxFrameSizeOverride,
+			response:             response,
 		}
+		// add the handler the the map
+		c.saslHandlers[saslMechanismXOAUTH2] = handler.init
 		return nil
 	}
 }
@@ -137,6 +135,7 @@ type saslXOAUTH2Handler struct {
 	conn                 *conn
 	maxFrameSizeOverride uint32
 	response             []byte
+	errorResponse        []byte // https://developers.google.com/gmail/imap/xoauth2-protocol#error_response
 }
 
 func (s saslXOAUTH2Handler) init() stateFunc {
@@ -156,10 +155,10 @@ func (s saslXOAUTH2Handler) init() stateFunc {
 		return nil
 	}
 
-	return s.saslXOAUTH2Step
+	return s.step
 }
 
-func (s saslXOAUTH2Handler) saslXOAUTH2Step() stateFunc {
+func (s saslXOAUTH2Handler) step() stateFunc {
 	// read challenge or outcome frame
 	fr, err := s.conn.readFrame()
 	if err != nil {
@@ -171,7 +170,8 @@ func (s saslXOAUTH2Handler) saslXOAUTH2Step() stateFunc {
 	case *saslOutcome:
 		// check if auth succeeded
 		if v.Code != codeSASLOK {
-			s.conn.err = errorErrorf("SASL XOAUTH2 auth failed with code %#00x: %s", v.Code, v.AdditionalData)
+			s.conn.err = errorErrorf("SASL XOAUTH2 auth failed with code %#00x: %s : %s",
+				v.Code, v.AdditionalData, s.errorResponse)
 			return nil
 		}
 
@@ -179,16 +179,22 @@ func (s saslXOAUTH2Handler) saslXOAUTH2Step() stateFunc {
 		s.conn.saslComplete = true
 		return s.conn.negotiateProto
 	case *saslChallenge:
-		debug(1, "SASL XOAUTH2 - the server sent a challenge containing error message :%s", string(v.Challenge))
+		if s.errorResponse == nil {
+			s.errorResponse = v.Challenge
 
-		// The SASL protocol requires clients to send an empty response to this challenge.
-		s.conn.err = s.conn.writeFrame(frame{
-			type_: frameTypeSASL,
-			body: &saslResponse{
-				Response: []byte{},
-			},
-		})
-		return s.saslXOAUTH2Step
+			// The SASL protocol requires clients to send an empty response to this challenge.
+			s.conn.err = s.conn.writeFrame(frame{
+				type_: frameTypeSASL,
+				body: &saslResponse{
+					Response: []byte{},
+				},
+			})
+			return s.step
+		} else {
+			s.conn.err = errorErrorf("SASL XOAUTH2 unexpected additional error response received during "+
+				"exchange. Initial error response: %s, additional response: %s", s.errorResponse, v.Challenge)
+			return nil
+		}
 	default:
 		s.conn.err = errorErrorf("unexpected frame type %T", fr.body)
 		return nil
