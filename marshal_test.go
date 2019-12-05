@@ -554,6 +554,12 @@ var (
 		&saslMechanisms{
 			Mechanisms: []symbol{"FOO", "BAR", "BAZ"},
 		},
+		&saslChallenge{
+			Challenge: []byte("BAR\x00CHALLENGE\x00"),
+		},
+		&saslResponse{
+			Response: []byte("BAR\x00RESPONSE\x00"),
+		},
 		&saslOutcome{
 			Code:           codeSASLSysPerm,
 			AdditionalData: []byte("here's some info for you..."),

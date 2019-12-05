@@ -119,6 +119,10 @@ func parseFrameBody(r *buffer) (frameBody, error) {
 		t := new(saslMechanisms)
 		err := t.unmarshal(r)
 		return t, err
+	case typeCodeSASLChallenge:
+		t := new(saslChallenge)
+		err := t.unmarshal(r)
+		return t, err
 	case typeCodeSASLOutcome:
 		t := new(saslOutcome)
 		err := t.unmarshal(r)
